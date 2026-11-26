@@ -62,6 +62,8 @@ pub enum Refusal {
     NoFilesystem { number: u32, what: String },
     /// 该内容类别不支持该操作。
     ContentUnsupported { what: String, why: String },
+    /// 内容属性不能按请求写入：目标形态或请求形式不在能力内（拒绝，而非不支持）。
+    PropertyRefused { why: String },
     /// 所需的文件系统最小尺寸无法证明。
     MinimumSizeUnknown { number: u32, why: String },
     /// 请求的大小小于文件系统可收缩到的最小尺寸。
@@ -176,6 +178,9 @@ impl Refusal {
             Self::ContentUnsupported { .. } => {
                 "use an operation or external tool supported by this content kind"
             }
+            Self::PropertyRefused { .. } => {
+                "use the filesystem's own utility for this content, or change the request"
+            }
             Self::MinimumSizeUnknown { .. } => {
                 "confirm the filesystem minimum size before shrinking"
             }
@@ -269,6 +274,7 @@ impl Refusal {
                 format!("partition {number} holds {what}, which is not a filesystem to resize")
             }
             Self::ContentUnsupported { what, why } => format!("{what} is not supported: {why}"),
+            Self::PropertyRefused { why } => why.clone(),
             Self::MinimumSizeUnknown { number, why } => {
                 format!("the minimum size of partition {number} is unknown: {why}")
             }

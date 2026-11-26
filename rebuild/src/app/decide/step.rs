@@ -8,7 +8,7 @@ use diskedit_core::fs::{ContentKind, FsKind, MkfsKind};
 use diskedit_core::region::Region;
 use diskedit_core::table::Guid;
 
-use crate::app::observe::{RecoverMode, SetProperty, TableFormat};
+use crate::app::observe::{ContentProperty, RecoverMode, TableFormat};
 
 /// 步骤对目标的影响方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,15 @@ pub enum Access {
 pub struct TableSegment {
     pub region: Region,
     pub bytes: Vec<u8>,
+}
+
+/// 内容属性要写的值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PropertyValue {
+    /// 明确的文本：卷标，或调用方给定的 UUID。
+    Text(String),
+    /// 让目标生成新的 UUID（ntfs 的 serial 只有这一种可写形式）。
+    Generate,
 }
 
 /// 一步做什么。
@@ -71,13 +80,16 @@ pub enum StepKind {
         start_lba: u64,
         sectors: u64,
     },
-    /// 修改分区或文件系统属性。
+    /// 修改分区内部的文件系统属性（卷标或 UUID）。
+    ///
+    /// 属性值只有两种落地形态：明确的文本，或让目标自己生成新的 UUID。后者是
+    /// 目标自带的生成能力，计划里保留这个意图而不是先造一个随机值，重跑才稳定。
     SetProperty {
         partition: u32,
-        property: SetProperty,
-        value: String,
-        /// 内容属性的内容类型；表属性为 `None`。
-        content: Option<ContentKind>,
+        property: ContentProperty,
+        value: PropertyValue,
+        /// 内容属性作用的内容类型。
+        content: ContentKind,
     },
     /// 在分区上建卷。
     MakeFilesystem {

@@ -335,14 +335,14 @@ pub enum RecoverMode {
     Release { discard_replay: bool },
 }
 
-/// `set` 可修改的分区属性。
+/// `set` 写入的文件系统内容属性。
+///
+/// 分区表属性（name / type / flag）由整表写入完成，不经过这里；内容属性只改分区
+/// 内部的卷标或 UUID，因此两者是两种形态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SetProperty {
-    Name,
+pub enum ContentProperty {
     Label,
     Uuid,
-    Flag,
-    Type,
 }
 
 /// 首次观察使用的代次。执行期重探所得代次不得早于此值。

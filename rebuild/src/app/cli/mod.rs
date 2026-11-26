@@ -372,6 +372,7 @@ fn write(
             decide::StepKind::MakeFilesystem { .. }
                 | decide::StepKind::GrowFilesystem { .. }
                 | decide::StepKind::ShrinkFilesystem { .. }
+                | decide::StepKind::SetProperty { .. }
         )
     });
     let table = plan

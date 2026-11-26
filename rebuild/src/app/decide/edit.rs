@@ -3,9 +3,10 @@
 //! 三条命令共用同一条路径：先确认目标空闲且表可编辑，再在纯核里算出新表字节，
 //! 最后把"写哪几段、写前摘要是什么"交给执行层。判定层不碰句柄，也不决定写。
 //!
-//! `set label` 与 `set uuid` 写的是文件系统内容而不是分区表，那部分随文件系统
-//! 执行路径一起落地；这里给出明确的不可用拒绝，而不是静默降级。
+//! `set label` 与 `set uuid` 改的是分区内部的内容属性，判定层只做能力与参数校验，
+//! 落成一条内容属性步骤交给文件系统执行路径；任何越界或形态不符都在写盘之前拒绝。
 
+use diskedit_core::fs::{Support, catalog, label_problem, uuid_support};
 use diskedit_core::table::Guid;
 use diskedit_core::table::create::Segment;
 use diskedit_core::table::edit::{
@@ -17,11 +18,11 @@ use diskedit_core::table::gpt::entries::PartitionEntry;
 use crate::app::observe::edit::{EditSnapshot, TableFacts};
 use crate::app::observe::table::TableView;
 use crate::app::observe::{
-    Alignment, Command, PartitionSelector, Request, SetKey, SetRequest, StartSpec, TableFormat,
-    TypeSelector,
+    Alignment, Command, ContentProperty, PartitionSelector, Request, SetKey, SetRequest, StartSpec,
+    TableFormat, TypeSelector,
 };
 
-use super::step::{Step, StepKind, TableSegment};
+use super::step::{PropertyValue, Step, StepKind, TableSegment};
 use super::{Decision, Plan, Refusal, repair};
 
 /// 未给出 `--chunk` 时的默认块大小。
@@ -716,10 +717,6 @@ pub fn set(snapshot: &EditSnapshot, request: &Request) -> Decision {
         SetKey::Uuid if set.value.is_empty() && !set.random => {
             return refuse_edit("`set uuid` needs a value or --random");
         }
-        SetKey::Uuid if !set.random && !is_uuid(&set.value) => {
-            let why = format!("`set uuid` value {:?} is not a UUID", set.value);
-            return refuse_edit(&why);
-        }
         SetKey::Name | SetKey::Label | SetKey::Uuid | SetKey::Flag | SetKey::Type => {}
     }
     if let Some(refusal) = precheck(snapshot, "set") {
@@ -825,9 +822,7 @@ fn set_gpt(
             }
             note = format!("flag {}={} on partition #{number}", set.value, set.state);
         }
-        SetKey::Label | SetKey::Uuid => {
-            return filesystem_attr(snapshot, number, set.key);
-        }
+        SetKey::Label | SetKey::Uuid => return content_property(snapshot, number, set),
     }
     let mut segments = match table.segments(&entries) {
         Ok(segments) => segments,
@@ -866,7 +861,7 @@ fn set_mbr(
         });
     }
     if matches!(set.key, SetKey::Label | SetKey::Uuid) {
-        return filesystem_attr(snapshot, number, set.key);
+        return content_property(snapshot, number, set);
     }
     let note;
     let bytes = match set.key {
@@ -1040,26 +1035,134 @@ fn parse_mbr_type(value: &str) -> Option<u8> {
     u8::from_str_radix(digits, 16).ok()
 }
 
-fn content_unsupported(key: SetKey) -> Refusal {
-    Refusal::ContentUnsupported {
-        what: format!("set {}", key.as_str()),
-        why: "filesystem label and UUID writes run through the filesystem execution path, which this build does not wire yet".to_owned(),
-    }
-}
-
-/// 文件系统属性：分区存在但内容未知时与已识别内容同样落能力不支持（基线对两者都报
-/// `unsupported`），分区不存在仍按拒绝处理。
-fn filesystem_attr(snapshot: &EditSnapshot, number: u32, key: SetKey) -> Decision {
-    match snapshot.view.find(number) {
-        Some(partition) if partition.content.as_str() != "unknown" => {
-            Decision::Refuse(content_unsupported(key))
+/// `set label` / `set uuid`：校验内容能力与参数，落成一条内容属性步骤。
+///
+/// 判定顺序与基线一致：先按内容类型判能力（uuid 的不支持一律是"拒绝"，label 的
+/// 不支持是"不支持该内容"），LVM2 PV 单独按拒绝处理，然后确认工具可用，最后才判
+/// 参数容量（卷标字段、UUID 形状）。这样两条命令的退出码与基线一一对应。
+fn content_property(snapshot: &EditSnapshot, number: u32, set: &SetRequest) -> Decision {
+    let Some(partition) = snapshot.view.find(number) else {
+        return Decision::Refuse(Refusal::FilesystemUnknown { number });
+    };
+    let content = partition.content;
+    let (property, value) = match set.key {
+        SetKey::Label => (
+            ContentProperty::Label,
+            PropertyValue::Text(set.value.clone()),
+        ),
+        SetKey::Uuid => {
+            if set.random || set.value == "random" {
+                (ContentProperty::Uuid, PropertyValue::Generate)
+            } else {
+                (
+                    ContentProperty::Uuid,
+                    PropertyValue::Text(set.value.clone()),
+                )
+            }
         }
-        Some(_) => Decision::Refuse(Refusal::ContentUnsupported {
-            what: format!("set {}", key.as_str()),
-            why: "no label or UUID tool is wired for unidentified content".to_owned(),
-        }),
-        None => Decision::Refuse(Refusal::FilesystemUnknown { number }),
+        SetKey::Name | SetKey::Flag | SetKey::Type => {
+            return refuse_edit("`set label`/`set uuid` reached with a table property");
+        }
+    };
+
+    match property {
+        ContentProperty::Label => {
+            if content == diskedit_core::fs::ContentKind::Lvm2Pv {
+                return Decision::Refuse(Refusal::PropertyRefused {
+                    why: format!(
+                        "set label on partition #{number} — target is an LVM2 PV, not a \
+                         filesystem; PV metadata is changed with pvchange(8)"
+                    ),
+                });
+            }
+            match catalog::profile(content).attrs {
+                Support::Tools(_) => {}
+                Support::Unsupported(why) => {
+                    return Decision::Refuse(Refusal::ContentUnsupported {
+                        what: "set label".to_owned(),
+                        why: why.to_owned(),
+                    });
+                }
+                Support::NotApplicable => {
+                    return Decision::Refuse(Refusal::ContentUnsupported {
+                        what: "set label".to_owned(),
+                        why: "this content has no label field".to_owned(),
+                    });
+                }
+            }
+        }
+        ContentProperty::Uuid => {
+            let support = uuid_support(content);
+            let explicit = matches!(value, PropertyValue::Text(_));
+            if let Some(why) = support.reason() {
+                return Decision::Refuse(Refusal::PropertyRefused {
+                    why: format!("cannot set uuid on {}: {why}", content.as_str()),
+                });
+            }
+            if explicit && !support.accepts_explicit() {
+                return Decision::Refuse(Refusal::PropertyRefused {
+                    why: format!(
+                        "{} exposes a settable serial, not a volume UUID — it cannot take a \
+                         chosen value; use --random to generate a new one (a serial is not the \
+                         Windows volume UUID)",
+                        content.as_str()
+                    ),
+                });
+            }
+            if !explicit && !support.accepts_generated() {
+                return Decision::Refuse(Refusal::PropertyRefused {
+                    why: format!(
+                        "{} has no generate form — pass an explicit UUID value",
+                        content.as_str()
+                    ),
+                });
+            }
+        }
     }
+
+    // 与基线同序：能力与工具存在性先判，参数容量（卷标字段、UUID 形状）后判。
+    if let Some((program, false)) = snapshot.tools.first() {
+        return Decision::Refuse(Refusal::ToolMissing { program: *program });
+    }
+
+    match property {
+        ContentProperty::Label => {
+            if let Some(why) = label_problem(content, &set.value) {
+                return Decision::Refuse(Refusal::PropertyRefused { why });
+            }
+        }
+        ContentProperty::Uuid => {
+            if let PropertyValue::Text(uuid) = &value
+                && !is_uuid(uuid)
+            {
+                return Decision::Refuse(Refusal::ArgumentOutOfRange {
+                    what: format!("`set uuid` value {uuid:?} is not a UUID"),
+                });
+            }
+        }
+    }
+
+    let step = Step::new(
+        StepKind::SetProperty {
+            partition: number,
+            property,
+            value,
+            content,
+        },
+        vec![region(partition.base_bytes, partition.bytes)],
+    );
+    finish(
+        snapshot,
+        Plan::write(
+            vec![step],
+            snapshot.target.identity.expect("身份在 set 入口已核对"),
+        ),
+        format!(
+            "set {} on partition #{number} ({})",
+            set.key.as_str(),
+            content.as_str()
+        ),
+    )
 }
 
 /// 公共前置：分区节点、表形态、占用。
@@ -1098,17 +1201,22 @@ fn unusable(view: &TableView) -> Refusal {
     }
 }
 
-/// 值是否为连字符分组的 36 字符十六进制 UUID。
+/// 值是否为 UUID 文本：36 字符的连字符分组形式，或 32 字符的裸十六进制。
+///
+/// 两种写法在基线的 GUID 解析里等价（前三个字段小端、第四段原样），因此这里也同收，
+/// 不把裸形式判成"不是 UUID"。
 fn is_uuid(value: &str) -> bool {
     let bytes = value.as_bytes();
-    bytes.len() == 36
+    let hyphened = bytes.len() == 36
         && bytes.iter().enumerate().all(|(index, byte)| {
             if matches!(index, 8 | 13 | 18 | 23) {
                 *byte == b'-'
             } else {
                 byte.is_ascii_hexdigit()
             }
-        })
+        });
+    let bare = bytes.len() == 32 && bytes.iter().all(u8::is_ascii_hexdigit);
+    hyphened || bare
 }
 
 fn refuse_edit(why: &str) -> Decision {
@@ -1177,4 +1285,19 @@ fn table_plan(
 
 fn region(start: u64, len: u64) -> diskedit_core::region::Region {
     diskedit_core::region::Region::sized(start, len).expect("由当前盘面导出的区间自洽")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_uuid;
+
+    #[test]
+    fn uuid_text_accepts_both_canonical_forms() {
+        assert!(is_uuid("4d4f4e4b-0000-4000-8000-000000000000"));
+        assert!(is_uuid("4D4F4E4B-0000-4000-8000-000000000000"));
+        assert!(is_uuid("4d4f4e4b000040008000000000000000"));
+        assert!(!is_uuid("4d4f4e4b-0000-4000-8000-00000000000"));
+        assert!(!is_uuid("4d4f4e4b00004000800000000000000"));
+        assert!(!is_uuid("not-a-uuid"));
+    }
 }

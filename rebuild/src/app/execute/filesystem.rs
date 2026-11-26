@@ -6,12 +6,13 @@
 
 use std::path::{Path, PathBuf};
 
-use diskedit_core::fs::{FsKind, MkfsKind, Program};
+use diskedit_core::fs::{ContentKind, FsKind, MkfsKind, Program};
 use diskedit_core::region::Region;
 
 use super::transaction::RecordSession;
 use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
-use crate::app::decide::{ConfirmedPlan, Step, StepKind};
+use crate::app::decide::{ConfirmedPlan, PropertyValue, Step, StepKind};
+use crate::app::observe::ContentProperty;
 use crate::platform::{LoopBinding, Occupancy, Platform, TargetKind, ToolRun};
 
 /// 意图记录里的固定标签：一次文件系统改写。
@@ -485,6 +486,12 @@ enum FsAction {
         partition: u32,
         start_bytes: u64,
     },
+    Set {
+        partition: u32,
+        property: ContentProperty,
+        value: PropertyValue,
+        content: ContentKind,
+    },
 }
 
 impl FsAction {
@@ -493,7 +500,8 @@ impl FsAction {
             Self::Make { partition, .. }
             | Self::Grow { partition, .. }
             | Self::Shrink { partition, .. }
-            | Self::RebuildSwap { partition, .. } => *partition,
+            | Self::RebuildSwap { partition, .. }
+            | Self::Set { partition, .. } => *partition,
         }
     }
 }
@@ -510,11 +518,6 @@ pub(super) fn execute_plan(
     let mut session =
         RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
     check_identity(platform, target, plan).map_err(|error| (error, false))?;
-    session
-        .begin_irreversible(plan.request_digest(), FS_INTENT)
-        .map_err(|error| (error, false))?;
-    // 本步原像已落盘；此后每一次工具调用都必须带着它，写类工具无法在记录之外执行。
-    let token = session.token();
 
     let device = resolve_device(
         platform,
@@ -524,6 +527,30 @@ pub(super) fn execute_plan(
         region.len(),
     )
     .map_err(|error| (error, false))?;
+
+    // UUID 生成需要写前值；只读回读发生在任何写入与不可逆记录之前，读失败即
+    // "尚未动过目标"。
+    let before = match &action {
+        FsAction::Set {
+            property: ContentProperty::Uuid,
+            value: PropertyValue::Generate,
+            content,
+            ..
+        } if uuid_read_invocation(*content, device.device()).is_some() => {
+            Some(read_uuid(platform, *content, device.device()).map_err(|error| (error, false))?)
+        }
+        FsAction::Make { .. }
+        | FsAction::Grow { .. }
+        | FsAction::Shrink { .. }
+        | FsAction::RebuildSwap { .. }
+        | FsAction::Set { .. } => None,
+    };
+
+    session
+        .begin_irreversible(plan.request_digest(), FS_INTENT)
+        .map_err(|error| (error, false))?;
+    // 本步原像已落盘；此后每一次工具调用都必须带着它，写类工具无法在记录之外执行。
+    let token = session.token();
 
     match &action {
         FsAction::Make {
@@ -581,6 +608,22 @@ pub(super) fn execute_plan(
             run_checked(platform, Program::Mkswap, &args, &token)
                 .map(|_| ())
                 .map_err(|(error, _)| (error, true))?;
+        }
+        FsAction::Set {
+            property,
+            value,
+            content,
+            ..
+        } => {
+            set_property(
+                platform,
+                device.device(),
+                *property,
+                value,
+                *content,
+                before.as_deref(),
+                &token,
+            )?;
         }
     }
 
@@ -671,6 +714,17 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
                 partition: *partition,
                 start_bytes: *start_bytes,
             }),
+            StepKind::SetProperty {
+                partition,
+                property,
+                value,
+                content,
+            } => Some(FsAction::Set {
+                partition: *partition,
+                property: *property,
+                value: value.clone(),
+                content: *content,
+            }),
             StepKind::Inspect
             | StepKind::Check { .. }
             | StepKind::ListRecords
@@ -680,7 +734,6 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             | StepKind::AddPartition { .. }
             | StepKind::DeletePartition { .. }
             | StepKind::ResizePartition { .. }
-            | StepKind::SetProperty { .. }
             | StepKind::GrowFilesystemOnline { .. }
             | StepKind::ShrinkFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
@@ -1393,6 +1446,246 @@ fn ceil_to_unit(value: u64, unit: u64) -> u64 {
     value.div_ceil(unit).saturating_mul(unit)
 }
 
+/// 写一次内容属性：按内容与请求形态选工具，写入后按可用的回读出口核对。
+///
+/// 工具退 0 不等于写了盘：ext 读回卷首 UUID 字段、xfs 读回超级块 UUID、btrfs 读回
+/// 超级块、swap 读回首部；显式值要求相等，生成值要求与写前不同。ntfs 的 serial
+/// 没有回读出口，那条路径不做核对。
+fn set_property(
+    platform: &dyn Platform,
+    device: &Path,
+    property: ContentProperty,
+    value: &PropertyValue,
+    content: ContentKind,
+    before: Option<&str>,
+    token: &Recorded,
+) -> Result<(), (ExecError, bool)> {
+    let (program, args) = attr_invocation(property, value, content, device).ok_or_else(|| {
+        (
+            ExecError::InvalidPlan(
+                "this content kind and request form have no attribute tool".to_owned(),
+            ),
+            true,
+        )
+    })?;
+    run_checked(platform, program, &args, token)
+        .map(|_| ())
+        .map_err(|(error, _)| (error, true))?;
+    if property != ContentProperty::Uuid {
+        return Ok(());
+    }
+    let Some((read_program, read_args)) = uuid_read_invocation(content, device) else {
+        return Ok(());
+    };
+    let run = platform
+        .run(read_program, &read_args)
+        .map_err(|error| (ExecError::from(error), true))?;
+    let shown = code_text(run.code);
+    let after = match run.code {
+        Some(0) => uuid_from_output(content, &run.stdout).ok_or_else(|| {
+            (
+                ExecError::Postcondition(format!(
+                    "{} printed no uuid in its output",
+                    platform.tool_name(read_program)
+                )),
+                true,
+            )
+        })?,
+        _ => {
+            return Err((
+                ExecError::Postcondition(format!(
+                    "{} exited {shown} while reading the uuid back: {}",
+                    platform.tool_name(read_program),
+                    run.stderr.trim()
+                )),
+                true,
+            ));
+        }
+    };
+    uuid_verdict(value, before, &after).map_err(|why| {
+        (
+            ExecError::Postcondition(format!("uuid readback failed: {why}")),
+            true,
+        )
+    })
+}
+
+/// 属性写入的完整命令行（含设备）。卷标与 UUID 的写法在各工具里不同。
+fn attr_invocation(
+    property: ContentProperty,
+    value: &PropertyValue,
+    content: ContentKind,
+    device: &Path,
+) -> Option<(Program, Vec<String>)> {
+    let dev = device.display().to_string();
+    let text = match value {
+        PropertyValue::Text(text) => Some(text.clone()),
+        PropertyValue::Generate => None,
+    };
+    match property {
+        ContentProperty::Label => {
+            let label = text?;
+            Some(match content {
+                ContentKind::Filesystem(FsKind::Ext) => {
+                    (Program::Tune2fs, vec!["-L".into(), label, dev])
+                }
+                ContentKind::Filesystem(FsKind::Xfs) => {
+                    (Program::XfsAdmin, vec!["-L".into(), label, dev])
+                }
+                ContentKind::Filesystem(FsKind::Btrfs) => (
+                    Program::Btrfs,
+                    vec!["filesystem".into(), "label".into(), dev, label],
+                ),
+                ContentKind::Filesystem(FsKind::Ntfs) => (Program::Ntfslabel, vec![dev, label]),
+                ContentKind::Filesystem(FsKind::Vfat) => (Program::Fatlabel, vec![dev, label]),
+                ContentKind::Filesystem(FsKind::Exfat) => (Program::Exfatlabel, vec![dev, label]),
+                ContentKind::Swap => (Program::Swaplabel, vec!["-L".into(), label, dev]),
+                ContentKind::Filesystem(_)
+                | ContentKind::Lvm2Pv
+                | ContentKind::Luks
+                | ContentKind::BitLocker
+                | ContentKind::Unknown => return None,
+            })
+        }
+        ContentProperty::Uuid => Some(match (content, value) {
+            (ContentKind::Filesystem(FsKind::Ext), PropertyValue::Text(uuid)) => {
+                (Program::Tune2fs, vec!["-U".into(), uuid.clone(), dev])
+            }
+            (ContentKind::Filesystem(FsKind::Ext), PropertyValue::Generate) => {
+                (Program::Tune2fs, vec!["-U".into(), "random".into(), dev])
+            }
+            (ContentKind::Filesystem(FsKind::Xfs), PropertyValue::Text(uuid)) => {
+                (Program::XfsAdmin, vec!["-U".into(), uuid.clone(), dev])
+            }
+            (ContentKind::Filesystem(FsKind::Xfs), PropertyValue::Generate) => {
+                (Program::XfsAdmin, vec!["-U".into(), "generate".into(), dev])
+            }
+            (ContentKind::Filesystem(FsKind::Btrfs), PropertyValue::Text(uuid)) => (
+                Program::Btrfstune,
+                vec!["-f".into(), "-U".into(), uuid.clone(), dev],
+            ),
+            (ContentKind::Filesystem(FsKind::Btrfs), PropertyValue::Generate) => {
+                (Program::Btrfstune, vec!["-f".into(), "-u".into(), dev])
+            }
+            (ContentKind::Swap, PropertyValue::Text(uuid)) => {
+                (Program::Swaplabel, vec!["-U".into(), uuid.clone(), dev])
+            }
+            (ContentKind::Filesystem(FsKind::Ntfs), PropertyValue::Generate) => {
+                (Program::Ntfslabel, vec!["--new-serial".into(), dev])
+            }
+            (ContentKind::Filesystem(_), PropertyValue::Text(_) | PropertyValue::Generate)
+            | (ContentKind::Swap, PropertyValue::Generate)
+            | (ContentKind::Lvm2Pv, _)
+            | (ContentKind::Luks, _)
+            | (ContentKind::BitLocker, _)
+            | (ContentKind::Unknown, _) => return None,
+        }),
+    }
+}
+
+/// UUID 回读命令；ntfs 的 serial 没有回读出口，返回 `None`。
+fn uuid_read_invocation(kind: ContentKind, device: &Path) -> Option<(Program, Vec<String>)> {
+    let dev = device.display().to_string();
+    match kind {
+        ContentKind::Filesystem(FsKind::Ext) => Some((Program::Tune2fs, vec!["-l".into(), dev])),
+        ContentKind::Filesystem(FsKind::Xfs) => Some((Program::XfsAdmin, vec!["-u".into(), dev])),
+        ContentKind::Filesystem(FsKind::Btrfs) => Some((
+            Program::Btrfs,
+            vec!["filesystem".into(), "show".into(), dev],
+        )),
+        ContentKind::Swap => Some((Program::Swaplabel, vec![dev])),
+        ContentKind::Filesystem(_)
+        | ContentKind::Lvm2Pv
+        | ContentKind::Luks
+        | ContentKind::BitLocker
+        | ContentKind::Unknown => None,
+    }
+}
+
+/// 只读回读一次 UUID；读失败发生在任何写入之前，按"未动过目标"返回。
+fn read_uuid(
+    platform: &dyn Platform,
+    kind: ContentKind,
+    device: &Path,
+) -> Result<String, ExecError> {
+    let (program, args) = uuid_read_invocation(kind, device).ok_or_else(|| {
+        ExecError::InvalidPlan("this content kind has no uuid readback".to_owned())
+    })?;
+    let run = platform.run(program, &args).map_err(ExecError::from)?;
+    match run.code {
+        Some(0) => uuid_from_output(kind, &run.stdout).ok_or_else(|| {
+            ExecError::Io(format!(
+                "{} {} printed no uuid in its output",
+                platform.tool_name(program),
+                args.join(" ")
+            ))
+        }),
+        code => Err(ExecError::Io(format!(
+            "{} {} exited {} while reading the uuid",
+            platform.tool_name(program),
+            args.join(" "),
+            code_text(code)
+        ))),
+    }
+}
+
+/// 从回读输出里取 UUID 文本。
+fn uuid_from_output(kind: ContentKind, text: &str) -> Option<String> {
+    let raw = match kind {
+        ContentKind::Filesystem(FsKind::Ext) => labelled_line(text, "Filesystem UUID:")?.to_owned(),
+        ContentKind::Filesystem(FsKind::Xfs) => labelled_line(text, "UUID =")?.to_owned(),
+        ContentKind::Swap => labelled_line(text, "UUID:")?.to_owned(),
+        ContentKind::Filesystem(FsKind::Btrfs) => {
+            let at = text.find("uuid:")?;
+            text[at + "uuid:".len()..]
+                .split_whitespace()
+                .next()?
+                .to_string()
+        }
+        ContentKind::Filesystem(_)
+        | ContentKind::Lvm2Pv
+        | ContentKind::Luks
+        | ContentKind::BitLocker
+        | ContentKind::Unknown => return None,
+    };
+    let value = raw.trim();
+    (!value.is_empty()).then(|| normalize_uuid(value))
+}
+
+/// UUID 的比较口径：去掉分隔符与大括号、转小写。写入期望值与回读值都经它。
+fn normalize_uuid(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '-' | '{' | '}'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn labelled_line<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .map(str::trim)
+}
+
+/// 回读判定：显式值要求相等，生成值要求与写前不同。
+fn uuid_verdict(value: &PropertyValue, before: Option<&str>, after: &str) -> Result<(), String> {
+    match value {
+        PropertyValue::Text(want) => {
+            if normalize_uuid(after) == normalize_uuid(want) {
+                Ok(())
+            } else {
+                Err(format!("expected {want}, read back {after}"))
+            }
+        }
+        PropertyValue::Generate => {
+            if before.is_some_and(|old| normalize_uuid(old) == normalize_uuid(after)) {
+                Err(format!("it is still {after}, the value did not change"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 fn failure(error: ExecError, touched: bool) -> Outcome {
     if touched {
         return Outcome::needs_recovery(error.to_string());
@@ -1728,5 +2021,176 @@ mod tests {
         ));
         // 有能力时放行。
         assert!(capability_refusal(TargetKind::BlockDevice, true).is_none());
+    }
+
+    #[test]
+    fn label_commands_follow_each_family() {
+        let device = Path::new("fake1");
+        let label = PropertyValue::Text("LABEL".to_owned());
+        for (kind, program, args) in [
+            (
+                ContentKind::Filesystem(FsKind::Ext),
+                Program::Tune2fs,
+                vec!["-L", "LABEL", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Xfs),
+                Program::XfsAdmin,
+                vec!["-L", "LABEL", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Btrfs),
+                Program::Btrfs,
+                vec!["filesystem", "label", "fake1", "LABEL"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Ntfs),
+                Program::Ntfslabel,
+                vec!["fake1", "LABEL"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Vfat),
+                Program::Fatlabel,
+                vec!["fake1", "LABEL"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Exfat),
+                Program::Exfatlabel,
+                vec!["fake1", "LABEL"],
+            ),
+            (
+                ContentKind::Swap,
+                Program::Swaplabel,
+                vec!["-L", "LABEL", "fake1"],
+            ),
+        ] {
+            let (got_program, got_args) =
+                attr_invocation(ContentProperty::Label, &label, kind, device).expect("有工具");
+            assert_eq!(got_program, program, "{kind:?}");
+            assert_eq!(got_args, args, "{kind:?}");
+        }
+        // 非文本形态写不了卷标。
+        assert!(
+            attr_invocation(
+                ContentProperty::Label,
+                &PropertyValue::Generate,
+                ContentKind::Filesystem(FsKind::Ext),
+                device
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn uuid_commands_follow_each_request_form() {
+        let device = Path::new("fake1");
+        let uuid = PropertyValue::Text("00010203-0405-0607-0809-0a0b0c0d0e0f".to_owned());
+        let generate = PropertyValue::Generate;
+        for (kind, value, program, args) in [
+            (
+                ContentKind::Filesystem(FsKind::Ext),
+                &uuid,
+                Program::Tune2fs,
+                vec!["-U", "00010203-0405-0607-0809-0a0b0c0d0e0f", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Ext),
+                &generate,
+                Program::Tune2fs,
+                vec!["-U", "random", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Xfs),
+                &generate,
+                Program::XfsAdmin,
+                vec!["-U", "generate", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Btrfs),
+                &generate,
+                Program::Btrfstune,
+                vec!["-f", "-u", "fake1"],
+            ),
+            (
+                ContentKind::Swap,
+                &uuid,
+                Program::Swaplabel,
+                vec!["-U", "00010203-0405-0607-0809-0a0b0c0d0e0f", "fake1"],
+            ),
+            (
+                ContentKind::Filesystem(FsKind::Ntfs),
+                &generate,
+                Program::Ntfslabel,
+                vec!["--new-serial", "fake1"],
+            ),
+        ] {
+            let (got_program, got_args) =
+                attr_invocation(ContentProperty::Uuid, value, kind, device).expect("有工具");
+            assert_eq!(got_program, program, "{kind:?}");
+            assert_eq!(got_args, args, "{kind:?}");
+        }
+        // ntfs 的显式值、swap 的生成形式都没有工具：绝不静默降级。
+        assert!(
+            attr_invocation(
+                ContentProperty::Uuid,
+                &uuid,
+                ContentKind::Filesystem(FsKind::Ntfs),
+                device
+            )
+            .is_none()
+        );
+        assert!(
+            attr_invocation(ContentProperty::Uuid, &generate, ContentKind::Swap, device).is_none()
+        );
+    }
+
+    #[test]
+    fn uuids_are_read_back_from_each_tool_output() {
+        let ext = "Filesystem UUID: 4d4f4e4b-0000-4000-8000-000000000000\n";
+        assert_eq!(
+            uuid_from_output(ContentKind::Filesystem(FsKind::Ext), ext).as_deref(),
+            Some("4d4f4e4b000040008000000000000000")
+        );
+        let xfs = "name = fake1\nUUID = 4d4f4e4b-0000-4000-8000-000000000000\n";
+        assert_eq!(
+            uuid_from_output(ContentKind::Filesystem(FsKind::Xfs), xfs).as_deref(),
+            Some("4d4f4e4b000040008000000000000000")
+        );
+        let swap = "LABEL: SWAP\nUUID: 4d4f4e4b-0000-4000-8000-000000000000\n";
+        assert_eq!(
+            uuid_from_output(ContentKind::Swap, swap).as_deref(),
+            Some("4d4f4e4b000040008000000000000000")
+        );
+        let btrfs = "\tdevid    1 size 100MiB used 5MiB path fake1\n\tuuid: 4d4f4e4b-0000-4000-8000-000000000000\n";
+        assert_eq!(
+            uuid_from_output(ContentKind::Filesystem(FsKind::Btrfs), btrfs).as_deref(),
+            Some("4d4f4e4b000040008000000000000000")
+        );
+        assert!(uuid_from_output(ContentKind::Filesystem(FsKind::Ntfs), "").is_none());
+    }
+
+    #[test]
+    fn uuid_verdict_separates_explicit_from_generated() {
+        let want = PropertyValue::Text("4d4f4e4b-0000-4000-8000-000000000000".to_owned());
+        // 大小写与分隔符差异不算不同。
+        assert!(uuid_verdict(&want, None, "4D4F4E4B000040008000000000000000").is_ok());
+        assert!(uuid_verdict(&want, None, "11111111-1111-4111-8111-111111111111").is_err());
+        // 生成值必须真的变了："工具退 0 但没写"在这里失败。
+        assert!(
+            uuid_verdict(
+                &PropertyValue::Generate,
+                Some("4d4f4e4b-0000-4000-8000-000000000000"),
+                "4d4f4e4b-0000-4000-8000-000000000000"
+            )
+            .is_err()
+        );
+        assert!(
+            uuid_verdict(
+                &PropertyValue::Generate,
+                Some("4d4f4e4b-0000-4000-8000-000000000000"),
+                "11111111-1111-4111-8111-111111111111"
+            )
+            .is_ok()
+        );
     }
 }

@@ -434,6 +434,58 @@ s23_lvm_offline_chain() {
   rm -f /tmp/s23.img
 }
 
+# S24: set label / set uuid 经真实工具写入并回读。
+s24_set_label_uuid() {
+  modprobe btrfs 2>/dev/null
+  newdisk /tmp/s24.img 1000
+  printf 'label: gpt\n, 128M, L\n, 64M, L\n, 96M, L\n, 64M, L\n, 64M, L\n, 320M, L\n, 160M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+
+  mkfs.ext4 -q -F "${L}p1"
+  "$DE" set "$L:1" label ROOTSA --yes >/tmp/o 2>&1; assert_rc s24_ext_label_rc 0 "$?"
+  assert_eq s24_ext_label ROOTSA "$(blkid -o value -s LABEL "${L}p1" 2>/dev/null)"
+  want=4d4f4e4b-0000-4000-8000-000000000001
+  "$DE" set "$L:1" uuid "$want" --yes >/tmp/o 2>&1; assert_rc s24_ext_uuid_rc 0 "$?"
+  assert_eq s24_ext_uuid "$want" "$(blkid -o value -s UUID "${L}p1" 2>/dev/null)"
+  old=$(blkid -o value -s UUID "${L}p1" 2>/dev/null)
+  "$DE" set "$L:1" uuid --random --yes >/tmp/o 2>&1; assert_rc s24_ext_random_rc 0 "$?"
+  new=$(blkid -o value -s UUID "${L}p1" 2>/dev/null)
+  { [ -n "$new" ] && [ "$new" != "$old" ]; } && ok s24_ext_random_changed || no s24_ext_random_changed "uuid stayed [$old]"
+
+  mkfs.vfat -F 32 "${L}p2" >/dev/null 2>&1
+  "$DE" set "$L:2" label VFLAB --yes >/tmp/o 2>&1; assert_rc s24_vfat_label_rc 0 "$?"
+  assert_eq s24_vfat_label VFLAB "$(blkid -o value -s LABEL "${L}p2" 2>/dev/null)"
+  "$DE" set "$L:2" uuid --random --yes >/tmp/o 2>&1
+  assert_rc s24_vfat_uuid_refused 3 "$?"
+
+  mkntfs -q -F "${L}p3" >/dev/null 2>&1
+  "$DE" set "$L:3" label NLAB --yes >/tmp/o 2>&1; assert_rc s24_ntfs_label_rc 0 "$?"
+  assert_eq s24_ntfs_label NLAB "$(blkid -o value -s LABEL "${L}p3" 2>/dev/null)"
+  "$DE" set "$L:3" uuid --random --yes >/tmp/o 2>&1; assert_rc s24_ntfs_random_rc 0 "$?"
+  "$DE" set "$L:3" uuid 11111111-1111-4111-8111-111111111111 --yes >/tmp/o 2>&1
+  assert_rc s24_ntfs_explicit_refused 3 "$?"
+
+  mkfs.exfat "${L}p4" >/dev/null 2>&1
+  "$DE" set "$L:4" label ELAB --yes >/tmp/o 2>&1; assert_rc s24_exfat_label_rc 0 "$?"
+  assert_eq s24_exfat_label ELAB "$(blkid -o value -s LABEL "${L}p4" 2>/dev/null)"
+
+  mkswap "${L}p5" >/dev/null 2>&1
+  want=22222222-2222-4222-8222-222222222222
+  "$DE" set "$L:5" uuid "$want" --yes >/tmp/o 2>&1; assert_rc s24_swap_uuid_rc 0 "$?"
+  swaplabel "${L}p5" 2>/dev/null | grep -q "$want" && ok s24_swap_uuid || no s24_swap_uuid "$(swaplabel "${L}p5" 2>&1)"
+
+  mkfs.xfs -q -f "${L}p6" >/dev/null 2>&1
+  "$DE" set "$L:6" label XLAB --yes >/tmp/o 2>&1; assert_rc s24_xfs_label_rc 0 "$?"
+  assert_eq s24_xfs_label XLAB "$(blkid -o value -s LABEL "${L}p6" 2>/dev/null)"
+
+  mkfs.btrfs -q -f "${L}p7" >/dev/null 2>&1
+  "$DE" set "$L:7" label BLAB --yes >/tmp/o 2>&1; assert_rc s24_btrfs_label_rc 0 "$?"
+  assert_eq s24_btrfs_label BLAB "$(blkid -o value -s LABEL "${L}p7" 2>/dev/null)"
+
+  "$DE" inspect "$L" >/tmp/o 2>&1
+  grep -q '^record: absent' /tmp/o && ok s24_no_pending_record || no s24_no_pending_record "$(cat /tmp/o)"
+  detach "$L"; rm -f /tmp/s24.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -458,6 +510,7 @@ s20_vfat_grow_refused
 s21_ntfs_shrink
 s22_btrfs_shrink
 s23_lvm_offline_chain
+s24_set_label_uuid
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 

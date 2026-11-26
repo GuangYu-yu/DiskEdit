@@ -5,10 +5,10 @@
   "python",
   "plan/instruments/commits.py"
  ],
- "exit_code": 0,
- "commit": "c6bb3e5",
- "tree": "271aa7f8308604e6",
- "at": "2026-11-26T19:13:22+00:00",
+ "exit_code": 1,
+ "commit": "d159587",
+ "tree": "a2a29206ee96afdd",
+ "at": "2026-11-26T19:39:54+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,
@@ -16,7 +16,9 @@
   "ignored": 0,
   "not_applicable": 0
  },
- "ok": true,
- "reasons": [],
+ "ok": false,
+ "reasons": [
+  "命令退出码为 1"
+ ],
  "log": "plan/evidence/G10.log"
 }

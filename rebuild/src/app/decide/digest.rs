@@ -5,8 +5,8 @@
 
 use diskedit_core::fingerprint::{Fingerprint, Strength};
 
-use super::step::{Access, Step, StepKind};
-use crate::app::observe::{RecoverMode, SetProperty, TableFormat};
+use super::step::{Access, PropertyValue, Step, StepKind};
+use crate::app::observe::{ContentProperty, RecoverMode, TableFormat};
 
 /// 计算摘要。
 pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
@@ -182,14 +182,14 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
             out.push(10);
             out.extend_from_slice(&partition.to_le_bytes());
             out.push(property_tag(*property));
-            match content {
-                Some(content) => {
+            out.extend_from_slice(content.as_str().as_bytes());
+            match value {
+                PropertyValue::Text(text) => {
                     out.push(1);
-                    out.extend_from_slice(content.as_str().as_bytes());
+                    out.extend_from_slice(text.as_bytes());
                 }
-                None => out.push(0),
+                PropertyValue::Generate => out.push(2),
             }
-            out.extend_from_slice(value.as_bytes());
         }
         StepKind::MakeFilesystem {
             partition,
@@ -366,13 +366,10 @@ const fn recover_tag(mode: RecoverMode) -> u8 {
     }
 }
 
-fn property_tag(property: SetProperty) -> u8 {
+fn property_tag(property: ContentProperty) -> u8 {
     match property {
-        SetProperty::Name => 1,
-        SetProperty::Label => 2,
-        SetProperty::Uuid => 3,
-        SetProperty::Flag => 4,
-        SetProperty::Type => 5,
+        ContentProperty::Label => 1,
+        ContentProperty::Uuid => 2,
     }
 }
 

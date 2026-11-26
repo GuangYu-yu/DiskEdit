@@ -26,7 +26,7 @@ pub use confirmed::{ConfirmedPlan, confirm};
 pub use plan::Plan;
 pub use refusal::Refusal;
 pub use report::Report;
-pub use step::{Access, Step, StepKind};
+pub use step::{Access, PropertyValue, Step, StepKind};
 
 /// 一次判定的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]

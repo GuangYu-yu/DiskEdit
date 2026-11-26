@@ -4,6 +4,7 @@
 //! 投影。这里把可编辑的原始表与渲染视图一起采齐：判定层据此算出新字节，执行层
 //! 只消费由此生成的写段。
 
+use diskedit_core::fs::{Program, label_program, uuid_program};
 use diskedit_core::region::Region;
 use diskedit_core::table::create::{PmbrSize, pmbr_size_state};
 use diskedit_core::table::gpt::entries::PartitionEntry;
@@ -18,7 +19,7 @@ use super::new::{PriorState, prior_state, read_region, stamp_of};
 use super::records::RecordState;
 use super::snapshot::{CaptureError, TargetFacts, open_target, record_state};
 use super::table::{self, TableView};
-use super::{Command, Request};
+use super::{Command, PartitionSelector, Request, SetKey, SetRequest};
 
 /// 可编辑的表事实。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +56,8 @@ pub struct EditSnapshot {
     pub facts: Option<TableFacts>,
     pub stamp: [u8; 32],
     pub is_partition_node: bool,
+    /// `set label` / `set uuid` 需要的程序及其可用性；其余命令为空。
+    pub tools: Vec<(Program, bool)>,
 }
 
 /// 采集一次编辑现场。
@@ -96,6 +99,24 @@ pub fn capture_edit(
         TableView::Damaged { .. } | TableView::None => None,
     };
     let prior = prior_state(&record);
+    let tools = match request.command() {
+        Command::Set(set) => set_tools(&view, set, platform),
+        Command::Info { .. }
+        | Command::Inspect
+        | Command::RecordsList
+        | Command::RecordsVerify { .. }
+        | Command::RecordsScan
+        | Command::Resize(_)
+        | Command::Move(_)
+        | Command::Copy(_)
+        | Command::Delete { .. }
+        | Command::Check { .. }
+        | Command::Mkfs { .. }
+        | Command::Resizefs { .. }
+        | Command::Recover(_)
+        | Command::New { .. }
+        | Command::Add(_) => Vec::new(),
+    };
     Ok(EditSnapshot {
         target: TargetFacts {
             sector_size,
@@ -108,7 +129,27 @@ pub fn capture_edit(
         facts,
         stamp,
         is_partition_node,
+        tools,
     })
+}
+
+/// `set` 的内容属性所需程序；表属性、缺失分区或不支持的内容都没有程序。
+fn set_tools(view: &TableView, set: &SetRequest, platform: &dyn Platform) -> Vec<(Program, bool)> {
+    let partition = match set.partition {
+        PartitionSelector::Number(number) => view.find(number),
+        PartitionSelector::Last => view.last(),
+    };
+    let Some(partition) = partition else {
+        return Vec::new();
+    };
+    let program = match set.key {
+        SetKey::Label => label_program(partition.content),
+        SetKey::Uuid => uuid_program(partition.content, set.random || set.value == "random"),
+        SetKey::Name | SetKey::Flag | SetKey::Type => None,
+    };
+    program
+        .map(|program| vec![(program, platform.tool_available(program))])
+        .unwrap_or_default()
 }
 
 pub(super) fn capture_gpt(

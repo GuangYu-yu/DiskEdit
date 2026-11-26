@@ -304,6 +304,47 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
     Scenario {
+        name: "set label on ext refuses an over-long label",
+        argv: &[
+            "set",
+            "target/fixtures/s1/ext.img:1",
+            "label",
+            "xxxxxxxxxxxxxxxxx",
+            "--yes",
+        ],
+    },
+    Scenario {
+        name: "set uuid on ext refuses a malformed value",
+        argv: &[
+            "set",
+            "target/fixtures/s1/ext.img:1",
+            "uuid",
+            "not-a-uuid",
+            "--yes",
+        ],
+    },
+    Scenario {
+        name: "set uuid on unidentified content is refused",
+        argv: &[
+            "set",
+            "target/fixtures/s1/gpt.img:1",
+            "uuid",
+            "4d4f4e4b-0000-4000-8000-000000000000",
+            "--yes",
+        ],
+    },
+    Scenario {
+        name: "mkfs refuses an over-long label",
+        argv: &[
+            "mkfs",
+            "target/fixtures/s1/ext.img:1",
+            "ext4",
+            "--label",
+            "xxxxxxxxxxxxxxxxx",
+            "--yes",
+        ],
+    },
+    Scenario {
         name: "set name is a GPT-only property",
         argv: &["set", "target/fixtures/s1/mbr.img:1", "name", "x", "--yes"],
     },
