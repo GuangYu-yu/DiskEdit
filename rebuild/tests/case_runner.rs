@@ -203,6 +203,36 @@ fn add_delete_and_set_rewrite_both_copies() {
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
 }
 
+// covers: B15, R0064, R0094
+#[test]
+fn filesystem_commands_refuse_without_touching_the_target() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s5";
+    std::fs::create_dir_all(directory).expect("文件系统夹具目录可建");
+    let image = format!("{directory}/blank-content.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
+        .expect("复制带分区的 GPT 夹具");
+    let original = std::fs::read(&image).expect("读取夹具");
+
+    let (code, _, _) = run_argv(&["mkfs", &format!("{image}:1"), "ext4"]);
+    assert_eq!(code, 2, "缺 --yes 应是用法错误");
+
+    let (code, _, _) = run_argv(&["mkfs", &format!("{image}:1"), "bogus", "--yes"]);
+    assert_eq!(code, 2, "未知文件系统应是用法错误");
+
+    let (code, _, _) = run_argv(&["mkfs", &format!("{image}:5"), "ext4", "--yes"]);
+    assert_eq!(code, 3, "不存在的分区应拒绝");
+
+    let (code, _, _) = run_argv(&["resizefs", &format!("{image}:1"), "--yes"]);
+    assert_eq!(code, 3, "内容未识别时不得臆测文件系统");
+
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        original,
+        "拒绝时目标字节不得改变"
+    );
+}
+
 #[test]
 fn every_case_matches_its_observable_result() {
     fixtures::prepare();

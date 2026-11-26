@@ -199,6 +199,22 @@ impl Platform for LinuxPlatform {
         std::fs::create_dir_all(path).map_err(|error| PlatformError::io(path, error))
     }
 
+    fn remove_directory(&self, path: &Path) -> PlatformResult<()> {
+        match std::fs::remove_dir(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(PlatformError::io(path, error)),
+        }
+    }
+
+    fn temporary_directory(&self, tag: &str) -> PlatformResult<PathBuf> {
+        let suffix = self.entropy(8)?;
+        let name = format!("diskedit.{tag}.{}", hex(&suffix));
+        let path = std::env::temp_dir().join(name);
+        std::fs::create_dir_all(&path).map_err(|error| PlatformError::io(&path, error))?;
+        Ok(path)
+    }
+
     fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -501,4 +517,13 @@ fn walk(root: &Path, found: &mut Vec<PathBuf>) -> PlatformResult<()> {
         }
     }
     Ok(())
+}
+
+/// 小写十六进制，用于给临时目录取不冲突的后缀。
+fn hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
 }

@@ -3,6 +3,7 @@
 //! 解析只产出 [`Request`]；任何不认识、重复或缺失的参数都变成 [`UsageError`]，
 //! 由命令层统一以用法错误退出。目标上的分区是否存在不在这里判断。
 
+use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use crate::app::observe::{
@@ -41,6 +42,8 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "set" => parse_set(rest),
         "move" => parse_move(rest),
         "copy" => parse_copy(rest),
+        "mkfs" => parse_mkfs(rest),
+        "resizefs" => parse_resizefs(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
@@ -132,6 +135,67 @@ fn parse_check(args: &[String]) -> Result<Request, UsageError> {
         .partition
         .ok_or_else(|| UsageError::new("check needs <TARGET>:N"))?;
     Ok(Request::new(target, Command::Check { partition }).with_sector_size(sector_size(&tokens)?))
+}
+
+fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--label", "--identity", "--sector-size"],
+        &["--yes"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`mkfs` needs --yes"));
+    }
+    if tokens.positionals.len() != 2 {
+        return Err(UsageError::new("mkfs needs <TARGET>:N <FS>"));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    let name = &tokens.positionals[1];
+    let filesystem = MkfsKind::parse(name).ok_or_else(|| {
+        UsageError::new(format!(
+            "unknown filesystem `{name}` — use one of ext2, ext3, ext4, xfs, btrfs, f2fs, vfat, exfat, ntfs, swap, lvm2_pv"
+        ))
+    })?;
+    let command = Command::Mkfs {
+        partition: target.partition,
+        filesystem,
+        label: tokens.value("--label").map(str::to_owned),
+    };
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_resizefs(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(args, &["--identity", "--sector-size"], &["--yes"])?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`resizefs` needs --yes"));
+    }
+    if tokens.positionals.is_empty() || tokens.positionals.len() > 2 {
+        return Err(UsageError::new(
+            "resizefs needs <TARGET>:N [BYTES] or <MOUNTPOINT> [BYTES]",
+        ));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    if target.partition.is_some() && tokens.positionals.len() > 1 {
+        return Err(UsageError::new(
+            "a size only applies to the mountpoint form — offline resizefs grows the filesystem into its partition",
+        ));
+    }
+    let bytes = tokens
+        .positionals
+        .get(1)
+        .map(|raw| absolute_size(raw))
+        .transpose()?;
+    let command = Command::Resizefs {
+        partition: target.partition,
+        bytes,
+    };
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_identity(identity(&tokens))
+        .with_confirmation(true))
 }
 
 fn parse_new(args: &[String]) -> Result<Request, UsageError> {

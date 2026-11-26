@@ -154,6 +154,50 @@ impl<'a> RecordSession<'a> {
         Ok(())
     }
 
+    /// 声明一步不可回滚的改写意图；已有同计划的未终结记录时复用它。
+    ///
+    /// 这类步骤（例如调用外部建卷程序）没有原像可回滚；意图帧落盘并同步目录
+    /// 之后才允许动目标字节。中断时记录留在原处，由恢复流程报告待恢复。
+    pub fn begin_irreversible(
+        &mut self,
+        plan_digest: [u8; 32],
+        intent: &[u8],
+    ) -> Result<(), ExecError> {
+        if let Some(pending) = self.pending {
+            if pending != plan_digest {
+                return Err(ExecError::Record(
+                    "the existing record belongs to a different plan".to_owned(),
+                ));
+            }
+            self.registered = true;
+            return Ok(());
+        }
+        let body = RecordBody {
+            target: self.identity(),
+            geometry_generation: 0,
+            plan_digest,
+        };
+        let frames = [Frame {
+            seq: 0,
+            kind: FrameKind::Intent,
+            completed: false,
+            irreversible: true,
+            intent: intent.to_vec(),
+            regions: Vec::new(),
+        }];
+        let encoded =
+            record::encode(&body, &frames).map_err(|error| ExecError::Record(error.to_string()))?;
+        self.platform
+            .write_state_file(&self.file, &encoded)
+            .map_err(ExecError::from)?;
+        self.platform
+            .sync_directory(&self.directory)
+            .map_err(ExecError::from)?;
+        self.sequence = 1;
+        self.registered = true;
+        Ok(())
+    }
+
     /// 本步原像已落盘，可以写目标字节。
     pub fn token(&self) -> Recorded {
         Recorded::mint(&self.mint, 1)

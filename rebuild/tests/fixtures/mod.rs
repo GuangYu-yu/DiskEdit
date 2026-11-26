@@ -3,6 +3,7 @@
 //! 只用纯字节构造，不依赖宿主的分区工具；两个测试二进制与基线二进制看到同一现场。
 
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use diskedit_core::table::crc32;
@@ -27,8 +28,16 @@ pub const BASE: &str = "target/fixtures/s1";
 /// 写命令用的空白/占用镜像目录。
 pub const S2_BASE: &str = "target/fixtures/s2";
 
+/// 同一进程内的测试可能并发调用；夹具只写一次。
+static PREPARE_ONCE: Once = Once::new();
+
 /// 建好全部夹具，返回基准目录。
 pub fn prepare() -> PathBuf {
+    PREPARE_ONCE.call_once(prepare_inner);
+    PathBuf::from(BASE)
+}
+
+fn prepare_inner() {
     let base = PathBuf::from(BASE);
     std::fs::create_dir_all(&base).expect("夹具目录可建");
     let gpt = image(&base, "gpt.img");
@@ -44,7 +53,6 @@ pub fn prepare() -> PathBuf {
     write_atomic(&base.join("tiny.img"), b"hello");
     write_atomic(&base.join("zero.img"), []);
     prepare_write_fixtures();
-    base
 }
 
 /// 写命令夹具：4 MiB 空白镜像与在 LBA8 起有非零字节的镜像。

@@ -87,6 +87,14 @@ impl<'a> WriteChannel<'a> {
                 bytes.len()
             )));
         }
+        if region.end() > self.target.len() {
+            return Err(ExecError::InvalidPlan(format!(
+                "write region [{}, {}) ends past the target length {}",
+                region.start(),
+                region.end(),
+                self.target.len()
+            )));
+        }
         if let Some(limit) = self.fail_after {
             if self.writes_done >= limit {
                 return Err(ExecError::Injected(

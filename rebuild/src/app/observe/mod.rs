@@ -10,12 +10,14 @@ use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 pub mod edit;
+pub mod filesystem;
 pub mod new;
 pub mod records;
 pub mod snapshot;
 pub mod table;
 
 pub use edit::{EditSnapshot, TableFacts, capture_edit};
+pub use filesystem::{FilesystemSnapshot, PartitionFacts, capture as capture_filesystem};
 pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
 pub use snapshot::{
     CaptureError, InspectSnapshot, RecordSnapshot, Snapshot, TargetFacts, capture, capture_inspect,
@@ -161,7 +163,7 @@ pub enum Command {
         partition: PartitionSelector,
     },
     Mkfs {
-        partition: PartitionSelector,
+        partition: Option<PartitionSelector>,
         filesystem: MkfsKind,
         label: Option<String>,
     },

@@ -69,6 +69,7 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
         | Refusal::PartitionOverlap { .. }
         | Refusal::CapacityInsufficient { .. }
         | Refusal::FilesystemUnknown { .. }
+        | Refusal::NoFilesystem { .. }
         | Refusal::MinimumSizeUnknown { .. }
         | Refusal::BelowMinimumSize { .. }
         | Refusal::FlagUnknown { .. }

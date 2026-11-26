@@ -109,10 +109,20 @@ fn run(request: &observe::Request) -> u8 {
             Ok(snapshot) => decide::edit::copy_partition(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Resize(_)
-        | Command::Mkfs { .. }
-        | Command::Resizefs { .. }
-        | Command::Recover(_) => return usage(),
+        Command::Mkfs { .. } => {
+            match observe_or_exit(&platform, request, observe::capture_filesystem) {
+                Ok(snapshot) => decide::mkfs::decide(&snapshot, request),
+                Err(code) => return code,
+            }
+        }
+        Command::Resizefs {
+            partition: Some(_), ..
+        } => match observe_or_exit(&platform, request, observe::capture_filesystem) {
+            Ok(snapshot) => decide::resizefs::decide(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Resizefs { .. } => decide::resizefs::mountpoint(),
+        Command::Resize(_) | Command::Recover(_) => return usage(),
     };
     conclude(&platform, request, decision)
 }
@@ -293,7 +303,17 @@ fn write(
             decide::StepKind::MovePartition { .. } | decide::StepKind::CopyPartition { .. }
         )
     });
-    let outcome = if relocation {
+    let filesystem = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            decide::StepKind::MakeFilesystem { .. }
+                | decide::StepKind::GrowFilesystem { .. }
+                | decide::StepKind::ShrinkFilesystem { .. }
+        )
+    });
+    let outcome = if filesystem {
+        execute::filesystem::run(platform, path, &plan)
+    } else if relocation {
         execute::relocate::run(platform, path, &plan)
     } else {
         execute::table::run(platform, path, &plan)

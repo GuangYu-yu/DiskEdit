@@ -10,6 +10,7 @@
 // covers: R0166, R0167, R0168, R0170, R0171, R0172, R0173, R0174
 // covers: R0176, R0177, R0178, R0180, R0182, R0183, R0184, R0185
 // covers: R0187, R0188
+// covers: R0064, R0094, R0098
 
 /// 一条命令行用例。
 pub struct Case {
@@ -65,6 +66,55 @@ pub const CASES: &[Case] = &[
         exit: 2,
         stdout: "",
         stderr: "diskedit",
+    },
+    Case {
+        name: "mkfs without a filesystem type is a usage error",
+        argv: &["mkfs", "target/fixtures/s2/blank.img:1", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "mkfs needs",
+    },
+    Case {
+        name: "mkfs needs a partition",
+        argv: &["mkfs", "target/fixtures/s2/blank.img", "ext4", "--yes"],
+        exit: 3,
+        stdout: "",
+        stderr: "needs a partition",
+    },
+    Case {
+        name: "mkfs without --yes is a usage error",
+        argv: &["mkfs", "target/fixtures/s2/blank.img:1", "ext4"],
+        exit: 2,
+        stdout: "",
+        stderr: "needs --yes",
+    },
+    Case {
+        name: "mkfs with an unknown filesystem is a usage error",
+        argv: &["mkfs", "target/fixtures/s2/blank.img:1", "bogus", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "unknown filesystem",
+    },
+    Case {
+        name: "resizefs size only applies to the mountpoint form",
+        argv: &["resizefs", "target/fixtures/s2/blank.img:1", "32M", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "size only applies",
+    },
+    Case {
+        name: "resizefs without a target is a usage error",
+        argv: &["resizefs", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "resizefs needs",
+    },
+    Case {
+        name: "mkfs of an LVM physical volume is unsupported",
+        argv: &["mkfs", "target/fixtures/s1/ext.img:1", "lvm2_pv", "--yes"],
+        exit: 6,
+        stdout: "",
+        stderr: "LVM2 PVs",
     },
     Case {
         name: "help for one command",

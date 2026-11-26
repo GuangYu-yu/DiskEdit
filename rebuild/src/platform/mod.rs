@@ -194,6 +194,26 @@ macro_rules! unsupported_platform {
                 )))
             }
 
+            fn remove_directory(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn temporary_directory(
+                &self,
+                _tag: &str,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的临时目录端口尚未接入"
+                )))
+            }
+
             fn write_state_file(
                 &self,
                 _path: &std::path::Path,
@@ -448,6 +468,12 @@ pub trait Platform: Send + Sync {
 
     /// 递归建立目录。
     fn create_directory_all(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 删除一个空目录；不存在时视为成功。
+    fn remove_directory(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 建立一个宿主临时目录，名字带 `tag` 且不与其他调用冲突。
+    fn temporary_directory(&self, tag: &str) -> PlatformResult<PathBuf>;
 
     /// 以覆盖方式写一个状态文件并落盘。
     fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;

@@ -64,3 +64,6 @@ R0184	src/core/table/edit.rs fixed_start 重叠 → Overlaps	旧 cmd/layout.rs:4
 R0185	src/core/table/edit.rs first_fit 无空洞 → NoGapFits	旧 cmd/layout.rs:504 退 3	tests/cases/mod.rs 的 add refuses a target with no room
 R0187	src/app/cli/parse.rs delete 要求 :N → 用法错误	旧 cli.rs:1450 require_part 退 2	tests/cases/mod.rs 的 delete needs a partition
 R0188	src/app/decide/edit.rs 无表目标 delete → TableMissing	旧 cmd/layout.rs:547 退 3	tests/cases/mod.rs 的 delete refuses a target without a table
+R0064	src/app/cli/parse.rs parse_mkfs 缺文件系统类型报用法	旧 cli.rs:1666 `mkfs` 无 FS 实际退 2	tests/cases/mod.rs 的 mkfs without a filesystem type is a usage error
+R0094	src/app/decide/filesystem.rs selected 在准入前要求分区选择器（退 3）	旧 cmd/fs.rs:80 无分区实际退 3	tests/cases/mod.rs 的 mkfs needs a partition
+R0098	src/app/cli/parse.rs parse_resizefs 拒绝分区形态携带尺寸	旧 cmd/fs.rs:179 实跑退 2	tests/cases/mod.rs 的 resizefs size only applies to the mountpoint form

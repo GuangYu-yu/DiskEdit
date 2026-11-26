@@ -7,13 +7,16 @@ pub mod check;
 pub mod confirmed;
 pub mod digest;
 pub mod edit;
+pub mod filesystem;
 pub mod info;
 pub mod inspect;
+pub mod mkfs;
 pub mod new;
 pub mod plan;
 pub mod records;
 pub mod refusal;
 pub mod report;
+pub mod resizefs;
 pub mod step;
 
 pub use confirmed::{ConfirmedPlan, confirm};

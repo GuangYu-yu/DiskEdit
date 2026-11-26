@@ -58,6 +58,8 @@ pub enum Refusal {
     CapacityInsufficient { needed: u64, available: u64 },
     /// 分区内容类别未知。
     FilesystemUnknown { number: u32 },
+    /// 分区里有可识别的内容，但没有可供该操作作用的文件系统。
+    NoFilesystem { number: u32, what: String },
     /// 该内容类别不支持该操作。
     ContentUnsupported { what: String, why: String },
     /// 所需的文件系统最小尺寸无法证明。
@@ -160,6 +162,9 @@ impl Refusal {
             Self::FilesystemUnknown { .. } => {
                 "identify the partition content kind first, then choose the matching operation"
             }
+            Self::NoFilesystem { .. } => {
+                "create a filesystem in the partition first, or use a command that matches its content"
+            }
             Self::ContentUnsupported { .. } => {
                 "use an operation or external tool supported by this content kind"
             }
@@ -244,6 +249,9 @@ impl Refusal {
             }
             Self::FilesystemUnknown { number } => {
                 format!("the content of partition {number} is not identified")
+            }
+            Self::NoFilesystem { number, what } => {
+                format!("partition {number} holds {what}, which is not a filesystem to resize")
             }
             Self::ContentUnsupported { what, why } => format!("{what} is not supported: {why}"),
             Self::MinimumSizeUnknown { number, why } => {
