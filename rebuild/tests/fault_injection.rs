@@ -15,6 +15,7 @@ use diskedit::app::decide::{Plan, Step, StepKind, confirm};
 use diskedit::app::execute::relocate;
 use diskedit::app::execute::{ExecutionState, Outcome};
 use diskedit::app::observe::TableFormat;
+use diskedit::app::observe::records::{RECORD_FILE, hex16};
 use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, SUCCESS, exit_of};
 use diskedit::platform::{
     LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
@@ -22,6 +23,7 @@ use diskedit::platform::{
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
+use diskedit_core::record::{FrameKind, decode};
 use diskedit_core::region::Region;
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
@@ -374,6 +376,71 @@ fn a_failed_table_flush_reports_partial() {
         ..Faults::default()
     });
     assert_partial(&outcome, "表刷盘失败");
+}
+
+/// 记录文件路径：与执行器一致的 `<state>/images/<hex16>/record`。
+fn record_path() -> PathBuf {
+    PathBuf::from("/state")
+        .join("images")
+        .join(hex16(IDENTITY))
+        .join(RECORD_FILE)
+}
+
+fn read_record(memory: &Memory) -> Vec<u8> {
+    memory
+        .files
+        .lock()
+        .unwrap()
+        .get(&record_path())
+        .cloned()
+        .expect("失败后记录必须保留")
+}
+
+// covers: B6
+#[test]
+fn a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source() {
+    // 第二块写失败：数据步已写过第一块，记录里只应有意图帧与进度帧，
+    // 不应出现任何数据区原像；被搬走的源区此后仍保留旧字节（数据步不回滚）。
+    let (outcome, memory) = run(Faults {
+        fail_write: Some(2),
+        ..Faults::default()
+    });
+    assert_partial(&outcome, "搬移中断");
+
+    let decoded = decode(&read_record(&memory)).expect("记录应可解码");
+    assert!(
+        decoded
+            .frames
+            .iter()
+            .all(|frame| frame.kind != FrameKind::Preimage),
+        "中断在数据步时不应登记任何原像：{:?}",
+        decoded.frames
+    );
+
+    // 源区 LBA2..6（字节 1024..3072）不参与回滚，旧字节原样保留。
+    let target = memory.target.lock().unwrap();
+    let initial = initial_bytes();
+    assert_eq!(&target[1024..3072], &initial[1024..3072], "旧源区不得清零");
+}
+
+// covers: B16
+#[test]
+fn the_table_preimage_is_recorded_before_the_table_write() {
+    // 第三次写是表步：写失败时记录里必须已经有覆盖表区间的原像帧。
+    let (outcome, memory) = run(Faults {
+        fail_write: Some(3),
+        ..Faults::default()
+    });
+    assert_partial(&outcome, "表写失败");
+
+    let decoded = decode(&read_record(&memory)).expect("记录应可解码");
+    let covered = decoded.frames.iter().any(|frame| {
+        frame.kind == FrameKind::Preimage
+            && frame.regions.iter().any(|region| {
+                region.offset <= 8 * SECTOR && 9 * SECTOR <= region.offset + region.len
+            })
+    });
+    assert!(covered, "表写前必须已落表区原像：{:?}", decoded.frames);
 }
 
 #[test]

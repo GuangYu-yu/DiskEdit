@@ -594,3 +594,29 @@ fn recover_refuses_a_partition_selector() {
     let (code, _stdout, stderr) = run_argv(&["recover", "disk.img:1", "--yes"]);
     assert_eq!(code, 2, "recover 不接受分区选择器：{stderr}");
 }
+
+// covers: D9
+#[test]
+fn read_only_info_emits_one_structured_json_document() {
+    // 只读命令统一输出本实现的结构化 JSON：单个对象、字段集稳定。
+    let (code, stdout, _) = run_argv(&["info", "target/fixtures/s1/gpt.img"]);
+    assert_eq!(code, 0);
+    let trimmed = stdout.trim();
+    assert!(
+        trimmed.starts_with('{') && trimmed.ends_with('}'),
+        "{stdout}"
+    );
+    for key in ["\"label\":\"gpt\"", "\"disk_guid\":", "\"partitions\":["] {
+        assert!(stdout.contains(key), "缺少字段 {key}：{stdout}");
+    }
+}
+
+// covers: D3
+#[test]
+fn check_reports_the_reason_it_cannot_act() {
+    // 检查器的失败原因必须可见：既给结论，也给成因与下一步。
+    let (code, _stdout, stderr) = run_argv(&["check", "target/fixtures/s1/gpt.img:1"]);
+    assert_eq!(code, 6, "未识别内容应不支持：{stderr}");
+    assert!(stderr.contains("unsupported:"), "{stderr}");
+    assert!(stderr.contains("filesystem type unrecognized"), "{stderr}");
+}
