@@ -16,8 +16,13 @@ use crate::platform::{self, Platform};
 
 pub use declare::declared_entries;
 
-/// 运行一次命令行调用，返回退出码。
+/// 运行一次命令行调用，返回退出码。宿主端口在这里选定。
 pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
+    dispatch_with(&platform::host(), args)
+}
+
+/// 以给定端口运行一次命令行调用。测试用它注入假端口，生产路径只经 [`dispatch`]。
+pub fn dispatch_with(platform: &dyn Platform, args: impl IntoIterator<Item = OsString>) -> u8 {
     let argv: Vec<String> = args
         .into_iter()
         .skip(1)
@@ -41,7 +46,7 @@ pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
     }
 
     match parse::parse(&argv) {
-        Ok(request) => run(&request),
+        Ok(request) => run(platform, &request),
         Err(error) => {
             eprintln!("diskedit: {}", error.message);
             usage()
@@ -49,91 +54,86 @@ pub fn dispatch(args: impl IntoIterator<Item = OsString>) -> u8 {
     }
 }
 
-/// 打开端口并执行一条已解析的请求。
-fn run(request: &observe::Request) -> u8 {
-    let platform = platform::host();
+/// 执行一条已解析的请求。
+fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
     let decision = match request.command() {
-        Command::RecordsScan => return scan(&platform, request),
+        Command::RecordsScan => return scan(platform, request),
         Command::RecordsList if request.target_spec().is_none() => {
             decide::records::list(None, platform.state_root())
         }
-        Command::Info { grow } => match observe_or_exit(&platform, request, observe::capture) {
+        Command::Info { grow } => match observe_or_exit(platform, request, observe::capture) {
             Ok(snapshot) => decide::info::decide(&snapshot, request, *grow),
             Err(code) => return code,
         },
         Command::Check { partition } => {
-            match observe_or_exit(&platform, request, observe::capture) {
+            match observe_or_exit(platform, request, observe::capture) {
                 Ok(snapshot) => decide::check::decide(&snapshot, *partition),
                 Err(code) => return code,
             }
         }
-        Command::Inspect => match observe_or_exit(&platform, request, observe::capture_inspect) {
+        Command::Inspect => match observe_or_exit(platform, request, observe::capture_inspect) {
             Ok(snapshot) => decide::inspect::decide(&snapshot),
             Err(code) => return code,
         },
         Command::RecordsList => {
-            match observe_or_exit(&platform, request, observe::capture_records) {
+            match observe_or_exit(platform, request, observe::capture_records) {
                 Ok(snapshot) => decide::records::list(Some(&snapshot), platform.state_root()),
                 Err(code) => return code,
             }
         }
         Command::RecordsVerify { token } => {
-            match observe_or_exit(&platform, request, observe::capture_records) {
+            match observe_or_exit(platform, request, observe::capture_records) {
                 Ok(snapshot) => decide::records::verify(&snapshot, token),
                 Err(code) => return code,
             }
         }
-        Command::New { .. } => match observe_or_exit(&platform, request, observe::capture_new) {
+        Command::New { .. } => match observe_or_exit(platform, request, observe::capture_new) {
             Ok(snapshot) => decide::new::decide(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Add(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+        Command::Add(_) => match observe_or_exit(platform, request, observe::capture_edit) {
             Ok(snapshot) => decide::edit::add(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Delete { .. } => {
-            match observe_or_exit(&platform, request, observe::capture_edit) {
-                Ok(snapshot) => decide::edit::delete(&snapshot, request),
-                Err(code) => return code,
-            }
-        }
-        Command::Set(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+        Command::Delete { .. } => match observe_or_exit(platform, request, observe::capture_edit) {
+            Ok(snapshot) => decide::edit::delete(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Set(_) => match observe_or_exit(platform, request, observe::capture_edit) {
             Ok(snapshot) => decide::edit::set(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Move(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+        Command::Move(_) => match observe_or_exit(platform, request, observe::capture_edit) {
             Ok(snapshot) => decide::edit::move_partition(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Copy(_) => match observe_or_exit(&platform, request, observe::capture_edit) {
+        Command::Copy(_) => match observe_or_exit(platform, request, observe::capture_edit) {
             Ok(snapshot) => decide::edit::copy_partition(&snapshot, request),
             Err(code) => return code,
         },
         Command::Mkfs { .. } => {
-            match observe_or_exit(&platform, request, observe::capture_filesystem) {
+            match observe_or_exit(platform, request, observe::capture_filesystem) {
                 Ok(snapshot) => decide::mkfs::decide(&snapshot, request),
                 Err(code) => return code,
             }
         }
         Command::Resizefs {
             partition: Some(_), ..
-        } => match observe_or_exit(&platform, request, observe::capture_filesystem) {
+        } => match observe_or_exit(platform, request, observe::capture_filesystem) {
             Ok(snapshot) => decide::resizefs::decide(&snapshot, request),
             Err(code) => return code,
         },
         Command::Resizefs { .. } => decide::resizefs::mountpoint(),
-        Command::Resize(_) => match observe_or_exit(&platform, request, observe::capture_resize) {
+        Command::Resize(_) => match observe_or_exit(platform, request, observe::capture_resize) {
             Ok(snapshot) => decide::resize::decide(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Recover(_) => {
-            match observe_or_exit(&platform, request, observe::capture_recover) {
-                Ok(snapshot) => decide::recover::decide(&snapshot, request),
-                Err(code) => return code,
-            }
-        }
+        Command::Recover(_) => match observe_or_exit(platform, request, observe::capture_recover) {
+            Ok(snapshot) => decide::recover::decide(&snapshot, request),
+            Err(code) => return code,
+        },
     };
-    conclude(&platform, request, decision)
+    conclude(platform, request, decision)
 }
 
 /// `records scan`：先证明根是可读目录，再交给判定层。
@@ -193,6 +193,13 @@ fn capture_failed(
             );
             return usage();
         }
+        observe::CaptureError::UnsupportedSector { bytes } => {
+            eprintln!(
+                "unsupported: the target's sector size {bytes} is outside the supported set \
+                 (512..=65536, powers of two) — geometry cannot be constructed"
+            );
+            return exit::UNSUPPORTED;
+        }
         other @ (observe::CaptureError::Platform(_)
         | observe::CaptureError::NoTarget
         | observe::CaptureError::Identity(_)
@@ -205,6 +212,7 @@ fn capture_failed(
         observe::CaptureError::Identity(error) => error.to_string(),
         observe::CaptureError::TooSmall { .. } => error.to_string(),
         observe::CaptureError::Unreadable { why } => why.clone(),
+        observe::CaptureError::UnsupportedSector { .. } => unreachable!("上面已处理"),
         observe::CaptureError::DeclaredIdentityNotApplicable => unreachable!("上面已处理"),
     };
     match request.command() {

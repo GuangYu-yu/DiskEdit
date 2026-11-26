@@ -16,7 +16,7 @@ use diskedit::app::execute::relocate;
 use diskedit::app::execute::{ExecutionState, Outcome};
 use diskedit::app::observe::TableFormat;
 use diskedit::app::observe::records::{RECORD_FILE, hex16};
-use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, SUCCESS, exit_of};
+use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, SUCCESS, UNSUPPORTED, exit_of};
 use diskedit::platform::{
     LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
     TargetKind, ToolRun,
@@ -56,6 +56,7 @@ struct FaultTarget {
     bytes: Arc<Mutex<Vec<u8>>>,
     faults: Arc<Faults>,
     counts: Arc<Counts>,
+    sector: Option<u64>,
 }
 
 impl TargetHandle for FaultTarget {
@@ -69,7 +70,7 @@ impl TargetHandle for FaultTarget {
         TargetKind::File
     }
     fn sector_size(&self) -> Option<u64> {
-        Some(SECTOR)
+        self.sector
     }
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
         let call = self.counts.reads.fetch_add(1, Ordering::SeqCst) + 1;
@@ -120,6 +121,7 @@ struct Memory {
     target: Arc<Mutex<Vec<u8>>>,
     faults: Arc<Faults>,
     counts: Arc<Counts>,
+    sector: Option<u64>,
 }
 
 impl Memory {
@@ -129,6 +131,18 @@ impl Memory {
             target: Arc::new(Mutex::new(bytes)),
             faults: Arc::new(faults),
             counts: Arc::new(Counts::default()),
+            sector: Some(SECTOR),
+        }
+    }
+
+    /// 以指定的内核扇区尺寸回报构造宿主；`None` 表示普通文件（无内核值）。
+    fn with_sector_size(bytes: Vec<u8>, sector: u64, faults: Faults) -> Self {
+        Self {
+            files: Mutex::new(BTreeMap::new()),
+            target: Arc::new(Mutex::new(bytes)),
+            faults: Arc::new(faults),
+            counts: Arc::new(Counts::default()),
+            sector: Some(sector),
         }
     }
 }
@@ -139,6 +153,7 @@ impl Platform for Memory {
             bytes: Arc::clone(&self.target),
             faults: Arc::clone(&self.faults),
             counts: Arc::clone(&self.counts),
+            sector: self.sector,
         }))
     }
     fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
@@ -146,6 +161,7 @@ impl Platform for Memory {
             bytes: Arc::clone(&self.target),
             faults: Arc::clone(&self.faults),
             counts: Arc::clone(&self.counts),
+            sector: self.sector,
         }))
     }
     fn path_kind(&self, _path: &Path) -> TargetKind {
@@ -457,4 +473,22 @@ fn a_clean_run_commits_and_cleans_the_record() {
         memory.files.lock().unwrap().is_empty(),
         "提交后记录应被清理"
     );
+}
+
+/// 以假端口跑一条完整命令行；用于驱动需要特定内核事实（扇区尺寸、占用、身份）的分支。
+fn dispatch(memory: &Memory, argv: &[&str]) -> u8 {
+    let args: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
+    diskedit::app::cli::dispatch_with(memory, args)
+}
+
+// covers: R0004, R0014, R0018, R0021, R0023, R0024, R0026, R0029
+// covers: R0036
+// covers: B1, B19
+#[test]
+fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
+    // 内核回报 520 字节扇区（不在 512..=65536 的 2 的幂集合内）：全部 LBA 换算失去
+    // 依据，写命令必须按能力不支持拒绝（退 6），而不是静默当作 512。
+    let memory = Memory::with_sector_size(vec![0u8; 8192], 520, Faults::default());
+    let code = dispatch(&memory, &["diskedit", "add", "memory", "1M", "--yes"]);
+    assert_eq!(code, UNSUPPORTED, "集合外扇区尺寸应按 unsupported 拒绝");
 }

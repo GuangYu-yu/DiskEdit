@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use diskedit_core::fingerprint::{Fingerprint, Strength};
+use diskedit_core::geometry::SectorSize;
 
 use crate::platform::{Occupancy, Platform, PlatformError, TargetKind};
 
@@ -27,6 +28,8 @@ pub enum CaptureError {
     Unreadable { why: String },
     /// 身份无法解析。
     Identity(PlatformError),
+    /// 内核回报的逻辑扇区尺寸不在允许集合内：几何无法确定，按能力不支持处理。
+    UnsupportedSector { bytes: u64 },
     /// 用户声明的身份名不适用于这个目标：它自身已能证明身份，或不是块设备。
     DeclaredIdentityNotApplicable,
 }
@@ -50,6 +53,10 @@ impl std::fmt::Display for CaptureError {
             }
             Self::Unreadable { why } => f.write_str(why),
             Self::Identity(error) => write!(f, "{error}"),
+            Self::UnsupportedSector { bytes } => write!(
+                f,
+                "the target's sector size {bytes} is outside the supported set (512..=65536, powers of two)"
+            ),
             Self::DeclaredIdentityNotApplicable => f.write_str(
                 "--identity applies only to block devices with no readable WWN, EUI or repeatable \
                  serial; images and identified devices are addressed by their own identity",
@@ -215,7 +222,14 @@ pub(crate) fn open_target(
     }
     // 声明名只在自动身份不可得时生效；它与自动身份走同一个记录键空间。
     let identity = declared.map(Fingerprint::declared).or(strong);
-    let sector_size = handle.sector_size().unwrap_or(512);
+    // 内核回报的逻辑扇区尺寸先过允许集合：集合外的值（520/524/528 等）会让全部
+    // LBA 换算失去依据，按能力不支持拒绝，而不是静默当作 512。
+    let sector_size = match handle.sector_size() {
+        None => 512,
+        Some(bytes) => SectorSize::new(bytes)
+            .map(SectorSize::bytes)
+            .map_err(|_| CaptureError::UnsupportedSector { bytes })?,
+    };
     Ok(TargetFacts {
         display: path.display().to_string(),
         path: path.clone(),

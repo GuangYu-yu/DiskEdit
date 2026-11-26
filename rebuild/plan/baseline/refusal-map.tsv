@@ -246,3 +246,12 @@ R0151	src/app/decide/inspect.rs::damage 把 TooShort/FrameIncomplete 判为截�
 R0152	src/app/decide/inspect.rs::damage 把头部/载荷/正文/帧 CRC 不符判为校验失败	测试翻转记录载荷中的字节，基线旧 cmd/inspect.rs:500 对 CrcMismatch 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
 R0153	src/app/decide/inspect.rs 记录条目读不出字节 → RecordUnreadable	测试把记录位置换成目录，基线旧 cmd/inspect.rs:506 对 NotRegular 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
 R0154	src/app/decide/inspect.rs 记录条目 IO 不可读 → RecordUnreadable	测试的记录目录满足前置但条目不可读，基线旧 cmd/inspect.rs:512 对 Unreadable 退 3	tests/case_runner.rs 的 inspect refuses a damaged or foreign record
+R0004	src/app/observe/snapshot.rs::open_target 对内核扇区尺寸过 SectorSize::new 校验	旧 assembly.rs:212 对」目标扇区尺寸不在允许集合」报 unsupported；新版在打开目标处校验同一事实	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0014	src/app/observe/snapshot.rs::open_target 扇区集合校验（表几何的 ss 源于同一次打开）	旧 assembly.rs:318 装配 add 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0018	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:352 装配 set 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0021	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:394 装配 delete 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0023	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:454 装配 move 计划时校验目标扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0024	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:492 装配 move 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0026	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:539 装配 copy 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0029	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:600 装配 resize 计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
+R0036	src/app/observe/snapshot.rs::open_target 扇区集合校验	旧 assembly.rs:818 装配 resize 搬移计划时校验表扇区尺寸	tests/fault_injection.rs 的 a_target_with_an_unsupported_sector_size_is_refused_as_unsupported
