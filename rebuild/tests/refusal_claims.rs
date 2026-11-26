@@ -197,6 +197,7 @@ fn mbr_delete_rejects_empty_structural_and_out_of_range_slots() {
 }
 
 // covers: R0399, R0404, R0411, R0413, R0898, R0899, R0901, R0902
+// covers: R0623
 // covers: R0903, R0904
 #[test]
 fn mbr_resize_rejects_structural_and_out_of_bounds_ranges() {

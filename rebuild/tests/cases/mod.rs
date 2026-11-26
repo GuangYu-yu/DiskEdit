@@ -23,6 +23,7 @@
 // covers: R0174, R0176, R0177, R0178, R0180, R0187, R0192, R0203
 // covers: R0221
 // covers: R0542, R0584, R0586, R0870, R0958
+// covers: R0262, R0286, R0611, R0639
 
 /// 一条命令行用例。
 pub struct Case {

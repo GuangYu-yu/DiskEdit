@@ -196,3 +196,6 @@ R0584	src/app/cli/parse.rs 拒绝分区号 0	旧 src/execution/set.rs:34 the ste
 R0586	src/app/decide/edit.rs 拒绝非 UUID 的 set uuid 值	旧 src/execution/set.rs:45 is not a UUID	tests/cases/mod.rs 的 set uuid refuses a value that is not a UUID
 R0870	src/app/decide/new.rs 拒绝低于 MBR 最小容量的目标	旧 src/table/create.rs:91 target too small for an MBR	tests/cases/mod.rs 的 new refuses a target below the MBR minimum
 R0958	src/app/execute/table.rs 拒绝低于 MBR 最小容量的写表	旧 src/table/step.rs:306 target too small for an MBR	tests/cases/mod.rs 的 new refuses a target below the MBR minimum
+R0262	src/app/decide/records.rs 拒绝把文件当作记录仓库目录	旧 src/cmd/records.rs:469 is not a directory	tests/cases/mod.rs 的 records scan refuses a file
+R0286	src/app/decide/records.rs 扫描根不是目录时拒绝	旧 src/cmd/records.rs:734 is not a directory	tests/cases/mod.rs 的 records scan refuses a file
+R0623	src/app/decide/resize.rs 拒绝扩展容器分区	旧 src/gpt_policy.rs:542 extended container (logical partitions out of scope)	tests/refusal_claims.rs 的 mbr_resize_rejects_structural_and_out_of_bounds_ranges
