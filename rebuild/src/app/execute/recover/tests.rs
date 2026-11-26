@@ -246,11 +246,11 @@ fn recovered(outcome: &Outcome) -> bool {
     )
 }
 
-// covers: B7, B9, B24
+// covers: B7, B9
 #[test]
-fn rollback_restores_the_preimage_and_cleans_the_record() {
+fn rollback_verifies_the_preimage_and_cleans_the_record() {
     let original = vec![0xAAu8; SECTOR];
-    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
+    let memory = Memory::with_target(original.clone());
     memory.put(
         &record_path(),
         record_bytes(&[
@@ -280,9 +280,9 @@ fn rollback_restores_the_preimage_and_cleans_the_record() {
 
 // covers: B24
 #[test]
-fn an_already_reverted_region_is_not_rewritten() {
+fn a_mismatched_region_is_refused_and_kept() {
     let original = vec![0xAAu8; SECTOR];
-    let memory = Memory::with_target(original.clone());
+    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
         record_bytes(&[
@@ -302,11 +302,13 @@ fn an_already_reverted_region_is_not_rewritten() {
         vec![Region::sized(0, SECTOR as u64).unwrap()],
     );
     let outcome = run(&memory, Path::new("memory"), &plan);
-    assert!(recovered(&outcome));
-    assert_eq!(
-        memory.target.lock().unwrap().as_slice(),
-        original.as_slice()
+    assert!(
+        !recovered(&outcome),
+        "盘面偏离原像应拒绝：{:?}",
+        outcome.reason()
     );
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
+    assert!(memory.get(&record_path()).is_some(), "拒绝后必须保留记录");
 }
 
 // covers: B8

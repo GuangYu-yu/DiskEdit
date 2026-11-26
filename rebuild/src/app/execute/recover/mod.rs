@@ -1,9 +1,9 @@
 //! `recover` 的唯一执行器：持锁、锁内重探身份、按记录回写原像或归档记录。
 //!
-//! 所有目标写入都经唯一写通道并携带 [`Recorded`] 令牌。B9 的准入顺序在这里
-//! 落地：取记录目录锁 → 锁内重探身份 → 锁内重读记录 → 再按纯恢复器的结论动作。
-//! 回滚前逐条读目标当前字节（B24）：已经回到原像的区间不再写，其余写回并回读
-//! 核对；清理与放弃都先回读再删除、删除后对目录 `fsync`（B23）。
+//! B9 的准入顺序在这里落地：取记录目录锁 → 锁内重探身份 → 锁内重读记录 →
+//! 再按纯恢复器的结论动作。回滚只读不写：逐条读目标当前字节并与原像核对
+//! （B7 第五条 / B24），不符即拒绝并保留记录，绝不覆盖外部改动；清理与放弃
+//! 都先回读再删除、删除后对目录 `fsync`（B23）。
 
 use std::path::{Path, PathBuf};
 
@@ -12,12 +12,12 @@ use diskedit_core::record::{Frame, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
 use super::digest::Hasher;
-use super::transaction::{LOCK_FILE, Mint};
-use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
+use super::transaction::LOCK_FILE;
+use super::{ExecError, FailureKind, Outcome};
 use crate::app::decide::{ConfirmedPlan, StepKind};
 use crate::app::observe::RecoverMode;
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::Platform;
+use crate::platform::{Platform, TargetHandle};
 
 /// 归档文件名的前缀：`record.<N>.abandoned`，编号顺延且不覆盖。
 const ABANDONED_PREFIX: &str = "record.";
@@ -112,7 +112,7 @@ fn rollback(
     file: &Path,
     bytes: Option<Vec<u8>>,
     identity: Fingerprint,
-    mode: RecoverMode,
+    _mode: RecoverMode,
 ) -> Result<Outcome, (ExecError, bool)> {
     let Some(bytes) = bytes else {
         // 记录在执行层取锁前被清理：已无事可做。
@@ -134,9 +134,9 @@ fn rollback(
         RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why), false)),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
             let plan = preimages(&frames).map_err(|error| (error, false))?;
-            let wrote = write_back(platform, target, &plan).map_err(|error| (error, false))? > 0;
-            clear(platform, directory, file, &bytes).map_err(|error| (error, wrote))?;
-            let _ = mode;
+            verify_against_preimage(platform, target, &plan).map_err(|error| (error, false))?;
+            clear(platform, directory, file, &bytes).map_err(|error| (error, false))?;
+
             Ok(Outcome::rolled_back())
         }
     }
@@ -203,33 +203,46 @@ fn preimages(frames: &[Frame]) -> Result<Vec<Preimage>, ExecError> {
     Ok(out)
 }
 
-/// 逐条核对后把原像写回目标；已回到原像的区间不重写（B24 幂等）。
-fn write_back(
+/// B7 第五条 / B24：逐条读目标当前字节并与原像核对。不符即拒绝、绝不覆盖。
+///
+/// 记录只持久化原像，不保存写入后的字节，因此重建的 `recover` 不会前向重放：
+/// 盘面一旦已经离开原像，只能拒绝并把记录留给人工或 `--release`。
+fn verify_against_preimage(
     platform: &dyn Platform,
     target: &Path,
     preimages: &[Preimage],
-) -> Result<usize, ExecError> {
+) -> Result<(), ExecError> {
     if preimages.is_empty() {
-        return Ok(0);
+        return Ok(());
     }
-    let declared: Vec<Region> = preimages.iter().map(|item| item.region).collect();
-    let mut handle = platform.open_target(target)?;
-    let token = Recorded::mint(&Mint::new(), 1);
-    let mut channel = WriteChannel::new(handle.as_mut(), &declared);
-    let mut written = 0usize;
+    let handle = platform.open_target_read_only(target)?;
     for item in preimages {
-        let current = channel.read_exact(item.region.start(), item.data.len())?;
-        if current == item.data {
-            continue;
+        let current = read_exact(handle.as_ref(), item.region.start(), item.data.len())?;
+        if current != item.data {
+            return Err(ExecError::Record(format!(
+                "target bytes at [{}..{}) differ from the recorded preimage — refusing to overwrite (B24)",
+                item.region.start(),
+                item.region.end()
+            )));
         }
-        channel.write(&token, item.region, &item.data)?;
-        written += 1;
     }
-    if written > 0 {
-        channel.barrier()?;
-        channel.verify_written()?;
+    Ok(())
+}
+
+/// 从目标读满 `len` 字节；短读按环境故障处理。
+fn read_exact(handle: &dyn TargetHandle, offset: u64, len: usize) -> Result<Vec<u8>, ExecError> {
+    let mut buffer = vec![0u8; len];
+    let mut filled = 0usize;
+    while filled < len {
+        let read = handle.read_at(offset + filled as u64, &mut buffer[filled..])?;
+        if read == 0 {
+            return Err(ExecError::Io(format!(
+                "target ended before {len} bytes could be read at {offset}"
+            )));
+        }
+        filled += read;
     }
-    Ok(written)
+    Ok(buffer)
 }
 
 /// B23 清理：回读必须仍是同一份记录，才删除并对目录 `fsync`。
