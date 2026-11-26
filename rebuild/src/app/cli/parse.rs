@@ -180,6 +180,11 @@ fn parse_resizefs(args: &[String]) -> Result<Request, UsageError> {
         ));
     }
     let target = target_spec(&tokens.positionals[0])?;
+    if target.partition.is_none() && tokens.has("--sector-size") {
+        return Err(UsageError::new(
+            "--sector-size only applies to image targets — a mountpoint form takes no sector size",
+        ));
+    }
     if target.partition.is_some() && tokens.positionals.len() > 1 {
         return Err(UsageError::new(
             "a size only applies to the mountpoint form — offline resizefs grows the filesystem into its partition",

@@ -16,6 +16,7 @@
 // covers: R0044, R0063, R0067, R0071, R0072, R0074, R0078, R0081
 // covers: R0082, R0083, R0085, R0086, R0088, R0089, R0091, R0092
 // covers: R0864, R0865
+// covers: R0861, R0096
 // covers: R0611, R0613, R0615, R0626, R0633, R0637
 // covers: R0645
 // covers: R0346, R0398, R0403, R0342, R0349, R0348, R0396, R0397
@@ -284,6 +285,13 @@ pub const CASES: &[Case] = &[
         exit: 3,
         stdout: "",
         stderr: "refused:",
+    },
+    Case {
+        name: "resizefs on a mountpoint rejects --sector-size",
+        argv: &["resizefs", "/mnt/anything", "--sector-size", "512", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "sector-size",
     },
     Case {
         name: "check needs a partition",

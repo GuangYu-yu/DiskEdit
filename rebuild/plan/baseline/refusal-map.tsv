@@ -274,3 +274,5 @@ R0875	crates/core/src/table/create.rs check_capacity 对零扇区尺寸的拒绝
 R0876	src/app/decide/new.rs 的 TargetTooSmall 拒绝	旧 table/create.rs:354 直调入口的容量兜底	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
 R0877	crates/core/src/table/create.rs gpt_layout 的容量拒绝	旧 table/create.rs:356 的同一句 too small	tests/refusal_claims.rs 的 table_capacity_refuses_disks_too_small_for_gpt_or_mbr
 R0674	src/app/decide/resize.rs 在 --allow-move 无挡路分区时拒绝	旧 movepart/plan.rs:485 no partition to relocate (right side is free)	tests/case_runner.rs 的 resize_allow_move_relocates_the_blocking_partition
+R0861	src/app/cli/parse.rs chunk_bytes 只接受 1..=64 MiB	旧 support.rs:121 对越界 --chunk 拒绝	tests/cases/mod.rs 的 move refuses a chunk outside one through sixty-four MiB
+R0096	src/app/cli/parse.rs parse_resizefs 拒绝挂载点形态携带 --sector-size	旧 cmd/fs.rs:159 同一句拒绝，退 2	tests/cases/mod.rs 的 resizefs on a mountpoint rejects --sector-size
