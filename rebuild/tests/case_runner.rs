@@ -611,6 +611,20 @@ fn read_only_info_emits_one_structured_json_document() {
     }
 }
 
+// covers: R0358, R0359, R0360
+#[test]
+fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
+    let (code, _stdout, stderr) =
+        run_argv(&["resize", "target/fixtures/s1/empty.img", "32M", "--yes"]);
+    assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
+    assert!(stderr.contains("no usable partition table"), "{stderr}");
+
+    let (code, _stdout, stderr) =
+        run_argv(&["resize", "target/fixtures/s1/mbr.img:9", "32M", "--yes"]);
+    assert_eq!(code, 3, "缺失分区应拒绝：{stderr}");
+    assert!(stderr.contains("does not exist"), "{stderr}");
+}
+
 // covers: D3
 #[test]
 fn check_reports_the_reason_it_cannot_act() {

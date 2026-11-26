@@ -225,3 +225,6 @@ R0582	src/app/execute/write.rs verify_written 摘要不符，搬移已写过时�
 R0583	src/app/execute/relocate.rs 进度帧 write_state_file 失败，搬移已写过时落 5	旧 src/execution/relocate.rs:305 the progress checkpoint was not persisted — the transfer may be incomplete	tests/fault_injection.rs 的 a_failed_progress_checkpoint_reports_partial
 R0591	src/app/execute/write.rs 表步经写通道写失败，此前已写过时落 5	旧 src/execution/table.rs:57 cannot write the table at byte {} — 已写过则可能已改变	tests/fault_injection.rs 的 a_failed_table_write_after_the_move_reports_partial
 R0593	src/app/execute/write.rs 表步 barrier 失败落 5	旧 src/execution/table.rs:66 cannot flush the table at byte {} — the write may not have landed	tests/fault_injection.rs 的 a_failed_table_flush_reports_partial
+R0358	src/app/decide/resize.rs 无可用表走 TableMissing，退 3	旧 src/cmd/resize/decide.rs:119 no MBR on target	tests/case_runner.rs 的 resize_refuses_a_target_without_a_table_or_a_missing_partition
+R0359	src/app/decide/resize.rs 无可用表走 TableMissing，退 3	旧 src/cmd/resize/decide.rs:120 no MBR on target	tests/case_runner.rs 的 resize_refuses_a_target_without_a_table_or_a_missing_partition
+R0360	src/app/decide/resize.rs 选中的分区不存在走 PartitionMissing，退 3	旧 src/cmd/resize/decide.rs:122 partition {part} not found (MBR resize covers primary partitions 1..4 only)	tests/case_runner.rs 的 resize_refuses_a_target_without_a_table_or_a_missing_partition
