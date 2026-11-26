@@ -67,3 +67,6 @@ R0188	src/app/decide/edit.rs 无表目标 delete → TableMissing	旧 cmd/layout
 R0064	src/app/cli/parse.rs parse_mkfs 缺文件系统类型报用法	旧 cli.rs:1666 `mkfs` 无 FS 实际退 2	tests/cases/mod.rs 的 mkfs without a filesystem type is a usage error
 R0094	src/app/decide/filesystem.rs selected 在准入前要求分区选择器（退 3）	旧 cmd/fs.rs:80 无分区实际退 3	tests/cases/mod.rs 的 mkfs needs a partition
 R0098	src/app/cli/parse.rs parse_resizefs 拒绝分区形态携带尺寸	旧 cmd/fs.rs:179 实跑退 2	tests/cases/mod.rs 的 resizefs size only applies to the mountpoint form
+R0059	src/app/cli/parse.rs parse_resize 缺 SIZE/--end 报用法	旧 cmd/resize 同形缺尺寸实跑退 2	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0203	src/app/decide/resize.rs resolve_end 终点越过 last usable 落拒绝	旧 cmd/layout.rs:875 同形拒绝	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0209	src/app/decide/resize.rs filesystem_step --no-fs 收缩拒绝	旧 cmd/layout.rs:1006 同文案拒绝	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
