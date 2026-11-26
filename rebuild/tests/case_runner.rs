@@ -772,7 +772,10 @@ fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
     let (code, _stdout, stderr) =
         run_argv(&["resize", "target/fixtures/s1/empty.img", "32M", "--yes"]);
     assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
-    assert!(stderr.contains("no usable partition table"), "{stderr}");
+    assert!(
+        stderr.contains("target exceeds device/image size"),
+        "{stderr}"
+    );
 
     let (code, _stdout, stderr) =
         run_argv(&["resize", "target/fixtures/s1/mbr.img:9", "32M", "--yes"]);
@@ -931,4 +934,48 @@ fn resize_allow_move_relocates_the_blocking_partition() {
         stdout.contains("\"first_lba\":7135,\"fs\":\"unknown\",\"last_lba\":8158"),
         "{stdout}"
     );
+}
+// covers: R0445, R0446, R0447, R0448, R0449, R0450
+#[test]
+fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
+    // 造一个"文件系统即整盘"的现场需要 mke2fs；没有它的宿主跳过（由发版环境验证）。
+    if std::process::Command::new("mke2fs")
+        .arg("-V")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+    let image = format!("{directory}/superfloppy.img");
+    std::fs::File::create(&image)
+        .and_then(|file| file.set_len(8 << 20))
+        .expect("创建 8 MiB 镜像");
+    let status = std::process::Command::new("mke2fs")
+        .args(["-F", "-q", "-t", "ext4", "-b", "1024", &image, "4096"])
+        .status()
+        .expect("运行 mke2fs");
+    assert!(status.success(), "mke2fs 应成功");
+
+    // 文件系统只占 4 MiB：grow 把它撑到整盘 8 MiB。
+    let (code, stdout, stderr) = run_argv(&["resize", &image, "grow", "--yes"]);
+    assert_eq!(code, 0, "superfloppy 扩容应成功：{stderr}");
+    assert!(stdout.contains("superfloppy: ext grown"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &image]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"size_bytes\":8388608"), "{stdout}");
+
+    // 无分区边界可缩、超过容器、以及各旗标的"无事可做"都按拒绝处理，退 3。
+    for argv in [
+        vec!["resize", image.as_str(), "4M", "--yes"],
+        vec!["resize", image.as_str(), "16M", "--yes"],
+        vec!["resize", image.as_str(), "grow", "--no-fs", "--yes"],
+        vec!["resize", image.as_str(), "grow", "--allow-move", "--yes"],
+        vec!["resize", image.as_str(), "grow", "--chunk", "2", "--yes"],
+        vec!["resize", image.as_str(), "grow", "--grow-lv", "--yes"],
+    ] {
+        let (code, _, stderr) = run_argv(&argv);
+        assert_eq!(code, 3, "{argv:?} 应拒绝：{stderr}");
+    }
 }

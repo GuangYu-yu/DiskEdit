@@ -571,6 +571,12 @@ pub(super) fn resolve_device(
     len: u64,
 ) -> Result<Device, ExecError> {
     match platform.path_kind(target) {
+        // superfloppy：没有分区可偏移，工具直接作用在镜像文件上（e2fsprogs 一类接受
+        // 常规文件）。有分区时仍经 loop 得到带偏移的块设备视图。
+        TargetKind::File if partition == 0 && base == 0 => Ok(Device {
+            binding: None,
+            path: Some(target.to_path_buf()),
+        }),
         TargetKind::File => Ok(Device {
             binding: Some(
                 platform

@@ -138,9 +138,7 @@ impl Platform for LinuxPlatform {
 
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun> {
         let executable = tools::executable(program);
-        let fixed = tools::check_arguments(program);
         let output = Command::new(executable)
-            .args(fixed)
             .args(args)
             .output()
             .map_err(|error| PlatformError::io(Path::new(executable), error))?;
@@ -149,6 +147,10 @@ impl Platform for LinuxPlatform {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+
+    fn check_arguments(&self, program: Program) -> &'static [&'static str] {
+        tools::check_arguments(program)
     }
 
     fn tool_available(&self, program: Program) -> bool {

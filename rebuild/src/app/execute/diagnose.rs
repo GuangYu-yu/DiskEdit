@@ -41,7 +41,13 @@ pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
             };
         }
     };
-    let run = match platform.run(query.program, &[device.device().display().to_string()]) {
+    let mut args: Vec<String> = platform
+        .check_arguments(query.program)
+        .iter()
+        .map(|flag| (*flag).to_owned())
+        .collect();
+    args.push(device.device().display().to_string());
+    let run = match platform.run(query.program, &args) {
         Ok(run) => run,
         Err(error) => {
             return DiagnoseResult::Refused {

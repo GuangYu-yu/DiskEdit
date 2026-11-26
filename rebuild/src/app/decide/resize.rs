@@ -31,6 +31,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let Command::Resize(resize) = request.command() else {
         return refuse("resize reached with a different command");
     };
+    if matches!(snapshot.view, TableView::None) {
+        return superfloppy(snapshot, resize);
+    }
     if resize.grow_lv {
         return Decision::Refuse(Refusal::ContentUnsupported {
             what: "resize --grow-lv".to_owned(),
@@ -582,6 +585,158 @@ fn table_step(
 }
 
 /// 公共前置：分区节点、表形态、占用。
+/// 无分区表（superfloppy）的 resize：文件系统占整盘，唯一有意义的动作是把它撑到
+/// 容器末端；缩与"超过容器"都无分区边界可依，按基线拒绝。
+fn superfloppy(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
+    match &snapshot.occupancy {
+        Occupancy::Idle => {}
+        Occupancy::Used { evidence } => {
+            return Decision::Refuse(Refusal::Occupied {
+                evidence: evidence.clone(),
+            });
+        }
+        Occupancy::Unknown { why } => {
+            return Decision::Refuse(Refusal::OccupancyUnknown { why: why.clone() });
+        }
+    }
+    if let Some(selector) = resize.partition {
+        let shown = match selector {
+            PartitionSelector::Number(number) => number.to_string(),
+            PartitionSelector::Last => "last".to_owned(),
+        };
+        return Decision::Refuse(Refusal::TableEdit {
+            why: format!(
+                "target has no partition table — drop :{shown} (the FS occupies the whole device)"
+            ),
+        });
+    }
+    if resize.grow_lv || resize.lv.is_some() {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--grow-lv/--lv needs an LVM PV — a superfloppy has no partitions".to_owned(),
+        });
+    }
+    if resize.no_fs {
+        return Decision::Refuse(Refusal::TableEdit {
+            why:
+                "--no-fs leaves nothing to do on a superfloppy — there is no partition to change, \
+                  the only action is the filesystem grow"
+                    .to_owned(),
+        });
+    }
+    if resize.allow_move {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--allow-move has nothing to do on a superfloppy — there are no partitions to \
+                  relocate"
+                .to_owned(),
+        });
+    }
+    if resize.chunk.is_some() {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--chunk has no effect on a superfloppy — there is nothing to relocate".to_owned(),
+        });
+    }
+    let Some(identity) = snapshot.target.identity else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let current = snapshot.target.bytes;
+    let Some(size) = &resize.size else {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "`resize` needs a size or `grow`".to_owned(),
+        });
+    };
+    let requested = match resolve_bytes(*size, current) {
+        Ok(bytes) => bytes,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    if requested < current {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "superfloppy cannot shrink — the FS occupies the whole device, there is no \
+                  partition boundary to shrink to"
+                .to_owned(),
+        });
+    }
+    if requested > current {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "target exceeds device/image size — extend the image or replace the disk first \
+                  (this tool does not resize the container)"
+                .to_owned(),
+        });
+    }
+    let Some(content) = snapshot.whole_content else {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "the whole-device content could not be identified".to_owned(),
+        });
+    };
+    let Some(filesystem) = content.filesystem() else {
+        return match content {
+            ContentKind::Filesystem(_) => Decision::Refuse(Refusal::TableEdit {
+                why: "this filesystem carries no grow step".to_owned(),
+            }),
+            ContentKind::Unknown
+            | ContentKind::Swap
+            | ContentKind::Lvm2Pv
+            | ContentKind::Luks
+            | ContentKind::BitLocker => Decision::Refuse(Refusal::NoFilesystem {
+                number: 0,
+                what: content.as_str().to_owned(),
+            }),
+        };
+    };
+    match catalog::profile(content).support(Verb::Grow) {
+        Support::Tools(required) => {
+            for program in required {
+                if !snapshot
+                    .tools
+                    .iter()
+                    .any(|(known, available)| known == program && *available)
+                {
+                    return Decision::Refuse(Refusal::ToolMissing { program: *program });
+                }
+            }
+        }
+        Support::Unsupported(why) => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize {}", content.as_str()),
+                why: why.to_owned(),
+            });
+        }
+        Support::NotApplicable => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize {}", content.as_str()),
+                why: "this content kind carries no filesystem to resize".to_owned(),
+            });
+        }
+    }
+    let Ok(region) = diskedit_core::region::Region::sized(0, current) else {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "the device region is not addressable".to_owned(),
+        });
+    };
+    let step = Step::new(
+        StepKind::GrowFilesystem {
+            partition: 0,
+            filesystem,
+            bytes: current,
+        },
+        vec![region],
+    );
+    let plan = match Plan::write(vec![step], identity) {
+        Ok(plan) => plan,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    finish(
+        snapshot,
+        plan,
+        format!(
+            "superfloppy: {} grown to full device ({current} bytes) — verify with: diskedit info {}",
+            content.as_str(),
+            snapshot.target.display
+        ),
+    )
+}
+
 fn admission(snapshot: &ResizeSnapshot) -> Option<Refusal> {
     if snapshot.is_partition_node {
         return Some(Refusal::PartitionNodeTarget {

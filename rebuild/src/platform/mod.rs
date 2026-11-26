@@ -534,6 +534,11 @@ pub trait Platform: Send + Sync {
     /// 运行一个外部程序。程序身份到可执行名与参数的映射留在本层。
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun>;
 
+    /// 只读检查类程序必须带上的固定旗标（例如 `e2fsck -f -n`）；其他调用为空。
+    fn check_arguments(&self, _program: Program) -> &'static [&'static str] {
+        &[]
+    }
+
     /// 仅当 `program` 在宿主上可执行时返回真。
     fn tool_available(&self, program: Program) -> bool;
 
