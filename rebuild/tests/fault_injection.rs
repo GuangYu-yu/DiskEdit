@@ -19,8 +19,8 @@ use diskedit::app::observe::TableFormat;
 use diskedit::app::observe::records::{RECORD_FILE, hex16};
 use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, REFUSED, SUCCESS, UNSUPPORTED, exit_of};
 use diskedit::platform::{
-    LoopBinding, Occupancy, Platform, PlatformError, PlatformResult, StateLock, TargetHandle,
-    TargetKind, ToolRun,
+    LoopBinding, Occupancy, PartitionMount, Platform, PlatformError, PlatformResult, StateLock,
+    TargetHandle, TargetKind, ToolRun,
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
@@ -58,6 +58,7 @@ struct FaultTarget {
     faults: Arc<Faults>,
     counts: Arc<Counts>,
     sector: Option<u64>,
+    kind: TargetKind,
 }
 
 impl TargetHandle for FaultTarget {
@@ -68,7 +69,7 @@ impl TargetHandle for FaultTarget {
         self.bytes.lock().unwrap().len() as u64
     }
     fn kind(&self) -> TargetKind {
-        TargetKind::File
+        self.kind
     }
     fn sector_size(&self) -> Option<u64> {
         self.sector
@@ -123,6 +124,9 @@ struct Memory {
     faults: Arc<Faults>,
     counts: Arc<Counts>,
     sector: Option<u64>,
+    kind: TargetKind,
+    /// 目标自身能否给出 Strong 身份；块设备无 WWN/EUI/可重复序列号时为 `false`。
+    strong_identity: bool,
 }
 
 impl Memory {
@@ -133,6 +137,8 @@ impl Memory {
             faults: Arc::new(faults),
             counts: Arc::new(Counts::default()),
             sector: Some(SECTOR),
+            kind: TargetKind::File,
+            strong_identity: true,
         }
     }
 
@@ -144,6 +150,17 @@ impl Memory {
             faults: Arc::new(faults),
             counts: Arc::new(Counts::default()),
             sector: Some(sector),
+            ..Self::new(Vec::new(), Faults::default())
+        }
+    }
+
+    /// 以"块设备但无自身稳定身份"的形态回报：`--identity` 在这里才适用。
+    fn weak_block_device(bytes: Vec<u8>) -> Self {
+        Self {
+            target: Arc::new(Mutex::new(bytes)),
+            kind: TargetKind::BlockDevice,
+            strong_identity: false,
+            ..Self::new(Vec::new(), Faults::default())
         }
     }
 }
@@ -155,6 +172,7 @@ impl Platform for Memory {
             faults: Arc::clone(&self.faults),
             counts: Arc::clone(&self.counts),
             sector: self.sector,
+            kind: self.kind,
         }))
     }
     fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
@@ -163,16 +181,30 @@ impl Platform for Memory {
             faults: Arc::clone(&self.faults),
             counts: Arc::clone(&self.counts),
             sector: self.sector,
+            kind: self.kind,
         }))
     }
     fn path_kind(&self, _path: &Path) -> TargetKind {
-        TargetKind::File
+        self.kind
+    }
+    fn filesystem_ready(&self, _path: &Path) -> bool {
+        self.kind == TargetKind::BlockDevice
     }
     fn is_partition_node(&self, _path: &Path) -> bool {
         false
     }
     fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
-        Ok(IDENTITY)
+        if self.strong_identity {
+            Ok(IDENTITY)
+        } else {
+            Ok(Fingerprint::unusable([0u8; 32]))
+        }
+    }
+    fn partition_mount(&self, _disk: &Path, _partition: u32) -> PlatformResult<PartitionMount> {
+        Ok(PartitionMount::NotMounted)
+    }
+    fn swap_active(&self, _disk: &Path, _partition: u32) -> PlatformResult<bool> {
+        Ok(false)
     }
     fn occupancy(&self, _path: &Path) -> PlatformResult<Occupancy> {
         Ok(Occupancy::Idle)
@@ -181,7 +213,7 @@ impl Platform for Memory {
         Some(PathBuf::from("/state"))
     }
     fn is_directory(&self, _path: &Path) -> bool {
-        true
+        self.kind == TargetKind::File
     }
     fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
         Ok(Vec::new())
@@ -492,6 +524,42 @@ fn a_clean_run_commits_and_cleans_the_record() {
 fn dispatch(memory: &Memory, argv: &[&str]) -> u8 {
     let args: Vec<std::ffi::OsString> = argv.iter().map(std::ffi::OsString::from).collect();
     diskedit::app::cli::dispatch_with(memory, args)
+}
+
+/// 一块 4 MiB、单分区 (LBA 2048 + 1024)、无自身稳定身份的块设备镜像字节。
+fn weak_block_bytes() -> Vec<u8> {
+    let mut bytes = vec![0u8; 8192 * SECTOR as usize];
+    bytes[446 + 1..446 + 4].copy_from_slice(&[0x01, 0x01, 0x00]);
+    bytes[446 + 4] = 0x83;
+    bytes[446 + 5..446 + 8].copy_from_slice(&[0xFE, 0xFF, 0xFF]);
+    bytes[446 + 8..446 + 12].copy_from_slice(&2048u32.to_le_bytes());
+    bytes[446 + 12..446 + 16].copy_from_slice(&1024u32.to_le_bytes());
+    bytes[510] = 0x55;
+    bytes[511] = 0xAA;
+    bytes
+}
+
+// covers: I2, I5
+#[test]
+fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed() {
+    // 块设备没有 WWN/EUI/可重复序列号时，`--identity NAME` 就是它的身份。确认阶段
+    // 必须用这个声明名做比较，而不是只在自动身份为 Strong 时才算数——否则所有带
+    // `--identity` 的块设备写入都会被误判成"身份不可证明"。
+    let memory = Memory::weak_block_device(weak_block_bytes());
+    let code = dispatch(
+        &memory,
+        &[
+            "diskedit",
+            "resize",
+            "memory:1",
+            "--grow-to-end",
+            "--no-fs",
+            "--identity",
+            "lab-disk",
+            "--yes",
+        ],
+    );
+    assert_eq!(code, SUCCESS, "带声明身份的块设备写入应确认并执行");
 }
 
 // covers: R0004, R0014, R0018, R0021, R0023, R0024, R0026, R0029

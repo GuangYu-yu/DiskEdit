@@ -6,7 +6,6 @@
 
 use std::path::Path;
 
-use diskedit_core::fingerprint::Strength;
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
 use super::digest::read_region;
@@ -86,18 +85,11 @@ pub(super) fn execute_plan(
     let mut session =
         RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
     // 持锁后重探身份：计划指向的对象必须仍是当前对象。
-    let observed = platform
-        .identity(target)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    match observed {
-        Some(fingerprint) if fingerprint.matches(plan.identity()) => {}
-        _ => {
-            return Err((
-                ExecError::IdentityChanged("target identity changed after planning".to_owned()),
-                false,
-            ));
-        }
+    if !super::identity_still_matches(platform, target, plan.identity()) {
+        return Err((
+            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+            false,
+        ));
     }
 
     let mut registered = Vec::with_capacity(segments.len());
@@ -171,18 +163,11 @@ fn execute_via_carrier(
     }
     let mut session =
         RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
-    let observed = platform
-        .identity(target)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    match observed {
-        Some(fingerprint) if fingerprint.matches(plan.identity()) => {}
-        _ => {
-            return Err((
-                ExecError::IdentityChanged("target identity changed after planning".to_owned()),
-                false,
-            ));
-        }
+    if !super::identity_still_matches(platform, target, plan.identity()) {
+        return Err((
+            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+            false,
+        ));
     }
     let mut registered = Vec::with_capacity(segments.len());
     for segment in segments {

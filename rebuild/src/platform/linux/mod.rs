@@ -827,26 +827,114 @@ fn block_identity(path: &Path, metadata: &std::fs::Metadata) -> PlatformResult<F
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| PlatformError::parse("block device path has no name"))?;
-    let base = name
-        .trim_end_matches(|ch: char| ch.is_ascii_digit())
-        .trim_end_matches('p');
-    for candidate in [
-        format!("{base}/device/wwid"),
-        format!("{base}/device/serial"),
-    ] {
-        let sysfs = Path::new("/sys/block").join(&candidate);
-        if let Ok(text) = std::fs::read_to_string(&sysfs) {
-            let trimmed = text.trim();
-            if !trimmed.is_empty() {
-                let mut hasher = Sha256::new();
-                hasher.update(b"block\0");
-                hasher.update(trimmed.as_bytes());
-                hasher.update(metadata.len().to_le_bytes());
-                return Ok(Fingerprint::strong(hasher.finalize().into()));
-            }
-        }
+    let Some(topology) = block_topology(name) else {
+        return Ok(Fingerprint::unusable([0u8; 32]));
+    };
+    // 分区身份必须带上所在整盘与分区自身的位置：同一块盘的不同分区是不同的目标。
+    if let Some(fingerprint) = hardware_identity(&topology, metadata) {
+        return Ok(fingerprint);
+    }
+    // loop 设备没有 WWN/EUI/序列号，但它的承载文件是稳定事实：文件身份 + 映射
+    // 偏移/长度 + 分区起点与长度足以跨次识别同一目标。
+    if let Some(fingerprint) = loop_identity(&topology, metadata) {
+        return Ok(fingerprint);
     }
     Ok(Fingerprint::unusable([0u8; 32]))
+}
+
+/// 块设备在 sysfs 里的拓扑：整盘节点名，以及分区起点与长度（整盘为 `None`）。
+struct Topology {
+    disk: String,
+    partition: Option<(u64, u64)>,
+}
+
+fn block_topology(name: &str) -> Option<Topology> {
+    let directory = std::fs::canonicalize(Path::new("/sys/class/block").join(name)).ok()?;
+    let is_partition = directory.join("partition").exists();
+    let disk = if is_partition {
+        directory.parent()?.file_name()?.to_str()?.to_owned()
+    } else {
+        directory.file_name()?.to_str()?.to_owned()
+    };
+    let partition = if is_partition {
+        Some((
+            sysfs_u64(&directory.join("start"))?,
+            sysfs_u64(&directory.join("size"))?,
+        ))
+    } else {
+        None
+    };
+    Some(Topology { disk, partition })
+}
+
+fn sysfs_u64(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn sysfs_text(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// 设备自身给出的稳定身份：WWN、序列号、dm/uuid、md/uuid。
+fn hardware_identity(topology: &Topology, metadata: &std::fs::Metadata) -> Option<Fingerprint> {
+    let base = Path::new("/sys/class/block").join(&topology.disk);
+    let mut hasher = Sha256::new();
+    if let Some(wwid) = sysfs_text(&base.join("device/wwid")) {
+        hasher.update(b"wwid\0");
+        hasher.update(wwid.as_bytes());
+    } else if let Some(serial) = stable_serial(&base.join("device/serial")) {
+        hasher.update(b"serial\0");
+        hasher.update(serial.as_bytes());
+    } else if let Some(uuid) = sysfs_text(&base.join("dm/uuid")) {
+        hasher.update(b"dm\0");
+        hasher.update(uuid.as_bytes());
+    } else if let Some(uuid) = sysfs_text(&base.join("md/uuid")) {
+        hasher.update(b"md\0");
+        hasher.update(uuid.as_bytes());
+    } else {
+        return None;
+    }
+    hasher.update(
+        topology
+            .partition
+            .map_or(0, |(start, _)| start)
+            .to_le_bytes(),
+    );
+    hasher.update(topology.partition.map_or(0, |(_, size)| size).to_le_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    Some(Fingerprint::strong(hasher.finalize().into()))
+}
+
+/// 序列号必须两次读取一致才算可重复；读一次就采信会把不稳定的值当身份。
+fn stable_serial(path: &Path) -> Option<String> {
+    let first = sysfs_text(path)?;
+    let second = sysfs_text(path)?;
+    (first == second).then_some(first)
+}
+
+/// loop 设备：承载文件身份 + 映射偏移/限长 + 分区位置。
+fn loop_identity(topology: &Topology, metadata: &std::fs::Metadata) -> Option<Fingerprint> {
+    let base = Path::new("/sys/class/block").join(&topology.disk);
+    let backing = sysfs_text(&base.join("loop/backing_file"))?;
+    let offset = sysfs_u64(&base.join("loop/offset")).unwrap_or(0);
+    let sizelimit = sysfs_u64(&base.join("loop/sizelimit")).unwrap_or(0);
+    // 承载文件的身份取自文件本身（设备号 + inode + 长度），不是 sysfs 路径字符串：
+    // 同一路径被换成另一个文件时必须识别为不同目标。
+    let file = std::fs::metadata(Path::new("/").join(&backing)).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"loop\0");
+    hasher.update(file.dev().to_le_bytes());
+    hasher.update(file.ino().to_le_bytes());
+    hasher.update(file.len().to_le_bytes());
+    hasher.update(offset.to_le_bytes());
+    hasher.update(sizelimit.to_le_bytes());
+    hasher.update(metadata.len().to_le_bytes());
+    let (start, size) = topology.partition.unwrap_or((0, 0));
+    hasher.update(start.to_le_bytes());
+    hasher.update(size.to_le_bytes());
+    Some(Fingerprint::strong(hasher.finalize().into()))
 }
 
 fn image_occupancy(path: &Path) -> PlatformResult<Occupancy> {

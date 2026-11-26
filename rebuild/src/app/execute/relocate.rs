@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use diskedit_core::fingerprint::{Fingerprint, Strength};
+use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::record::{self, Frame, FrameKind, Preimage, RecordBody};
 use diskedit_core::region::Region;
 use diskedit_core::table::relocate::{self, ChunkSpan};
@@ -112,18 +112,11 @@ fn execute(
     let spec = spec_bytes(&data, sector_size, handle.len());
     let (mut session, recorded) =
         Session::prepare(platform, plan.identity(), plan.digest(), &spec)?;
-    let observed = platform
-        .identity(target)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    match observed {
-        Some(fingerprint) if fingerprint.matches(plan.identity()) => {}
-        _ => {
-            return Err((
-                ExecError::IdentityChanged("target identity changed after planning".to_owned()),
-                false,
-            ));
-        }
+    if !super::identity_still_matches(platform, target, plan.identity()) {
+        return Err((
+            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+            false,
+        ));
     }
 
     let layout =

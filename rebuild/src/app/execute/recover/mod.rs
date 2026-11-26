@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use diskedit_core::fingerprint::{Fingerprint, Strength};
+use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::record::{Frame, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
@@ -85,18 +85,11 @@ fn execute(
         .lock_state(&directory.join(LOCK_FILE))
         .map_err(|error| (ExecError::from(error), false))?;
     // B7 / B9：持锁后重探身份，计划指向的对象必须仍是当前对象。
-    let observed = platform
-        .identity(target)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    match observed {
-        Some(fingerprint) if fingerprint.matches(identity) => {}
-        _ => {
-            return Err((
-                ExecError::IdentityChanged("target identity changed after planning".to_owned()),
-                false,
-            ));
-        }
+    if !super::identity_still_matches(platform, target, identity) {
+        return Err((
+            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+            false,
+        ));
     }
     let file = directory.join(RECORD_FILE);
     let bytes = platform

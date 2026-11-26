@@ -24,6 +24,23 @@ pub use write::WriteChannel;
 
 use crate::platform::PlatformError;
 
+/// 持锁后重探身份，判断计划指向的是否仍是当前目标。
+///
+/// 目标能读出 Strong 身份时，它必须与计划身份相符；计划身份若是用户声明的名字，
+/// 它本就没有设备事实可再核对，此时只要目标仍证明不了自身身份即成立——若目标
+/// 忽然给出 Strong 身份，说明载体已换，按变化拒绝。
+pub(crate) fn identity_still_matches(
+    platform: &dyn crate::platform::Platform,
+    target: &std::path::Path,
+    planned: diskedit_core::fingerprint::Fingerprint,
+) -> bool {
+    use diskedit_core::fingerprint::Strength;
+    match platform.identity(target) {
+        Ok(observed) if observed.strength() == Strength::Strong => observed.matches(planned),
+        _ => planned.is_declared(),
+    }
+}
+
 /// 执行期错误；报告层按变体给出退出码。
 #[derive(Debug)]
 pub enum ExecError {

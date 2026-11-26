@@ -17,6 +17,8 @@ pub enum Strength {
 pub struct Fingerprint {
     strength: Strength,
     bytes: [u8; 32],
+    /// 身份来自用户声明的名字而非设备事实；只有它在设备自身证明不了身份时才会出现。
+    declared: bool,
 }
 
 impl Fingerprint {
@@ -25,6 +27,7 @@ impl Fingerprint {
         Self {
             strength: Strength::Strong,
             bytes,
+            declared: false,
         }
     }
 
@@ -33,6 +36,7 @@ impl Fingerprint {
         Self {
             strength: Strength::Unusable,
             bytes,
+            declared: false,
         }
     }
 
@@ -49,11 +53,20 @@ impl Fingerprint {
                 .wrapping_add((index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
             chunk.copy_from_slice(&fnv1a64_seeded(name.as_bytes(), seed).to_le_bytes());
         }
-        Self::strong(bytes)
+        Self {
+            strength: Strength::Strong,
+            bytes,
+            declared: true,
+        }
     }
 
     pub const fn strength(self) -> Strength {
         self.strength
+    }
+
+    /// 身份是否只是用户声明的名字：这样的身份无法再用设备事实核对。
+    pub const fn is_declared(self) -> bool {
+        self.declared
     }
 
     pub const fn bytes(self) -> [u8; 32] {
@@ -112,5 +125,9 @@ mod tests {
         assert!(first.matches(again));
         assert!(!first.matches(Fingerprint::declared("export-b")));
         assert_ne!(first.bytes(), [0u8; 32], "展开结果不能退化成全零");
+        // 声明名与设备事实是两种来源：只有前者允许"无法再用设备核对"。
+        assert!(first.is_declared());
+        assert!(!Fingerprint::strong([0x42; 32]).is_declared());
+        assert!(!Fingerprint::unusable([0; 32]).is_declared());
     }
 }

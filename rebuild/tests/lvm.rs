@@ -41,11 +41,31 @@ fn run(args: &[&str]) -> (i32, String) {
     )
 }
 
+/// 以受控的 `PATH` 运行：空路径让全部外部程序都不可用，与宿主是否装了 lvm2 无关。
+fn run_without_tools(args: &[&str]) -> (i32, String) {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+        .args(args)
+        .env("PATH", "/nonexistent")
+        .output()
+        .expect("运行 diskedit");
+    (
+        output.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
 // covers: R0385, R0386, R0387, R0679, R0680, R0681
 #[test]
 fn pv_grow_without_the_lvm_tools_refuses_instead_of_touching_the_fs() {
     let path = pv_image("grow.img");
-    let (code, text) = run(&["resize", &format!("{path}:1"), "--end", "3000", "--yes"]);
+    // 外部程序是否可用取决于宿主；用空 PATH 明确制造"lvm2 工具不可用"的现场，
+    // 否则装了 lvm2 的宿主会走到另一条分支，让这条用例随环境时绿时红。
+    let (code, text) =
+        run_without_tools(&["resize", &format!("{path}:1"), "--end", "3000", "--yes"]);
     assert_eq!(code, 6, "缺 lvm2 工具应按不支持拒绝：{text}");
     assert!(
         text.contains("Pvs") || text.contains("pvresize"),

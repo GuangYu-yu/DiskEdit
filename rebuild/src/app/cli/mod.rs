@@ -351,7 +351,7 @@ fn write(
             | decide::StepKind::RecoverRecords { .. } => None,
         })
         .unwrap_or(path);
-    let current = observe_identity(platform, identity_path);
+    let current = observe_identity(platform, identity_path, request.identity());
     let plan = match decide::confirm(plan, request.confirmed(), &current) {
         Ok(plan) => plan,
         Err(refusal) => return refuse(&refusal),
@@ -437,11 +437,17 @@ fn write(
 }
 
 /// 锁外观测身份；执行器会在持锁后再次核对。
+///
+/// 与 `observe::snapshot::open_target` 同一规则：`--identity` 声明的名字只在目标
+/// 自身无法给出 Strong 身份时生效，且此时它就是这个目标的身份。否则块设备上的确认
+/// 会因自动身份不适用而误报"身份不可证明"，让所有 `--identity` 写入都失败。
 fn observe_identity(
     platform: &dyn Platform,
     path: &std::path::Path,
+    declared: Option<&str>,
 ) -> diskedit_core::evidence::Observation<diskedit_core::fingerprint::Fingerprint> {
     use diskedit_core::evidence::{Generation, Observation, Source};
+    use diskedit_core::fingerprint::Fingerprint;
     use diskedit_core::fingerprint::Strength;
     match platform.identity(path) {
         Ok(fingerprint) if fingerprint.strength() == Strength::Strong => Observation::known(
@@ -449,8 +455,22 @@ fn observe_identity(
             Source::new("platform.identity"),
             Generation::FIRST,
         ),
-        Ok(_) => Observation::not_applicable("the target gives no comparable identity"),
-        Err(error) => Observation::unknown(error.to_string()),
+        Ok(_) => match declared {
+            Some(name) => Observation::known(
+                Fingerprint::declared(name),
+                Source::new("--identity"),
+                Generation::FIRST,
+            ),
+            None => Observation::not_applicable("the target gives no comparable identity"),
+        },
+        Err(error) => match declared {
+            Some(name) => Observation::known(
+                Fingerprint::declared(name),
+                Source::new("--identity"),
+                Generation::FIRST,
+            ),
+            None => Observation::unknown(error.to_string()),
+        },
     }
 }
 

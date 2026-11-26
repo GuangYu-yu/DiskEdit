@@ -347,8 +347,17 @@ fn verify_online_size(
             ensure_probe_ran(platform, Program::Btrfs, &run)?;
             verify_btrfs_size(&run, online.bytes, online.shrink).map_err(|error| (error, true))
         }
-        FsKind::Xfs
-        | FsKind::Squashfs
+        // XFS 的只读几何探针（`-n` 不写盘）打印当前几何；`data` 行给出数据区块数与块大小，
+        // 内部日志就在数据区内，所以块数乘块大小应覆盖到分区末尾。
+        FsKind::Xfs => {
+            let mount = online.mount_point.display().to_string();
+            let run = platform
+                .run(Program::XfsGrowfs, &["-n".to_owned(), mount])
+                .map_err(|error| (ExecError::from(error), true))?;
+            ensure_probe_ran(platform, Program::XfsGrowfs, &run)?;
+            verify_xfs_size(&run, online.bytes).map_err(|error| (error, true))
+        }
+        FsKind::Squashfs
         | FsKind::Erofs
         | FsKind::F2fs
         | FsKind::Exfat
@@ -614,8 +623,7 @@ pub(super) fn check_identity(
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<(), ExecError> {
-    let observed = platform.identity(target).map_err(ExecError::from)?;
-    if observed.matches(plan.identity()) {
+    if super::identity_still_matches(platform, target, plan.identity()) {
         Ok(())
     } else {
         Err(ExecError::IdentityChanged(
@@ -1223,6 +1231,44 @@ fn verify_ext_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
     Ok(())
 }
 
+/// XFS 只读几何探针输出的 `data` 行：`bsize=N blocks=M`。内部日志落在数据区内，
+/// 因此数据区块数乘块大小就是文件系统覆盖的字节数。
+fn verify_xfs_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
+    let (blocks, block_size) = xfs_geometry(&run.stdout).ok_or_else(|| {
+        ExecError::Postcondition("the XFS probe did not report the data geometry".to_owned())
+    })?;
+    let total = blocks
+        .checked_mul(block_size)
+        .ok_or_else(|| ExecError::Postcondition("the filesystem geometry overflows".to_owned()))?;
+    if total > expected || expected - total >= block_size {
+        return Err(ExecError::Postcondition(format!(
+            "the filesystem is {total} bytes, not the expected {expected} bytes rounded to its \
+             {block_size}-byte blocks"
+        )));
+    }
+    Ok(())
+}
+
+fn xfs_geometry(text: &str) -> Option<(u64, u64)> {
+    text.lines().find_map(|line| {
+        let mut tokens = line.split_whitespace();
+        if tokens.next()? != "data" {
+            return None;
+        }
+        let mut blocks = None;
+        let mut block_size = None;
+        for token in tokens {
+            if let Some(value) = token.strip_prefix("blocks=") {
+                blocks = value.trim_end_matches(',').parse().ok();
+            }
+            if let Some(value) = token.strip_prefix("bsize=") {
+                block_size = value.trim_end_matches(',').parse().ok();
+            }
+        }
+        Some((blocks?, block_size?))
+    })
+}
+
 /// btrfs 超级块里的 `total_bytes` 与 `sectorsize`：前者是文件系统总尺寸、后者是放置单元。
 /// 扩容要求 `total_bytes` 落在 `[expected - sectorsize, expected]` 内；收缩只要求不大于
 /// `expected`（内核可能缩到比请求更小的可用尺寸）。解析失败不猜默认值。
@@ -1574,6 +1620,35 @@ mod tests {
             stderr: String::new(),
         };
         assert!(verify_btrfs_size(&silent, 104857600, true).is_err());
+    }
+
+    // covers: B28
+    #[test]
+    fn an_xfs_grow_is_verified_by_the_data_geometry() {
+        // 真实探针输出形态：data 行给出块大小与块数。
+        let probe = ToolRun {
+            code: Some(0),
+            stdout: "meta-data=loop0p1              isize=512    agcount=5, agsize=20480 blks\n\
+                     data     =                       bsize=4096   blocks=102139, imaxpct=25\n\
+                     naming   =version 2              bsize=4096   ascii-ci=0, ftype=1\n\
+                     log      =internal log           bsize=4096   blocks=16384, version=2\n"
+                .to_owned(),
+            stderr: String::new(),
+        };
+        let total = 102139 * 4096;
+        assert!(verify_xfs_size(&probe, total).is_ok());
+        // 分区末尾最多差一个块：仍算长到位。
+        assert!(verify_xfs_size(&probe, total + 4095).is_ok());
+        assert!(verify_xfs_size(&probe, total + 4096).is_err());
+        assert!(verify_xfs_size(&probe, total - 4096).is_err());
+        // 输出里没有 data 行：不能凭工具退出码当作成功。
+        let silent = ToolRun {
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(verify_xfs_size(&silent, total).is_err());
+        assert!(xfs_geometry("log =internal log bsize=4096 blocks=16384").is_none());
     }
 
     // covers: B28
