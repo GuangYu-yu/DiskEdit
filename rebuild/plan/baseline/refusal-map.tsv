@@ -73,3 +73,5 @@ R0209	src/app/decide/resize.rs filesystem_step --no-fs 收缩拒绝	旧 cmd/layo
 R0033	src/app/decide/edit.rs place_range 校验目标区间在可用范围内	旧 assembly.rs:798 的 move 落位拒绝（基线 move 到越界 LBA 退 3）	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
 R0060	src/app/cli/parse.rs parse_move 要求 --start	旧 cli.rs:1586 实跑 move <img>:2 --yes 退 2	tests/cases/mod.rs 的 move without --start is a usage error
 R0061	src/app/cli/parse.rs parse_copy 要求 --start	旧 cli.rs:1606 实跑 copy <img>:1 --yes 退 2	tests/cases/mod.rs 的 copy without --start is a usage error
+R0301	src/app/cli/parse.rs parse_recover 拒绝 :N 选择器	旧 cmd/recover.rs:194 实跑 recover 带 :1 退 2	tests/case_runner.rs 的 recover_refuses_a_partition_selector
+R0302	src/app/decide/recover.rs decide 无记录按拒绝报告	旧 cmd/recover.rs:208 无记录退 3	tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
