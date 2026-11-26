@@ -327,7 +327,8 @@ fn write(
         .steps()
         .iter()
         .find_map(|step| match &step.kind {
-            decide::StepKind::GrowFilesystemOnline { disk, .. } => Some(disk.as_path()),
+            decide::StepKind::GrowFilesystemOnline { disk, .. }
+            | decide::StepKind::ShrinkFilesystemOnline { disk, .. } => Some(disk.as_path()),
             decide::StepKind::Inspect
             | decide::StepKind::Check { .. }
             | decide::StepKind::ListRecords
@@ -341,6 +342,7 @@ fn write(
             | decide::StepKind::MakeFilesystem { .. }
             | decide::StepKind::GrowFilesystem { .. }
             | decide::StepKind::ShrinkFilesystem { .. }
+            | decide::StepKind::RebuildSwap { .. }
             | decide::StepKind::CopyPartition { .. }
             | decide::StepKind::LvmPvShrink { .. }
             | decide::StepKind::LvmGrowChain { .. }
@@ -376,10 +378,13 @@ fn write(
         .steps()
         .iter()
         .any(|step| matches!(step.kind, decide::StepKind::WriteTable { .. }));
-    let online = plan
-        .steps()
-        .iter()
-        .any(|step| matches!(step.kind, decide::StepKind::GrowFilesystemOnline { .. }));
+    let online = plan.steps().iter().any(|step| {
+        matches!(
+            step.kind,
+            decide::StepKind::GrowFilesystemOnline { .. }
+                | decide::StepKind::ShrinkFilesystemOnline { .. }
+        )
+    });
     let outcome = if recovery {
         execute::recover::run(platform, path, &plan)
     } else if online && table {

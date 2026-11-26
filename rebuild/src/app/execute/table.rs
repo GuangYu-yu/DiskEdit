@@ -245,6 +245,8 @@ fn table_parts(step: &Step) -> Result<TableWrite<'_>, (ExecError, bool)> {
         | StepKind::GrowFilesystem { .. }
         | StepKind::ShrinkFilesystem { .. }
         | StepKind::GrowFilesystemOnline { .. }
+        | StepKind::ShrinkFilesystemOnline { .. }
+        | StepKind::RebuildSwap { .. }
         | StepKind::CopyPartition { .. }
         | StepKind::LvmPvShrink { .. }
         | StepKind::LvmGrowChain { .. }

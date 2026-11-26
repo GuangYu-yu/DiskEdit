@@ -4,7 +4,7 @@
 //! 扩容时先写表、后扩文件系统；收缩时先缩文件系统、后写表（`B13`）。
 //! 表字节由纯核的编辑判据生成，执行层只消费由此得到的写段。
 
-use diskedit_core::fs::{ContentKind, Program, Support, Verb, catalog};
+use diskedit_core::fs::{ContentKind, FsKind, Program, Support, Verb, catalog};
 use diskedit_core::table::create::Segment;
 use diskedit_core::table::edit::{self, GptTable};
 
@@ -646,6 +646,55 @@ fn filesystem_step(
     if !grow && !shrink {
         return Ok(None);
     }
+    // swap 没有原地 resize：新尺寸只有按盘上的新分区重建才生效（旧 `resize` 收尾
+    // 的换区重建）。收缩没有对应能力，按目录里的不支持理由拒绝。
+    if content == ContentKind::Swap {
+        let verb = if shrink { Verb::Shrink } else { Verb::Grow };
+        match catalog::profile(content).support(verb) {
+            Support::Tools(required) => {
+                for program in required {
+                    if !tools
+                        .iter()
+                        .any(|(known, available)| known == program && *available)
+                    {
+                        return Err(Refusal::ToolMissing { program: *program });
+                    }
+                }
+            }
+            Support::Unsupported(why) => {
+                return Err(Refusal::ContentUnsupported {
+                    what: format!("resize {}", content.as_str()),
+                    why: why.to_owned(),
+                });
+            }
+            Support::NotApplicable => {
+                return Err(Refusal::ContentUnsupported {
+                    what: format!("resize {}", content.as_str()),
+                    why: "this content kind carries no filesystem to resize".to_owned(),
+                });
+            }
+        }
+        let base = geometry
+            .start_lba
+            .checked_mul(geometry.sector)
+            .ok_or_else(|| Refusal::TableEdit {
+                why: "the partition start overflows the byte offset".to_owned(),
+            })?;
+        let region =
+            diskedit_core::region::Region::sized(base, geometry.new_bytes).map_err(|_| {
+                Refusal::TableEdit {
+                    why: "the swap region does not fit the target".to_owned(),
+                }
+            })?;
+        return Ok(Some(Step::new(
+            StepKind::RebuildSwap {
+                partition: geometry.number,
+                start_bytes: base,
+                bytes: geometry.new_bytes,
+            },
+            vec![region],
+        )));
+    }
     let Some(filesystem) = content.filesystem() else {
         return match content {
             ContentKind::Unknown => Err(Refusal::FilesystemUnknown {
@@ -1086,14 +1135,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         Ok(end) => end,
         Err(refusal) => return Decision::Refuse(refusal),
     };
-    if new_end < old_end {
-        return Decision::Refuse(Refusal::OnlineShrink {
-            why:
-                "a mounted filesystem can only be grown online; unmount it and shrink through the \
-                  offline path where the filesystem supports it"
-                    .to_owned(),
-        });
-    }
+    let shrink = new_end < old_end;
     if new_end == old_end {
         if resize.size.as_ref() == Some(&SizeSpec::Grow) {
             return Decision::Refuse(Refusal::TableEdit {
@@ -1108,7 +1150,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
             note: format!("partition #{number} is already {current} bytes — nothing to do"),
         };
     }
-    if new_end - old_end > free {
+    if !shrink && new_end - old_end > free {
         return Decision::Refuse(Refusal::TableEdit {
             why: "grow would not extend the partition — no usable free space to its right; the \
                   online path cannot relocate blocking partitions (unmount to grow offline, or \
@@ -1116,9 +1158,32 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
                 .to_owned(),
         });
     }
-    let filesystem = match online_filesystem(partition.content, number, &snapshot.tools) {
-        Ok(filesystem) => filesystem,
-        Err(refusal) => return Decision::Refuse(refusal),
+    let filesystem = if shrink {
+        // 在线收缩只有 btrfs 支持；其余族仍按基线拒绝。
+        if !matches!(partition.content, ContentKind::Filesystem(FsKind::Btrfs)) {
+            return Decision::Refuse(Refusal::OnlineShrink {
+                why: format!(
+                    "{} cannot shrink while mounted; unmount it and shrink through the offline \
+                     path where supported",
+                    partition.content.as_str()
+                ),
+            });
+        }
+        if !snapshot
+            .tools
+            .iter()
+            .any(|(known, ok)| *known == Program::Btrfs && *ok)
+        {
+            return Decision::Refuse(Refusal::ToolMissing {
+                program: Program::Btrfs,
+            });
+        }
+        FsKind::Btrfs
+    } else {
+        match online_filesystem(partition.content, number, &snapshot.tools) {
+            Ok(filesystem) => filesystem,
+            Err(refusal) => return Decision::Refuse(refusal),
+        }
     };
     let bytes = (new_end - start + 1)
         .checked_mul(sector)
@@ -1147,7 +1212,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
                 new_end_lba: new_end,
                 sector_size: sector,
                 filesystem: Some(partition.content),
-                grow: true,
+                grow: !shrink,
             }),
             vec![Step::new(StepKind::Inspect, Vec::new())],
         );
@@ -1167,18 +1232,38 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         },
         Vec::new(),
     );
-    let grow = Step::new(
-        StepKind::GrowFilesystemOnline {
-            mount_point: online.mount_point.clone(),
-            device: online.device.clone(),
-            disk: online.disk.clone(),
-            partition: number,
-            filesystem,
-            bytes,
-        },
-        Vec::new(),
-    );
-    let plan = match Plan::write(vec![table_step, refresh, grow], identity) {
+    let filesystem_step = if shrink {
+        Step::new(
+            StepKind::ShrinkFilesystemOnline {
+                mount_point: online.mount_point.clone(),
+                device: online.device.clone(),
+                disk: online.disk.clone(),
+                partition: number,
+                filesystem,
+                bytes,
+            },
+            Vec::new(),
+        )
+    } else {
+        Step::new(
+            StepKind::GrowFilesystemOnline {
+                mount_point: online.mount_point.clone(),
+                device: online.device.clone(),
+                disk: online.disk.clone(),
+                partition: number,
+                filesystem,
+                bytes,
+            },
+            Vec::new(),
+        )
+    };
+    // 收缩必须先缩文件系统，再写表与内核视图；扩容次序相反（B13）。
+    let steps = if shrink {
+        vec![filesystem_step, table_step, refresh]
+    } else {
+        vec![table_step, refresh, filesystem_step]
+    };
+    let plan = match Plan::write(steps, identity) {
         Ok(plan) => plan,
         Err(refusal) => return Decision::Refuse(refusal),
     };

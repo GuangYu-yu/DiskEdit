@@ -52,7 +52,7 @@ pub fn run_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Outcome {
     }
 }
 
-/// 在线扩容的现场事实。
+/// 在线扩缩的现场事实。
 struct Online<'a> {
     mount_point: &'a Path,
     device: &'a Path,
@@ -60,6 +60,8 @@ struct Online<'a> {
     partition: u32,
     filesystem: FsKind,
     bytes: u64,
+    /// 收缩方向：必须在写表之前执行。
+    shrink: bool,
 }
 
 fn execute_online(platform: &dyn Platform, plan: &ConfirmedPlan) -> Result<(), (ExecError, bool)> {
@@ -101,9 +103,12 @@ pub(super) fn execute_online_step(
 
 /// 计划里的在线步骤；必须恰好一个。
 fn online_step(steps: &[Step]) -> Result<&Step, ExecError> {
-    let mut found = steps
-        .iter()
-        .filter(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }));
+    let mut found = steps.iter().filter(|step| {
+        matches!(
+            step.kind,
+            StepKind::GrowFilesystemOnline { .. } | StepKind::ShrinkFilesystemOnline { .. }
+        )
+    });
     let step = found
         .next()
         .ok_or_else(|| ExecError::InvalidPlan("the plan has no online step".to_owned()))?;
@@ -117,34 +122,72 @@ fn online_step(steps: &[Step]) -> Result<&Step, ExecError> {
 
 /// 在线步骤的现场事实。
 fn online_facts(step: &Step) -> Result<Online<'_>, ExecError> {
-    let StepKind::GrowFilesystemOnline {
-        mount_point,
-        device,
-        disk,
-        partition,
-        filesystem,
-        bytes,
-    } = &step.kind
-    else {
-        return Err(ExecError::InvalidPlan(
-            "the step is not an online filesystem grow".to_owned(),
-        ));
-    };
-    Ok(Online {
-        mount_point,
-        device,
-        disk,
-        partition: *partition,
-        filesystem: *filesystem,
-        bytes: *bytes,
-    })
+    match &step.kind {
+        StepKind::GrowFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition,
+            filesystem,
+            bytes,
+        } => Ok(Online {
+            mount_point,
+            device,
+            disk,
+            partition: *partition,
+            filesystem: *filesystem,
+            bytes: *bytes,
+            shrink: false,
+        }),
+        StepKind::ShrinkFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition,
+            filesystem,
+            bytes,
+        } => Ok(Online {
+            mount_point,
+            device,
+            disk,
+            partition: *partition,
+            filesystem: *filesystem,
+            bytes: *bytes,
+            shrink: true,
+        }),
+        StepKind::Inspect
+        | StepKind::Check { .. }
+        | StepKind::ListRecords
+        | StepKind::VerifyRecord { .. }
+        | StepKind::ScanRecords
+        | StepKind::WriteTable { .. }
+        | StepKind::AddPartition { .. }
+        | StepKind::DeletePartition { .. }
+        | StepKind::ResizePartition { .. }
+        | StepKind::SetProperty { .. }
+        | StepKind::MakeFilesystem { .. }
+        | StepKind::GrowFilesystem { .. }
+        | StepKind::ShrinkFilesystem { .. }
+        | StepKind::RebuildSwap { .. }
+        | StepKind::LvmPvShrink { .. }
+        | StepKind::LvmGrowChain { .. }
+        | StepKind::CopyPartition { .. }
+        | StepKind::MovePartition { .. }
+        | StepKind::RefreshKernelView { .. }
+        | StepKind::RecoverRecords { .. } => Err(ExecError::InvalidPlan(
+            "the step is not an online filesystem resize".to_owned(),
+        )),
+    }
 }
 
 /// 计划里必须恰好有一个在线步骤。
 fn single_online_step(steps: &[Step]) -> Result<&Step, ExecError> {
-    let mut found = steps
-        .iter()
-        .filter(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }));
+    let mut found = steps.iter().filter(|step| {
+        matches!(
+            step.kind,
+            StepKind::GrowFilesystemOnline { .. } | StepKind::ShrinkFilesystemOnline { .. }
+        )
+    });
     let step = found
         .next()
         .ok_or_else(|| ExecError::InvalidPlan("the plan has no online step".to_owned()))?;
@@ -181,10 +224,37 @@ fn confirm_mount(platform: &dyn Platform, online: &Online<'_>) -> Result<(), Exe
     }
 }
 
-/// 在线扩容的程序与参数；没有在线工具的族返回 `None`。
+/// 在线扩缩的程序与参数；没有在线工具的族返回 `None`。
 fn online_invocation(online: &Online<'_>) -> Option<(Program, Vec<String>)> {
     let mount = online.mount_point.display().to_string();
     let device = online.device.display().to_string();
+    if online.shrink {
+        return match online.filesystem {
+            FsKind::Btrfs => Some((
+                Program::Btrfs,
+                vec![
+                    "filesystem".to_owned(),
+                    "resize".to_owned(),
+                    online.bytes.to_string(),
+                    mount,
+                ],
+            )),
+            FsKind::Ext
+            | FsKind::Xfs
+            | FsKind::Squashfs
+            | FsKind::Erofs
+            | FsKind::F2fs
+            | FsKind::Exfat
+            | FsKind::Vfat
+            | FsKind::Ntfs
+            | FsKind::HfsPlus
+            | FsKind::Apfs
+            | FsKind::Bcachefs
+            | FsKind::Jfs
+            | FsKind::Reiserfs
+            | FsKind::Udf => None,
+        };
+    }
     match online.filesystem {
         FsKind::Ext => Some((Program::Resize2fs, vec![device])),
         FsKind::Xfs => Some((Program::XfsGrowfs, vec![mount])),
@@ -259,8 +329,9 @@ fn verify_online_size(
             verify_ext_size(&run, online.bytes).map_err(|error| (error, true))
         }
         // btrfs 的超级块直接给出总字节数与分配单元，不需要挂载状态；`-f` 是只读的
-        // 全量输出。`total_bytes` 覆盖到区间末端（落在最后一个 sectorsize 内）才算
-        // 长到位——工具退 0 而超级块仍是旧尺寸时不能报成功。
+        // 全量输出。扩容时 `total_bytes` 必须覆盖到区间末端（落在最后一个 sectorsize
+        // 内）才算长到位；收缩时只要不大于请求值即可——工具退 0 而超级块仍是旧尺寸
+        // 时不能报成功。
         FsKind::Btrfs => {
             let run = platform
                 .run(
@@ -274,7 +345,7 @@ fn verify_online_size(
                 )
                 .map_err(|error| (ExecError::from(error), true))?;
             ensure_probe_ran(platform, Program::Btrfs, &run)?;
-            verify_btrfs_size(&run, online.bytes).map_err(|error| (error, true))
+            verify_btrfs_size(&run, online.bytes, online.shrink).map_err(|error| (error, true))
         }
         FsKind::Xfs
         | FsKind::Squashfs
@@ -324,6 +395,14 @@ fn run_online_carrier(
     online: &Online<'_>,
 ) -> Result<(), (ExecError, bool)> {
     use crate::platform::{OnlineRequest, PlatformError};
+    if online.shrink {
+        return Err((
+            ExecError::Unsupported(
+                "online shrink needs the local btrfs tool; the VM carrier only grows".to_owned(),
+            ),
+            false,
+        ));
+    }
     let carrier = platform
         .carrier()
         .map_err(|error| (ExecError::from(error), false))?;
@@ -393,6 +472,10 @@ enum FsAction {
         filesystem: FsKind,
         bytes: u64,
     },
+    RebuildSwap {
+        partition: u32,
+        start_bytes: u64,
+    },
 }
 
 impl FsAction {
@@ -400,7 +483,8 @@ impl FsAction {
         match self {
             Self::Make { partition, .. }
             | Self::Grow { partition, .. }
-            | Self::Shrink { partition, .. } => *partition,
+            | Self::Shrink { partition, .. }
+            | Self::RebuildSwap { partition, .. } => *partition,
         }
     }
 }
@@ -479,6 +563,15 @@ pub(super) fn execute_plan(
             filesystem, bytes, ..
         } => {
             shrink(platform, *filesystem, device.device(), *bytes, &token)?;
+        }
+        FsAction::RebuildSwap { start_bytes, .. } => {
+            let identity = read_swap_identity(platform, target, *start_bytes)
+                .map_err(|error| (error, true))?;
+            let mut args = swap_invocation(&identity);
+            args.push(device.device().display().to_string());
+            run_checked(platform, Program::Mkswap, &args, &token)
+                .map(|_| ())
+                .map_err(|(error, _)| (error, true))?;
         }
     }
 
@@ -562,6 +655,14 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
                 filesystem: *filesystem,
                 bytes: *bytes,
             }),
+            StepKind::RebuildSwap {
+                partition,
+                start_bytes,
+                ..
+            } => Some(FsAction::RebuildSwap {
+                partition: *partition,
+                start_bytes: *start_bytes,
+            }),
             StepKind::Inspect
             | StepKind::Check { .. }
             | StepKind::ListRecords
@@ -573,6 +674,7 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             | StepKind::ResizePartition { .. }
             | StepKind::SetProperty { .. }
             | StepKind::GrowFilesystemOnline { .. }
+            | StepKind::ShrinkFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
             | StepKind::LvmPvShrink { .. }
             | StepKind::LvmGrowChain { .. }
@@ -649,6 +751,111 @@ pub(super) fn target_sector_size(platform: &dyn Platform, target: &Path) -> Resu
         .open_target_read_only(target)
         .map_err(ExecError::from)?;
     Ok(handle.sector_size().unwrap_or(512))
+}
+
+/// 换区重建之前从旧首部读出的身份。
+///
+/// swap 内容可弃，但 UUID 与卷标可能被 fstab/resume 引用：重建必须保住它们，
+/// 读不出来时在动表之前停止，而不是悄悄换成随机值。
+#[derive(Debug, PartialEq, Eq)]
+struct SwapIdentity {
+    uuid: Option<String>,
+    label: Option<String>,
+}
+
+/// 写表之前复核旧 swap 首部可读，避免"表已改、重建身份丢了"。
+pub(super) fn preflight_swap(
+    platform: &dyn Platform,
+    target: &Path,
+    plan: &ConfirmedPlan,
+) -> Result<(), ExecError> {
+    let Some(step) = plan
+        .steps()
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::RebuildSwap { .. }))
+    else {
+        return Ok(());
+    };
+    let StepKind::RebuildSwap { start_bytes, .. } = &step.kind else {
+        unreachable!("按 RebuildSwap 选出");
+    };
+    read_swap_identity(platform, target, *start_bytes).map(|_| ())
+}
+
+/// 旧 swap 首部的 UUID 与卷标：`info` 区固定偏移，与页大小无关
+/// （内核 `union swap_header`：sws_uuid @1036、sws_volume @1052）。
+fn read_swap_identity(
+    platform: &dyn Platform,
+    target: &Path,
+    start_bytes: u64,
+) -> Result<SwapIdentity, ExecError> {
+    const UUID_OFFSET: u64 = 1036;
+    const FIELD: usize = 16;
+    let uuid_at = start_bytes
+        .checked_add(UUID_OFFSET)
+        .ok_or_else(|| ExecError::InvalidPlan("the swap header offset overflows".to_owned()))?;
+    let handle = platform
+        .open_target_read_only(target)
+        .map_err(ExecError::from)?;
+    let mut fields = [0u8; FIELD * 2];
+    let read = handle
+        .read_at(uuid_at, &mut fields)
+        .map_err(ExecError::from)?;
+    if read != fields.len() {
+        return Err(ExecError::Io(
+            "the old swap header could not be read in full".to_owned(),
+        ));
+    }
+    parse_swap_identity(&fields)
+}
+
+/// 首部 32 字节 → 身份：UUID 全零即未设置；卷标截到首个 NUL，空串即没有。
+fn parse_swap_identity(fields: &[u8; 32]) -> Result<SwapIdentity, ExecError> {
+    const FIELD: usize = 16;
+    let uuid = &fields[..FIELD];
+    let uuid = uuid.iter().any(|byte| *byte != 0).then(|| {
+        let hex: String = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    });
+    let label = &fields[FIELD..];
+    let label = &label[..label.iter().position(|byte| *byte == 0).unwrap_or(FIELD)];
+    let label = if label.is_empty() {
+        None
+    } else {
+        Some(
+            std::str::from_utf8(label)
+                .map_err(|_| {
+                    ExecError::Io(
+                        "the old swap volume label is not valid UTF-8; a rebuild would rewrite it \
+                         as different bytes"
+                            .to_owned(),
+                    )
+                })?
+                .to_owned(),
+        )
+    };
+    Ok(SwapIdentity { uuid, label })
+}
+
+/// 换区重建工具的前半段参数；设备由调用方追加。
+fn swap_invocation(identity: &SwapIdentity) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(uuid) = &identity.uuid {
+        args.push("-U".to_owned());
+        args.push(uuid.clone());
+    }
+    if let Some(label) = &identity.label {
+        args.push("-L".to_owned());
+        args.push(label.clone());
+    }
+    args
 }
 
 /// 建卷所需的外部程序与固定参数；设备路径由调用方追加。
@@ -1016,9 +1223,10 @@ fn verify_ext_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
     Ok(())
 }
 
-/// btrfs 超级块里的 `total_bytes` 与 `sectorsize`：前者覆盖到区间末端、后者是放置单元。
-/// `total_bytes` 必须落在 `[expected - sectorsize, expected]` 内；解析失败不猜默认值。
-fn verify_btrfs_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
+/// btrfs 超级块里的 `total_bytes` 与 `sectorsize`：前者是文件系统总尺寸、后者是放置单元。
+/// 扩容要求 `total_bytes` 落在 `[expected - sectorsize, expected]` 内；收缩只要求不大于
+/// `expected`（内核可能缩到比请求更小的可用尺寸）。解析失败不猜默认值。
+fn verify_btrfs_size(run: &ToolRun, expected: u64, shrink: bool) -> Result<(), ExecError> {
     let total = leading_field(&run.stdout, "total_bytes").ok_or_else(|| {
         ExecError::Postcondition("the btrfs superblock probe did not report total_bytes".to_owned())
     })?;
@@ -1026,6 +1234,14 @@ fn verify_btrfs_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
         ExecError::Postcondition("the btrfs superblock probe did not report sectorsize".to_owned())
     })?;
     let unit = unit.max(1);
+    if shrink {
+        if total > expected {
+            return Err(ExecError::Postcondition(format!(
+                "the filesystem is still {total} bytes, more than the requested {expected} bytes"
+            )));
+        }
+        return Ok(());
+    }
     if total > expected || expected - total >= unit {
         return Err(ExecError::Postcondition(format!(
             "the filesystem is {total} bytes, not the expected {expected} bytes rounded to its {unit}-byte sectors"
@@ -1331,6 +1547,76 @@ mod tests {
             stderr: String::new(),
         };
         assert!(verify_ext_size(&silent, 4096).is_err());
+    }
+
+    // covers: B28
+    #[test]
+    fn a_btrfs_shrink_only_requires_the_filesystem_to_fit() {
+        let superblock = ToolRun {
+            code: Some(0),
+            stdout: "total_bytes\t\t  104857600\nsectorsize\t\t\t4096\n".to_owned(),
+            stderr: String::new(),
+        };
+        // 收缩：只要不大于请求值就成立，内核可能缩到更小的可用尺寸。
+        assert!(verify_btrfs_size(&superblock, 104857600, true).is_ok());
+        assert!(verify_btrfs_size(&superblock, 209715200, true).is_ok());
+        // 仍比请求值大：分区不能缩进去。
+        assert!(verify_btrfs_size(&superblock, 52428800, true).is_err());
+        // 扩容：必须覆盖到区间末端（允许最后一个 sectorsize 内的取整）。
+        assert!(verify_btrfs_size(&superblock, 104857600, false).is_ok());
+        assert!(verify_btrfs_size(&superblock, 104857600 + 4095, false).is_ok());
+        assert!(verify_btrfs_size(&superblock, 104857600 + 4096, false).is_err());
+        assert!(verify_btrfs_size(&superblock, 104857600 - 4096, false).is_err());
+        // 输出里没有超级块字段：无法核对，按错误交回。
+        let silent = ToolRun {
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(verify_btrfs_size(&silent, 104857600, true).is_err());
+    }
+
+    // covers: B28
+    #[test]
+    fn swap_rebuild_keeps_the_old_uuid_and_label() {
+        let mut fields = [0u8; 32];
+        for (at, byte) in fields.iter_mut().take(16).enumerate() {
+            *byte = u8::try_from(at).expect("下标可表示");
+        }
+        fields[16..21].copy_from_slice(b"SWAPL");
+        let identity = parse_swap_identity(&fields).expect("首部可解析");
+        assert_eq!(
+            identity.uuid.as_deref(),
+            Some("00010203-0405-0607-0809-0a0b0c0d0e0f")
+        );
+        assert_eq!(identity.label.as_deref(), Some("SWAPL"));
+        assert_eq!(
+            swap_invocation(&identity),
+            vec![
+                "-U".to_owned(),
+                "00010203-0405-0607-0809-0a0b0c0d0e0f".to_owned(),
+                "-L".to_owned(),
+                "SWAPL".to_owned()
+            ]
+        );
+        // 全零首部：没有 UUID 也没有卷标，重建会生成新的，不传任何标志。
+        let blank = parse_swap_identity(&[0u8; 32]).expect("全零首部可解析");
+        assert_eq!(
+            blank,
+            SwapIdentity {
+                uuid: None,
+                label: None
+            }
+        );
+        assert!(swap_invocation(&blank).is_empty());
+    }
+
+    // covers: B28
+    #[test]
+    fn a_non_utf8_swap_label_is_refused_instead_of_being_rewritten() {
+        let mut fields = [0u8; 32];
+        fields[16] = 0xff;
+        assert!(parse_swap_identity(&fields).is_err());
     }
 
     // covers: D11

@@ -54,7 +54,9 @@ fn execute(
             | StepKind::MakeFilesystem { .. }
             | StepKind::GrowFilesystem { .. }
             | StepKind::ShrinkFilesystem { .. }
+            | StepKind::RebuildSwap { .. }
             | StepKind::GrowFilesystemOnline { .. }
+            | StepKind::ShrinkFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
             | StepKind::LvmPvShrink { .. }
             | StepKind::LvmGrowChain { .. }

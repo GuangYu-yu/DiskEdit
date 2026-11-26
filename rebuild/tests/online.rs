@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use diskedit::app::decide::step::TableSegment;
-use diskedit::app::decide::{Plan, Step, StepKind, confirm};
+use diskedit::app::decide::{Plan, Report, Step, StepKind, confirm};
 use diskedit::app::execute::{ExecutionState, filesystem, resize};
 use diskedit::app::observe::records::RecordState;
 use diskedit::app::observe::resize::{OnlineFacts, ResizeSnapshot};
@@ -526,15 +526,101 @@ fn online_resize_refuses_flags_the_online_path_cannot_honour() {
 
 // covers: R0742, R0743
 #[test]
-fn online_resize_refuses_shrinking_a_mounted_partition() {
+fn online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem() {
     let snapshot = online_snapshot(2048, 1024);
     let request = resize_request(None, Some(3000));
     let diskedit::app::decide::Decision::Refuse(refusal) =
         diskedit::app::decide::resize::decide(&snapshot, &request)
     else {
-        panic!("a mounted partition cannot shrink online");
+        panic!("only btrfs can shrink while mounted");
     };
     assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
+}
+
+/// 已挂载的 btrfs：文件系统族与在线工具都具备。
+fn btrfs_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
+    let mut snapshot = online_snapshot(start, sectors);
+    let content = ContentKind::Filesystem(FsKind::Btrfs);
+    if let Some(partition) = snapshot.selected.as_mut() {
+        partition.content = content;
+    }
+    if let TableView::Mbr(view) = &mut snapshot.view {
+        view.partitions[0].content = content;
+    }
+    snapshot.tools.push((Program::Btrfs, true));
+    snapshot
+}
+
+// covers: B28, R0742
+#[test]
+fn online_btrfs_shrink_plans_filesystem_then_table_then_kernel_view() {
+    let snapshot = btrfs_snapshot(2048, 1024);
+    let request = resize_request(None, Some(2500));
+    let diskedit::app::decide::Decision::Execute { plan, .. } =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("a mounted btrfs can shrink online");
+    };
+    let kinds: Vec<&StepKind> = plan.steps().iter().map(|step| &step.kind).collect();
+    let StepKind::ShrinkFilesystemOnline {
+        mount_point,
+        device,
+        disk,
+        partition,
+        filesystem,
+        bytes,
+    } = kinds[0]
+    else {
+        panic!("the shrink must happen before the table changes: {kinds:?}");
+    };
+    assert_eq!(mount_point, &PathBuf::from("/mnt"));
+    assert_eq!(device, &PathBuf::from("/dev/sda1"));
+    assert_eq!(disk, &PathBuf::from("/dev/sda"));
+    assert_eq!(*partition, 1);
+    assert_eq!(*filesystem, FsKind::Btrfs);
+    assert_eq!(*bytes, 453 * 512);
+    assert!(matches!(kinds[1], StepKind::WriteTable { .. }), "{kinds:?}");
+    let StepKind::RefreshKernelView { bytes: synced, .. } = kinds[2] else {
+        panic!("the kernel view must follow the table: {kinds:?}");
+    };
+    assert_eq!(*synced, 453 * 512);
+}
+
+// covers: B28, R0742
+#[test]
+fn online_btrfs_shrink_without_the_tool_is_refused_before_any_write() {
+    let mut snapshot = btrfs_snapshot(2048, 1024);
+    snapshot.tools = vec![(Program::Btrfs, false)];
+    let request = resize_request(None, Some(2500));
+    let diskedit::app::decide::Decision::Refuse(refusal) =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("a missing btrfs tool must refuse the shrink");
+    };
+    assert_eq!(exit::exit_of_refusal(&refusal), exit::UNSUPPORTED);
+}
+
+// covers: B28, R0742
+#[test]
+fn an_online_btrfs_shrink_preview_reports_the_shrink_direction() {
+    let snapshot = btrfs_snapshot(2048, 1024);
+    let mut resize = resize_command(None, Some(2500));
+    resize.dry_run = true;
+    let request = request_for(resize);
+    let diskedit::app::decide::Decision::Report { report, .. } =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("a dry run must only report");
+    };
+    let Report::Resize(preview) = report else {
+        panic!("a resize dry run reports a resize preview");
+    };
+    assert!(!preview.grow);
+    assert_eq!(preview.new_end_lba, 2500);
+    assert_eq!(
+        preview.filesystem,
+        Some(ContentKind::Filesystem(FsKind::Btrfs))
+    );
 }
 
 // covers: R0432
@@ -604,6 +690,7 @@ struct LivePlatform {
     live_result: Mutex<Result<(), String>>,
     replies: Mutex<std::collections::VecDeque<Call>>,
     calls: Mutex<Vec<Program>>,
+    arg_calls: Mutex<Vec<(Program, Vec<String>)>>,
 }
 
 impl LivePlatform {
@@ -615,11 +702,16 @@ impl LivePlatform {
             live_result: Mutex::new(Ok(())),
             replies: Mutex::new(replies.into()),
             calls: Mutex::new(Vec::new()),
+            arg_calls: Mutex::new(Vec::new()),
         }
     }
 
     fn calls(&self) -> Vec<Program> {
         self.calls.lock().unwrap().clone()
+    }
+
+    fn arg_calls(&self) -> Vec<(Program, Vec<String>)> {
+        self.arg_calls.lock().unwrap().clone()
     }
 
     fn live_calls(&self) -> Vec<(u32, u64, u64)> {
@@ -662,6 +754,10 @@ impl Platform for LivePlatform {
     }
     fn run(&self, program: Program, _args: &[String]) -> PlatformResult<ToolRun> {
         self.calls.lock().unwrap().push(program);
+        self.arg_calls
+            .lock()
+            .unwrap()
+            .push((program, _args.to_vec()));
         let reply = self
             .replies
             .lock()
@@ -844,5 +940,199 @@ fn a_failed_kernel_view_update_after_the_table_write_is_partial() {
     assert!(
         platform.calls().is_empty(),
         "the filesystem step must not run after a failed kernel update"
+    );
+}
+
+const SHRUNK_BYTES: u64 = 453 * 512;
+
+/// 收缩计划：先缩文件系统，再写表并同步内核视图。
+fn online_shrink_execution_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
+    let region = Region::sized(0, 512).expect("表区区间可构造");
+    let shrink = Step::new(
+        StepKind::ShrinkFilesystemOnline {
+            mount_point: PathBuf::from("/mnt"),
+            device: PathBuf::from("/dev/sda1"),
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            filesystem: FsKind::Btrfs,
+            bytes: SHRUNK_BYTES,
+        },
+        Vec::new(),
+    );
+    let table = Step::new(
+        StepKind::WriteTable {
+            format: TableFormat::Mbr,
+            segment_size: 512,
+            stamp: image_stamp(bytes),
+            segments: vec![TableSegment {
+                region,
+                bytes: vec![0xAA; 512],
+            }],
+        },
+        vec![region],
+    );
+    let refresh = Step::new(
+        StepKind::RefreshKernelView {
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            start_bytes: 2048 * 512,
+            bytes: SHRUNK_BYTES,
+        },
+        Vec::new(),
+    );
+    let plan = Plan::write(vec![shrink, table, refresh], IDENTITY).expect("在线计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+// covers: B28, R0742, R0760
+#[test]
+fn online_btrfs_shrink_shrinks_the_filesystem_before_writing_the_table() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new(
+        bytes.clone(),
+        vec![
+            Call::Exits(Some(0), String::new()),
+            Call::Exits(Some(0), superblock(SHRUNK_BYTES, 4096)),
+        ],
+    );
+    let plan = online_shrink_execution_plan(&bytes);
+    let outcome = resize::run_online(&platform, &plan);
+    assert_eq!(outcome.state(), ExecutionState::Committed);
+    assert_eq!(exit::exit_of(&outcome), exit::SUCCESS);
+    assert_eq!(platform.calls(), vec![Program::Btrfs, Program::Btrfs]);
+    assert_eq!(platform.live_calls(), vec![(1, 2048 * 512, SHRUNK_BYTES)]);
+}
+
+// covers: B28, R0742
+#[test]
+fn a_failed_btrfs_shrink_leaves_the_table_and_kernel_view_alone() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new(bytes.clone(), vec![Call::Exits(Some(1), String::new())]);
+    let plan = online_shrink_execution_plan(&bytes);
+    let outcome = resize::run_online(&platform, &plan);
+    assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+    assert_eq!(platform.calls(), vec![Program::Btrfs]);
+    assert!(
+        platform.live_calls().is_empty(),
+        "the table must not shrink"
+    );
+}
+
+// covers: B28, R0742
+#[test]
+fn a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition() {
+    let bytes = vec![0u8; DISK_BYTES as usize];
+    let platform = LivePlatform::new(
+        bytes.clone(),
+        vec![
+            Call::Exits(Some(0), String::new()),
+            Call::Exits(Some(0), superblock(SHRUNK_BYTES * 2, 4096)),
+        ],
+    );
+    let plan = online_shrink_execution_plan(&bytes);
+    let outcome = resize::run_online(&platform, &plan);
+    assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+    assert_eq!(platform.calls(), vec![Program::Btrfs, Program::Btrfs]);
+    assert!(
+        platform.live_calls().is_empty(),
+        "the table must not shrink"
+    );
+}
+
+// --- swap 重建（B28） -------------------------------------------------------
+
+/// 离线的 swap 分区现场：分区 1 的内容识别为 swap，工具只有 mkswap。
+fn swap_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
+    let mut snapshot = online_snapshot(start, sectors);
+    snapshot.online = None;
+    let content = ContentKind::Swap;
+    if let Some(partition) = snapshot.selected.as_mut() {
+        partition.content = content;
+    }
+    if let TableView::Mbr(view) = &mut snapshot.view {
+        view.partitions[0].content = content;
+    }
+    snapshot.tools = vec![(Program::Mkswap, true)];
+    snapshot
+}
+
+// covers: B28
+#[test]
+fn resizing_a_swap_partition_plans_a_mkswap_rebuild_after_the_table() {
+    let snapshot = swap_snapshot(2048, 1024);
+    let request = resize_request(Some(SizeSpec::Grow), None);
+    let diskedit::app::decide::Decision::Execute { plan, .. } =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("a swap partition grows by rebuilding it");
+    };
+    let kinds: Vec<&StepKind> = plan.steps().iter().map(|step| &step.kind).collect();
+    assert!(matches!(kinds[0], StepKind::WriteTable { .. }), "{kinds:?}");
+    let StepKind::RebuildSwap {
+        partition,
+        start_bytes,
+        bytes,
+    } = kinds[1]
+    else {
+        panic!("swap must be rebuilt after the table takes effect: {kinds:?}");
+    };
+    assert_eq!(*partition, 1);
+    assert_eq!(*start_bytes, 2048 * 512);
+    assert_eq!(*bytes, 6144 * 512);
+}
+
+// covers: B28
+#[test]
+fn shrinking_a_swap_partition_is_unsupported() {
+    let snapshot = swap_snapshot(2048, 1024);
+    let request = resize_request(None, Some(2500));
+    let diskedit::app::decide::Decision::Refuse(refusal) =
+        diskedit::app::decide::resize::decide(&snapshot, &request)
+    else {
+        panic!("swap has no in-place shrink");
+    };
+    assert_eq!(exit::exit_of_refusal(&refusal), exit::UNSUPPORTED);
+}
+
+fn swap_rebuild_plan() -> diskedit::app::decide::ConfirmedPlan {
+    let region = Region::sized(0, DISK_BYTES).expect("整盘区间可构造");
+    let step = Step::new(
+        StepKind::RebuildSwap {
+            partition: 0,
+            start_bytes: 0,
+            bytes: DISK_BYTES,
+        },
+        vec![region],
+    );
+    let plan = Plan::write(vec![step], IDENTITY).expect("swap 计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+// covers: B28
+#[test]
+fn a_swap_rebuild_keeps_the_old_uuid_and_label_on_the_device() {
+    let mut image = vec![0u8; DISK_BYTES as usize];
+    image[1036..1052].copy_from_slice(&[0x11; 16]);
+    image[1052..1056].copy_from_slice(b"SWAP");
+    let platform = LivePlatform::new(image, vec![Call::Exits(Some(0), String::new())]);
+    let outcome = filesystem::run(&platform, Path::new("/dev/sda"), &swap_rebuild_plan());
+    assert_eq!(outcome.state(), ExecutionState::Committed);
+    assert_eq!(exit::exit_of(&outcome), exit::SUCCESS);
+    assert_eq!(
+        platform.arg_calls(),
+        vec![(
+            Program::Mkswap,
+            vec![
+                "-U".to_owned(),
+                "11111111-1111-1111-1111-111111111111".to_owned(),
+                "-L".to_owned(),
+                "SWAP".to_owned(),
+                "/dev/sda".to_owned(),
+            ]
+        )]
     );
 }

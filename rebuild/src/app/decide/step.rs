@@ -97,10 +97,32 @@ pub enum StepKind {
         filesystem: FsKind,
         bytes: u64,
     },
+    /// 按新尺寸重建 swap 区域，保留旧首部的 UUID 与卷标。
+    ///
+    /// swap 没有原地 resize：分区表落位之后，新尺寸只有重建才生效。
+    RebuildSwap {
+        partition: u32,
+        /// 分区起点的字节偏移，用于读取旧首部与镜像经 loop 绑定的偏移。
+        start_bytes: u64,
+        /// 重建后的分区字节数。
+        bytes: u64,
+    },
     /// 在已挂载的文件系统上扩容到所在分区的容量。
     ///
     /// 不写分区表、不登记原像、不卸载用户挂载；由在线执行器运行该族的在线工具。
     GrowFilesystemOnline {
+        mount_point: PathBuf,
+        device: PathBuf,
+        disk: PathBuf,
+        partition: u32,
+        filesystem: FsKind,
+        bytes: u64,
+    },
+    /// 在已挂载的文件系统上缩容到指定字节数。
+    ///
+    /// 只用于支持在线收缩的族（btrfs）；必须在写表与调整内核视图之前执行，
+    /// 否则分区先缩、文件系统后缩会让内核看到越界。
+    ShrinkFilesystemOnline {
         mount_point: PathBuf,
         device: PathBuf,
         disk: PathBuf,
@@ -166,9 +188,9 @@ impl StepKind {
             | Self::ListRecords
             | Self::VerifyRecord { .. }
             | Self::ScanRecords => Access::ReadOnly,
-            Self::RefreshKernelView { .. } | Self::GrowFilesystemOnline { .. } => {
-                Access::WritesExternalState
-            }
+            Self::RefreshKernelView { .. }
+            | Self::GrowFilesystemOnline { .. }
+            | Self::ShrinkFilesystemOnline { .. } => Access::WritesExternalState,
             Self::WriteTable { .. }
             | Self::AddPartition { .. }
             | Self::DeletePartition { .. }
@@ -177,6 +199,7 @@ impl StepKind {
             | Self::MakeFilesystem { .. }
             | Self::GrowFilesystem { .. }
             | Self::ShrinkFilesystem { .. }
+            | Self::RebuildSwap { .. }
             | Self::CopyPartition { .. }
             | Self::RecoverRecords { .. }
             | Self::LvmPvShrink { .. }

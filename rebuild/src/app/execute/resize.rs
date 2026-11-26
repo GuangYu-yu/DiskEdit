@@ -55,8 +55,25 @@ fn execute_online(
         unreachable!("按 RefreshKernelView 选出");
     };
     let (disk, partition, start_bytes, bytes) = (disk.clone(), *partition, *start_bytes, *bytes);
+    let shrink = plan
+        .steps()
+        .iter()
+        .any(|step| matches!(step.kind, StepKind::ShrinkFilesystemOnline { .. }));
     // 写表之前复核：挂载点仍指向同一分区，整盘身份未变。
     super::filesystem::verify_online(platform, plan).map_err(|error| (error, false))?;
+    if shrink {
+        // 收缩：先让文件系统让出尾部，再写表并同步内核视图。
+        let step = online_step(plan)?;
+        super::filesystem::execute_online_step(platform, plan, step)?;
+        super::table::execute_plan(platform, &disk, plan, false)
+            .map_err(|(error, _)| (error, true))?;
+        if let Err(error) = platform.resize_partition_live(&disk, partition, start_bytes, bytes) {
+            return Ok(Some(format!(
+                "partition table written but kernel sync failed: {error}"
+            )));
+        }
+        return Ok(None);
+    }
     // 表阶段：提交记录，但不重读整盘（在线路径随后按分区增量同步）。
     super::table::execute_plan(platform, &disk, plan, false)?;
     if let Err(error) = platform.resize_partition_live(&disk, partition, start_bytes, bytes) {
@@ -64,21 +81,37 @@ fn execute_online(
             "partition table written but kernel sync failed: {error}"
         )));
     }
-    let step = plan
-        .steps()
-        .iter()
-        .find(|step| matches!(step.kind, StepKind::GrowFilesystemOnline { .. }))
-        .ok_or_else(|| {
-            (
-                ExecError::InvalidPlan("the online plan has no filesystem step".to_owned()),
-                true,
-            )
-        })?;
+    let step = online_step(plan)?;
     match super::filesystem::execute_online_step(platform, plan, step) {
         Ok(()) => Ok(None),
         // 表已提交；文件系统步的任何失败都只能按"已写、待恢复"报告。
         Err((error, _started)) => Err((error, true)),
     }
+}
+
+/// 计划里的在线文件系统步骤；必须恰好一个。
+fn online_step(plan: &ConfirmedPlan) -> Result<&crate::app::decide::Step, (ExecError, bool)> {
+    let mut found = plan.steps().iter().filter(|step| {
+        matches!(
+            step.kind,
+            StepKind::GrowFilesystemOnline { .. } | StepKind::ShrinkFilesystemOnline { .. }
+        )
+    });
+    let step = found.next().ok_or_else(|| {
+        (
+            ExecError::InvalidPlan("the online plan has no filesystem step".to_owned()),
+            true,
+        )
+    })?;
+    if found.next().is_some() {
+        return Err((
+            ExecError::InvalidPlan(
+                "the online plan holds more than one filesystem step".to_owned(),
+            ),
+            true,
+        ));
+    }
+    Ok(step)
 }
 
 fn execute(
@@ -92,6 +125,7 @@ fn execute(
             StepKind::MakeFilesystem { .. }
                 | StepKind::GrowFilesystem { .. }
                 | StepKind::ShrinkFilesystem { .. }
+                | StepKind::RebuildSwap { .. }
         )
     });
     let has_lvm = plan.steps().iter().any(|step| {
@@ -116,6 +150,12 @@ fn execute(
         }
         super::table::execute_plan(platform, target, plan, true)
     } else {
+        // swap 重建的身份取自旧首部：读不出来时在写表之前停下，不留下"表已扩、
+        // 重建身份丢了"的待恢复状态。
+        if has_fs {
+            super::filesystem::preflight_swap(platform, target, plan)
+                .map_err(|error| (error, false))?;
+        }
         // 扩容：先提交分区表，再扩 PV / 文件系统。
         let unsynced = super::table::execute_plan(platform, target, plan, true)?;
         if has_fs {

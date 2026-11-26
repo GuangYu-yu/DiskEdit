@@ -80,7 +80,9 @@ fn action(steps: &[Step]) -> Result<(Action, Region), ExecError> {
             | StepKind::MakeFilesystem { .. }
             | StepKind::GrowFilesystem { .. }
             | StepKind::ShrinkFilesystem { .. }
+            | StepKind::RebuildSwap { .. }
             | StepKind::GrowFilesystemOnline { .. }
+            | StepKind::ShrinkFilesystemOnline { .. }
             | StepKind::CopyPartition { .. }
             | StepKind::MovePartition { .. }
             | StepKind::RefreshKernelView { .. }

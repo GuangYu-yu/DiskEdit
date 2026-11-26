@@ -290,12 +290,40 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
                 out.push(0);
             }
         }
+        StepKind::ShrinkFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition,
+            filesystem,
+            bytes,
+        } => {
+            out.push(20);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(filesystem.as_str().as_bytes());
+            out.push(0);
+            out.extend_from_slice(&bytes.to_le_bytes());
+            for path in [disk, device, mount_point] {
+                out.extend_from_slice(path.to_string_lossy().as_bytes());
+                out.push(0);
+            }
+        }
         StepKind::LvmPvShrink {
             partition,
             start_bytes,
             bytes,
         } => {
             out.push(19);
+            out.extend_from_slice(&partition.to_le_bytes());
+            out.extend_from_slice(&start_bytes.to_le_bytes());
+            out.extend_from_slice(&bytes.to_le_bytes());
+        }
+        StepKind::RebuildSwap {
+            partition,
+            start_bytes,
+            bytes,
+        } => {
+            out.push(21);
             out.extend_from_slice(&partition.to_le_bytes());
             out.extend_from_slice(&start_bytes.to_le_bytes());
             out.extend_from_slice(&bytes.to_le_bytes());
