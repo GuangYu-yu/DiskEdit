@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::platform::{OnlineReport, OnlineRequest, Platform, PlatformError, PlatformResult};
+use crate::platform::{
+    DiskWriteRequest, OnlineReport, OnlineRequest, Platform, PlatformError, PlatformResult,
+};
 
 use super::manifest::Bundle;
 use super::protocol::{self, Reply};
@@ -37,14 +39,8 @@ pub struct Session {
 }
 
 impl Session {
-    /// 启动来宾并完成握手；`request` 只用于声明目标几何。
-    pub fn open(
-        bundle: &Bundle,
-        disk: &Disk,
-        request: &OnlineRequest,
-        token: String,
-    ) -> PlatformResult<Self> {
-        let sector = request.sector_size;
+    /// 启动来宾并完成握手；`sector` 声明目标逻辑块大小。
+    pub fn open(bundle: &Bundle, disk: &Disk, sector: u64, token: String) -> PlatformResult<Self> {
         let mut guest = Guest::start(
             &bundle.kernel,
             &bundle.initramfs,
@@ -101,6 +97,24 @@ impl Session {
             Reply::Applied(report) => Ok(report),
             Reply::Failed(cause) => Err(PlatformError::not_applicable(format!(
                 "the guest could not grow the filesystem: {cause}"
+            ))),
+        }
+    }
+
+    /// 下发整盘离线写入并等待结果。
+    pub fn write_disk(&mut self, request: &DiskWriteRequest) -> PlatformResult<()> {
+        let writes: Vec<(u64, &[u8])> = request
+            .writes
+            .iter()
+            .map(|write| (write.offset, write.bytes.as_slice()))
+            .collect();
+        self.guest
+            .write(&protocol::write_disk(0, &self.sid, &writes))?;
+        let reply = until(&mut self.guest, "result")?;
+        match protocol::decode_result(&reply, 0, &self.sid)? {
+            Reply::Applied(_) => Ok(()),
+            Reply::Failed(cause) => Err(PlatformError::not_applicable(format!(
+                "the guest could not write the disk: {cause}"
             ))),
         }
     }

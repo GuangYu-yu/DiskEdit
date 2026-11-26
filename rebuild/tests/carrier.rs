@@ -78,6 +78,57 @@ fn the_carrier_grows_a_mounted_filesystem_without_the_host_capability() {
     std::fs::remove_file(&image).ok();
 }
 
+// covers: D11
+#[test]
+fn the_carrier_writes_whole_disk_segments_without_the_host_capability() {
+    let Some(bundle) = std::env::var_os("DISKEDIT_VM_BUNDLE") else {
+        eprintln!("NotApplicable: DISKEDIT_VM_BUNDLE is not set");
+        return;
+    };
+    let _ = bundle;
+    if Command::new("qemu-system-x86_64")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("NotApplicable: qemu-system-x86_64 is not installed");
+        return;
+    }
+    let platform = host();
+    let carrier = match platform.carrier() {
+        Ok(Some(carrier)) => carrier,
+        Ok(None) => {
+            eprintln!("NotApplicable: no carrier is configured");
+            return;
+        }
+        Err(error) => {
+            eprintln!("NotApplicable: the bundle was rejected: {error}");
+            return;
+        }
+    };
+    let image = image();
+    let offset = 64 * SECTOR;
+    let payload: Vec<u8> = (0..SECTOR).map(|index| (index % 251) as u8).collect();
+    let request = diskedit::platform::DiskWriteRequest {
+        disk: image.clone(),
+        sector_size: SECTOR,
+        writes: vec![diskedit::platform::CarrierWrite {
+            offset,
+            bytes: payload.clone(),
+        }],
+    };
+    carrier
+        .write_disk(&request)
+        .unwrap_or_else(|error| panic!("the carrier failed: {error}"));
+    let bytes = std::fs::read(&image).expect("镜像可读");
+    assert_eq!(
+        &bytes[offset as usize..offset as usize + payload.len()],
+        payload.as_slice(),
+        "来宾应把该段字节写到宿主镜像的同一偏移"
+    );
+    std::fs::remove_file(&image).ok();
+}
+
 /// 建一个 32 MiB 分区、里面装着 16 MiB ext4 的 64 MiB 镜像。
 fn image() -> PathBuf {
     let path = std::env::temp_dir().join(format!("diskedit-carrier-{}.img", std::process::id()));

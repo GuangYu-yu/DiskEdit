@@ -10,7 +10,7 @@ pub mod qemu;
 pub mod session;
 pub mod worker;
 
-use crate::platform::{Carrier, OnlineReport, OnlineRequest, PlatformResult};
+use crate::platform::{Carrier, DiskWriteRequest, OnlineReport, OnlineRequest, PlatformResult};
 
 /// 载体 bundle 的环境变量名。
 pub const BUNDLE_ENV: &str = "DISKEDIT_VM_BUNDLE";
@@ -31,9 +31,17 @@ struct VmCarrier {
 impl Carrier for VmCarrier {
     fn online_grow(&self, request: &OnlineRequest) -> PlatformResult<OnlineReport> {
         let disk = session::Disk::open(&request.disk)?;
-        let mut guest = session::Session::open(&self.bundle, &disk, request, carrier_token())?;
+        let mut guest =
+            session::Session::open(&self.bundle, &disk, request.sector_size, carrier_token())?;
         let report = guest.online_grow(request)?;
         Ok(report)
+    }
+
+    fn write_disk(&self, request: &DiskWriteRequest) -> PlatformResult<()> {
+        let disk = session::Disk::open(&request.disk)?;
+        let mut guest =
+            session::Session::open(&self.bundle, &disk, request.sector_size, carrier_token())?;
+        guest.write_disk(request)
     }
 }
 

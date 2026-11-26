@@ -72,7 +72,7 @@ pub fn run() -> u8 {
         Some(value) if value > 0 => value,
         _ => return 5,
     };
-    let handle = match platform.open_target(Path::new(GUEST_DISK)) {
+    let mut handle = match platform.open_target(Path::new(GUEST_DISK)) {
         Ok(handle) => handle,
         Err(error) => {
             eprintln!("cannot open {GUEST_DISK}: {error}");
@@ -122,6 +122,16 @@ pub fn run() -> u8 {
                     return 5;
                 }
             }
+            Some("write_disk") => {
+                let reply = match protocol::decode_write_disk(&frame, &sid) {
+                    Ok((_, writes)) => write_segments(&mut *handle, &writes),
+                    Err(error) => Reply::Failed(error.to_string()),
+                };
+                let id = frame.get("id").and_then(Value::as_u64).unwrap_or(0);
+                if protocol::emit(&mut output, &protocol::result(id, &sid, &reply)).is_err() {
+                    return 5;
+                }
+            }
             Some("shutdown") => {
                 drop(protocol::emit(&mut output, &protocol::bye(&sid)));
                 return 0;
@@ -133,6 +143,40 @@ pub fn run() -> u8 {
             None => return 5,
         }
     }
+}
+
+/// 按绝对偏移逐段落盘，随后屏障并让来宾重读分区表。
+fn write_segments(
+    handle: &mut dyn crate::platform::TargetHandle,
+    writes: &[protocol::DiskWrite],
+) -> Reply {
+    for write in writes {
+        match handle.write_at(write.offset, &write.bytes) {
+            Ok(written) if written == write.bytes.len() => {}
+            Ok(written) => {
+                return Reply::Failed(format!(
+                    "short write at offset {}: {written} of {} bytes",
+                    write.offset,
+                    write.bytes.len()
+                ));
+            }
+            Err(error) => {
+                return Reply::Failed(format!("write at offset {} failed: {error}", write.offset));
+            }
+        }
+    }
+    if let Err(error) = handle.barrier() {
+        return Reply::Failed(format!("flush failed: {error}"));
+    }
+    if let Err(error) = handle.refresh_partitions() {
+        return Reply::Failed(format!(
+            "the guest could not re-read the partition table: {error}"
+        ));
+    }
+    Reply::Applied(crate::platform::OnlineReport {
+        blocks: None,
+        block_size: None,
+    })
 }
 
 /// 在来宾里把分区上的文件系统撑满分区；先挂载，工具运行后回读，再卸载。

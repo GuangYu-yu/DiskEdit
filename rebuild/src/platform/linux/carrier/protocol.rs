@@ -94,6 +94,90 @@ pub fn online_grow(id: u64, sid: &str, partition: u32, filesystem: FsKind, bytes
     })
 }
 
+/// 整盘离线写入帧：每段是绝对偏移与十六进制字节。
+pub fn write_disk(id: u64, sid: &str, writes: &[(u64, &[u8])]) -> Value {
+    let chunks: Vec<Value> = writes
+        .iter()
+        .map(|(offset, bytes)| json!({ "offset": offset, "bytes": hex_encode(bytes) }))
+        .collect();
+    json!({
+        "v": VERSION,
+        "type": "write_disk",
+        "id": id,
+        "sid": sid,
+        "writes": chunks,
+    })
+}
+
+/// 解出的整盘写入段。
+pub struct DiskWrite {
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+pub fn decode_write_disk(frame: &Value, sid: &str) -> PlatformResult<(u64, Vec<DiskWrite>)> {
+    if frame.get("sid").and_then(Value::as_str) != Some(sid) {
+        return Err(PlatformError::parse("a request carries a wrong session id"));
+    }
+    let id = frame
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| PlatformError::parse("a request has no id"))?;
+    let chunks = frame
+        .get("writes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| PlatformError::parse("a write request has no segments"))?;
+    let mut writes = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let offset = chunk
+            .get("offset")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| PlatformError::parse("a write segment has no offset"))?;
+        let text = chunk
+            .get("bytes")
+            .and_then(Value::as_str)
+            .ok_or_else(|| PlatformError::parse("a write segment has no bytes"))?;
+        let bytes = hex_decode(text)
+            .ok_or_else(|| PlatformError::parse("a write segment is not hexadecimal"))?;
+        writes.push(DiskWrite { offset, bytes });
+    }
+    if writes.is_empty() {
+        return Err(PlatformError::parse("a write request has no bytes"));
+    }
+    Ok((id, writes))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(b"0123456789abcdef"[(byte >> 4) as usize]));
+        out.push(char::from(b"0123456789abcdef"[(byte & 0x0f) as usize]));
+    }
+    out
+}
+
+fn hex_decode(text: &str) -> Option<Vec<u8>> {
+    if text.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 2);
+    for pair in text.as_bytes().chunks(2) {
+        let hi = digit(pair[0])?;
+        let lo = digit(pair[1])?;
+        out.push(hi << 4 | lo);
+    }
+    Some(out)
+}
+
+fn digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// 来宾对一次请求的结论。
 pub enum Reply {
     /// 操作完成；几何是可选的回读事实。
@@ -201,4 +285,42 @@ pub fn decode_request(frame: &Value, sid: &str) -> PlatformResult<Request> {
         filesystem,
         bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_disk_round_trips_absolute_segments() {
+        let frame = write_disk(
+            7,
+            "sid",
+            &[(512, &[0xde, 0xad, 0xbe, 0xef]), (4096, &[0x01])],
+        );
+        let (id, writes) = decode_write_disk(&frame, "sid").expect("帧可解");
+        assert_eq!(id, 7);
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].offset, 512);
+        assert_eq!(writes[0].bytes, vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(writes[1].offset, 4096);
+        assert_eq!(writes[1].bytes, vec![0x01]);
+    }
+
+    #[test]
+    fn write_disk_rejects_a_foreign_session_or_bad_hex() {
+        let frame = write_disk(1, "sid", &[(0, &[0x00])]);
+        assert!(decode_write_disk(&frame, "other").is_err());
+
+        let mut bad = write_disk(1, "sid", &[(0, &[0x00])]);
+        bad["writes"][0]["bytes"] = json!("0g");
+        assert!(decode_write_disk(&bad, "sid").is_err());
+
+        let mut odd = write_disk(1, "sid", &[(0, &[0x00])]);
+        odd["writes"][0]["bytes"] = json!("abc");
+        assert!(decode_write_disk(&odd, "sid").is_err());
+
+        let empty = write_disk(1, "sid", &[]);
+        assert!(decode_write_disk(&empty, "sid").is_err());
+    }
 }

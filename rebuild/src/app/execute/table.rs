@@ -45,7 +45,21 @@ pub(super) fn execute_plan(
             )
         })?;
     let (segment_size, stamp, segments) = table_parts(step)?;
-    super::filesystem::ensure_block_capability(platform, target).map_err(|error| (error, false))?;
+    match super::filesystem::ensure_block_capability(platform, target) {
+        Ok(()) => {}
+        Err(error @ ExecError::Unsupported(_)) => {
+            return execute_via_carrier(
+                platform,
+                target,
+                plan,
+                segment_size,
+                stamp,
+                segments,
+                error,
+            );
+        }
+        Err(error) => return Err((error, false)),
+    }
     let mut handle = platform
         .open_target(target)
         .map_err(|error| (ExecError::from(error), false))?;
@@ -111,6 +125,91 @@ pub(super) fn execute_plan(
         Ok(()) => Ok(None),
         Err(error) => Ok(Some(format!(
             "the table is committed but the kernel view did not refresh: {error}"
+        ))),
+    }
+}
+
+/// 宿主缺块层能力时经虚拟机载体落表：字节由来宾写，锁/摘要/原像/记录留在宿主。
+fn execute_via_carrier(
+    platform: &dyn Platform,
+    target: &Path,
+    plan: &ConfirmedPlan,
+    segment_size: u64,
+    stamp: [u8; 32],
+    segments: &[TableSegment],
+    unsupported: ExecError,
+) -> Result<Option<String>, (ExecError, bool)> {
+    let carrier = match platform.carrier() {
+        Ok(Some(carrier)) => carrier,
+        Ok(None) => return Err((unsupported, false)),
+        Err(error) => return Err((ExecError::from(error), false)),
+    };
+    let mut handle = platform
+        .open_target(target)
+        .map_err(|error| (ExecError::from(error), false))?;
+    if handle.len() < segment_size {
+        return Err((
+            ExecError::Io("the target is smaller than one sector".to_owned()),
+            false,
+        ));
+    }
+    let current = current_stamp(handle.as_mut(), segment_size).map_err(|error| (error, false))?;
+    if current != stamp {
+        return Err((
+            ExecError::IdentityChanged(
+                "the target bytes changed after the plan was made".to_owned(),
+            ),
+            false,
+        ));
+    }
+    let mut session =
+        RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
+    let observed = platform
+        .identity(target)
+        .ok()
+        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
+    match observed {
+        Some(fingerprint) if fingerprint.matches(plan.identity()) => {}
+        _ => {
+            return Err((
+                ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+                false,
+            ));
+        }
+    }
+    let mut preimages = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let bytes =
+            read_region(handle.as_mut(), segment.region, CHUNK).map_err(|error| (error, false))?;
+        preimages.push((segment.region, bytes));
+    }
+    session
+        .register(plan.request_digest(), &preimages)
+        .map_err(|error| (error, false))?;
+
+    let writes: Vec<crate::platform::CarrierWrite> = segments
+        .iter()
+        .map(|segment| crate::platform::CarrierWrite {
+            offset: segment.region.start(),
+            bytes: segment.bytes.clone(),
+        })
+        .collect();
+    let request = crate::platform::DiskWriteRequest {
+        disk: target.to_path_buf(),
+        sector_size: segment_size,
+        writes,
+    };
+    if let Err(error) = carrier.write_disk(&request) {
+        return Err((ExecError::from(error), true));
+    }
+    session.commit().map_err(|error| (error, true))?;
+    match handle.refresh_partitions() {
+        Ok(()) => Ok(Some(
+            "the table is committed through the VM carrier; the host kernel view was refreshed"
+                .to_owned(),
+        )),
+        Err(error) => Ok(Some(format!(
+            "the table is committed through the VM carrier but the host kernel view did not refresh: {error}"
         ))),
     }
 }

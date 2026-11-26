@@ -445,10 +445,35 @@ pub struct OnlineReport {
     pub block_size: Option<u64>,
 }
 
+/// 交给载体的一段绝对偏移写入。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CarrierWrite {
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// 交给载体的整盘离线写入：来宾把各段按绝对偏移写进同一块盘。
+///
+/// 用于宿主缺块层能力、本机无法安全写表的块设备目标；记录、锁、摘要与退出码都
+/// 留在宿主，来宾只落字节并重读分区表。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiskWriteRequest {
+    pub disk: PathBuf,
+    pub sector_size: u64,
+    pub writes: Vec<CarrierWrite>,
+}
+
 /// 虚拟机载体端口：把宿主做不了的在线操作交给来宾。
 pub trait Carrier: Send + Sync {
     /// 在来宾里把 `request.device` 上的文件系统撑满分区。
     fn online_grow(&self, request: &OnlineRequest) -> PlatformResult<OnlineReport>;
+
+    /// 在来宾里按绝对偏移写整盘；默认按"不支持"返回。
+    fn write_disk(&self, _request: &DiskWriteRequest) -> PlatformResult<()> {
+        Err(PlatformError::not_supported(
+            "this carrier cannot write a whole disk",
+        ))
+    }
 }
 
 /// 目标的打开方式由具体平台决定，上层只拿到这个按偏移读写的句柄。
