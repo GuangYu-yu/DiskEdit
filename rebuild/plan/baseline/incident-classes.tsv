@@ -25,3 +25,15 @@ SA1-023	gdisk	gptfdisk-master:36 文件	防御面	gdisk 防御面对称 census	�
 SA1-024	parted	parted-news:11	恢复	无盘标时 disk_set 崩溃	info 对无表目标返回空表 JSON，不进入写路径，目标字节不变	tests/case_runner.rs::info_reports_an_empty_table_without_crashing	已认领	
 SA1-025	parted	parted-news:125	在线	dmraid 盘上分区操作失败	占用探测沿 holders 递归到每一层，dm 与阵列成员按已占用处理	src/platform/linux/mod.rs::holders_are_followed_through_every_layer	已认领	
 SA1-026	parted	parted-news:460	输出	MBR 类型号在输出里缺少 0x 前缀	MBR 类型串按 0x 前缀输出，与基线 info JSON 逐字段一致	tests/equivalence.rs::both_binaries_agree_on_info_json_fields	已认领	
+SA2-001	e2fsprogs	resize2fs 1.47.0 usage	依赖行为	收缩前必须先离线 fsck，检查器 1/2 表示已修复	ext 收缩固定次序 e2fsck→resize2fs→dumpe2fs；1/2 视为修复成功，4 视为失败	src/app/execute/filesystem.rs::a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial	已认领	
+SA2-002	e2fsprogs	resize2fs 1.47.0 usage	依赖行为	resize2fs 可能在写入后失败或未长满	工具已启动但回读不足一律落已写待恢复，不谎报完成	tests/online.rs::a_short_filesystem_after_the_tool_is_partial	已认领	
+SA2-003	e2fsprogs	dumpe2fs -h	依赖行为	尺寸回读须以块数乘块大小覆盖到目标末端	只接受恰好填满目标的回读，差一整块以上即未完成	src/app/execute/filesystem.rs::the_size_readback_accepts_only_a_filled_filesystem	已认领	
+SA2-004	xfsprogs	xfs_growfs 6.6.0 usage	依赖行为	xfs_growfs 只接受挂载点且只增不减	非 btrfs 的在线缩容一律拒绝，不调用任何 xfs 工具	tests/online.rs::online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem	已认领	
+SA2-005	xfsprogs	xfs_growfs -n	依赖行为	xfs 无设备级尺寸探针，须用 -n 读挂载中的几何	在线扩容后以 xfs_growfs -n 的 data 几何回读，覆盖到分区末尾才算完成	src/app/execute/filesystem.rs::an_xfs_grow_is_verified_by_the_data_geometry	已认领	
+SA2-006	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	btrfs 扩容以 superblock 的 total_bytes 为事实	在线扩容后从 superblock 回读 total_bytes 与 sectorsize，覆盖不足落已写待恢复	tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock	已认领	
+SA2-007	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	文件系统缩容失败时不得再动分区表	btrfs 收缩工具失败或未达目标时，分区表与内核视图保持不变	tests/online.rs::a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition	已认领	
+SA2-008	btrfs-progs	btrfs filesystem resize 6.6.3 usage	依赖行为	缺外部工具时不能猜测结果	工具不可用时在写任何字节之前按不支持拒绝	tests/online.rs::online_btrfs_shrink_without_the_tool_is_refused_before_any_write	已认领	
+SA2-009	ntfs-3g	ntfsresize 2022.10.3 usage	依赖行为	ntfsresize 需要强制旗标与绝对字节尺寸	执行参数固定为 -f 与 --size <bytes>；缺参数级用例，待补	owner:SA3	已登记缺口	
+SA2-010	f2fs-tools	f2fs-tools（宿主未装）	依赖行为	f2fs 扩容次序为 fsck.f2fs 后 resize.f2fs	档案表固定该次序；宿主无 f2fs 工具，真实执行未验证	owner:SA3	已登记缺口	
+SA2-011	全部 T2	plan/01 §9	依赖行为	工具跨版本输出差异可能改变解析结果	只解析稳定字段并在测试中固定采样；跨版本矩阵未建立	owner:SA3	已登记缺口	
+SA2-012	全部 T2	QEMU s13	依赖行为	各文件系统族 mkfs 与 check 的真实工具覆盖面	vfat 已在真内核覆盖；exfat/ntfs/f2fs 的 mkfs 与 check 未在真实工具下验证	owner:SA3	已登记缺口	
