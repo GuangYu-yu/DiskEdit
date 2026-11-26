@@ -421,3 +421,20 @@ fn gpt_placement_rejects_address_space_overflow() {
         Err(EditError::NoGapFits { .. })
     ));
 }
+
+// covers: B2
+#[test]
+fn an_unusable_identity_cannot_plan_a_write() {
+    use diskedit::app::decide::{Plan, Refusal};
+    use diskedit::app::report::exit::{UNSUPPORTED, exit_of_refusal};
+    use diskedit_core::fingerprint::Fingerprint;
+
+    // 只有 Strong 等级能驱动写计划；dm/md、仅读数不一致等不可用身份落 6。
+    let error = Plan::write(Vec::new(), Fingerprint::unusable([0x11; 32]))
+        .expect_err("不可用身份不得构造写计划");
+    assert!(
+        matches!(error, Refusal::IdentityUnprovable { .. }),
+        "实际拒绝：{error:?}"
+    );
+    assert_eq!(exit_of_refusal(&error), UNSUPPORTED);
+}
