@@ -555,6 +555,48 @@ fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
     );
 }
 
+// covers: R0341, R0342, R0348, R0349
+#[test]
+fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s6";
+    std::fs::create_dir_all(directory).expect("扩缩夹具目录可建");
+    let image = format!("{directory}/no-room.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
+        .expect("复制 GPT 夹具");
+    let target = |n: u32| format!("{image}:{n}");
+
+    // 顶到 last usable 后再 `grow`：拒绝，退 3（R0341）。
+    let (code, _, stderr) = run_argv(&["resize", &target(2), "grow", "--no-fs", "--yes"]);
+    assert_eq!(code, 0, "首次扩容应成功：{stderr}");
+    let after_grow = std::fs::read(&image).expect("读取夹具");
+    let (code, _, stderr) = run_argv(&["resize", &target(2), "grow", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "已顶到 last usable 的 grow 应拒绝：{stderr}");
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        after_grow,
+        "拒绝时目标字节不得改变"
+    );
+
+    // 右侧被邻接分区挡住（#1 的右边是 #2）：`grow` 拒绝，退 3（R0342）。
+    let (code, _, stderr) = run_argv(&["resize", &target(1), "grow", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "右侧被占的 grow 应拒绝：{stderr}");
+
+    // 绝对 SIZE 换算后越出可用区：拒绝，退 3（R0348）。
+    let before = std::fs::read(&image).expect("读取夹具");
+    let (code, _, stderr) = run_argv(&["resize", &target(2), "99999999", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "SIZE 越出可用区应拒绝：{stderr}");
+
+    // 绝对 SIZE 需要的增长超过右侧空闲：拒绝，退 3（R0349）。
+    let (code, _, stderr) = run_argv(&["resize", &target(1), "2M", "--no-fs", "--yes"]);
+    assert_eq!(code, 3, "增长超过右侧空闲应拒绝：{stderr}");
+    assert_eq!(
+        std::fs::read(&image).expect("读取夹具"),
+        before,
+        "拒绝时目标字节不得改变"
+    );
+}
+
 // covers: B15, R0064, R0094
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {

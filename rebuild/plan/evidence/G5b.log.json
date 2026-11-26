@@ -13,9 +13,9 @@
   "plan/baseline/surface-allowed.txt"
  ],
  "exit_code": 0,
- "commit": "b81330a",
- "tree": "c36b5cb3c20b61cc",
- "at": "2026-11-26T11:48:55+00:00",
+ "commit": "36bc46a",
+ "tree": "0c32f52b7e11a569",
+ "at": "2026-11-26T11:51:33+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,

@@ -98,6 +98,19 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let grow = new_end > old_end;
     let shrink = new_end < old_end;
 
+    // `grow` 请求无空间可扩不是"原样重跑"：顶到 last usable 与右侧被占是两种拒绝，
+    // 退出码 3（基线 cmd/resize.rs:491、:500）。显式 SIZE/--end 等于现状才是空操作。
+    if resize.size.as_ref() == Some(&SizeSpec::Grow) && !grow && !shrink {
+        let why = if old_end >= last_usable {
+            format!("partition already ends at last_usable_lba {last_usable} — nothing to grow")
+        } else {
+            "right side is occupied — pass --allow-move to relocate the blocking partitions \
+             (plan will be printed; --yes confirms)"
+                .to_owned()
+        };
+        return Decision::Refuse(Refusal::TableEdit { why });
+    }
+
     if grow && new_end - old_end > free {
         return Decision::Refuse(Refusal::TableEdit {
             why: "the right side is occupied by another partition — move it first, then rerun"
