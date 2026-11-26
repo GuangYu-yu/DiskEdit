@@ -16,7 +16,7 @@
 
 **`rebuild/` 之外一律只读。** 仓库根的 `src/`、`tests/`、`Cargo.toml`、`docs/`、CI 配置、`.trae/` 都只是参考与行为基线：不修改、不删除、不重命名、不格式化、不新增文件。交付时 `git status` 只允许出现 `rebuild/` 下的路径。这条边界由 `plan/instruments/footprint.py` 机械执行（G9 与 CI 的 discipline 作业）；提交信息由 `plan/instruments/commits.py` 机械执行（G10）。基线是 `plan/footprint.base` 所在的提交。
 
-`rebuild/` 的参数化工作区与仓库根互不隶属：根 `Cargo.toml` 是单包，`rebuild/Cargo.toml` 自带 `[workspace]`，两边的 `Cargo.lock` 互不复用。仓库根的 `Cargo.lock` 不属于本项目的产物，已从交付树移除；`rebuild/Cargo.lock` 按 `04` 第 63 行入库。
+`rebuild/` 的参数化工作区与仓库根互不隶属：根 `Cargo.toml` 是单包，`rebuild/Cargo.toml` 自带 `[workspace]`，两边的 `Cargo.lock` 互不复用。仓库根的 `Cargo.lock` 不属于本项目的产物，已从交付树移除；`rebuild/Cargo.lock` 与 `rebuild/.gitignore` 按 `04` §2.1 也不入库、不推送，只保留本地文件。
 
 **`rebuild/` 之内完全自由。** 目录、模块、类型、依赖、状态机、记录布局、测试与构建配置都按最优方式写，不受外部实现的组织方式约束。
 

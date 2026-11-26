@@ -133,7 +133,6 @@ const NTFS_RESIZE: &[Program] = &[Program::Ntfsresize];
 const BTRFS: &[Program] = &[Program::Btrfs];
 const F2FS_GROW: &[Program] = &[Program::FsckF2fs, Program::ResizeF2fs];
 const XFS_GROW: &[Program] = &[Program::XfsGrowfs];
-const VFAT_GROW: &[Program] = &[Program::Fatresize];
 const LVM_SHRINK: &[Program] = &[Program::Pvs, Program::Vgs, Program::Pvresize];
 const SWAP_REBUILD: &[Program] = &[Program::Mkswap];
 
@@ -200,7 +199,9 @@ pub const fn profile(kind: ContentKind) -> Profile {
             shrink_scope: ShrinkScope::Any,
         },
         ContentKind::Filesystem(FsKind::Vfat) => Profile {
-            grow: Support::Tools(VFAT_GROW),
+            grow: Support::Unsupported(
+                "the FAT resizer crashes on a partition device view; vfat grow is not offered",
+            ),
             shrink: Support::Unsupported("vfat shrink is not wired to a tool"),
             attrs: Support::Tools(&[Program::Fatlabel]),
             check: Support::Tools(&[Program::FsckVfat]),

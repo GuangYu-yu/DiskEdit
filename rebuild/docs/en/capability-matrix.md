@@ -17,7 +17,7 @@ there as well.
 | `btrfs` | supported | supported | supported | supported | supported |
 | `f2fs` | supported | unsupported | unsupported | unsupported | supported |
 | `exfat` | unsupported | unsupported | supported | supported | supported |
-| `vfat` | supported | unsupported | supported | supported | supported |
+| `vfat` | unsupported | unsupported | supported | supported | supported |
 | `ntfs` | supported | supported | supported | supported | supported |
 | `hfsplus` | unsupported | unsupported | unsupported | unsupported | unsupported |
 | `apfs` | unsupported | unsupported | unsupported | unsupported | unsupported |

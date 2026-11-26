@@ -235,7 +235,7 @@ fn online_invocation(online: &Online<'_>) -> Option<(Program, Vec<String>)> {
                 vec![
                     "filesystem".to_owned(),
                     "resize".to_owned(),
-                    online.bytes.to_string(),
+                    btrfs_size(online.bytes),
                     mount,
                 ],
             )),
@@ -896,6 +896,11 @@ fn mkfs_invocation(kind: MkfsKind, label: Option<&str>) -> Option<(Program, Vec<
     Some((program, args))
 }
 
+/// btrfs 的 resize 只接受带单位的大小；按 KiB 向下取整，确保不超过目标分区。
+fn btrfs_size(bytes: u64) -> String {
+    format!("{}k", bytes / 1024)
+}
+
 /// 扩容的固定程序序列；挂载点形态另加临时挂载。
 enum GrowPlan {
     InPlace(Vec<(Program, Vec<String>)>),
@@ -914,7 +919,7 @@ fn grow_plan(kind: FsKind) -> Option<GrowPlan> {
             (Program::FsckF2fs, Vec::new()),
             (Program::ResizeF2fs, Vec::new()),
         ],
-        FsKind::Vfat => vec![(Program::Fatresize, vec!["-s".to_owned(), "max".to_owned()])],
+        // vfat 不在此列：FAT 扩容器在带偏移的分区设备视图上会断言崩溃，档案表按不支持拒绝。
         FsKind::Xfs => return Some(GrowPlan::Mounted(vec![(Program::XfsGrowfs, Vec::new())])),
         FsKind::Btrfs => {
             return Some(GrowPlan::Mounted(vec![(
@@ -928,6 +933,7 @@ fn grow_plan(kind: FsKind) -> Option<GrowPlan> {
         }
         FsKind::Squashfs
         | FsKind::Erofs
+        | FsKind::Vfat
         | FsKind::Exfat
         | FsKind::HfsPlus
         | FsKind::Apfs
@@ -1043,7 +1049,7 @@ pub(super) fn shrink(
                     vec![
                         "filesystem".to_owned(),
                         "resize".to_owned(),
-                        bytes.to_string(),
+                        btrfs_size(bytes),
                     ],
                 )],
                 token,
@@ -1484,6 +1490,7 @@ mod tests {
             }
             GrowPlan::InPlace(_) => panic!("btrfs 经挂载扩容"),
         }
+        assert!(grow_plan(FsKind::Vfat).is_none());
         assert!(grow_plan(FsKind::Squashfs).is_none());
     }
 

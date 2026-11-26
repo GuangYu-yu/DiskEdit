@@ -367,6 +367,51 @@ s19_f2fs_grow() {
   detach "$L"; rm -f /tmp/s19.img
 }
 
+# vfat 扩容不提供：fatresize 1.1.0 在带偏移的 loop 分区视图上断言崩溃（宿主同版本
+# 亦 buffer overflow），决策层在写任何字节前按不支持拒绝。
+s20_vfat_grow_refused() {
+  newdisk /tmp/s20.img 300
+  printf 'label: gpt\n, 96M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  mkfs.vfat -F 32 "${L}p1" >/dev/null 2>&1 || { no s20_mkfs "mkfs.vfat failed"; detach "$L"; rm -f /tmp/s20.img; return; }
+  before=$(sfdisk -d "$L" 2>/dev/null)
+  "$DE" resize "$L:1" --grow-to-end --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s20_refused 6 "$rc"
+  grep -qi "unsupported" /tmp/o && ok s20_message || no s20_message "$(cat /tmp/o)"
+  assert_eq s20_no_write "$before" "$(sfdisk -d "$L" 2>/dev/null)"
+  mkdir -p /mnt/s20
+  mount "${L}p1" /mnt/s20 2>/tmp/o && { ok s20_fs_intact; umount /mnt/s20; } || no s20_fs_intact "mount vfat failed"
+  detach "$L"; rm -f /tmp/s20.img
+}
+
+# NTFS 离线收缩：真实 ntfsresize --size 把卷缩到分区末尾。
+s21_ntfs_shrink() {
+  newdisk /tmp/s21.img 300
+  printf 'label: gpt\n, 200M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  mkntfs -q -F "${L}p1" >/dev/null 2>&1 || { no s21_mkfs "mkntfs failed"; detach "$L"; rm -f /tmp/s21.img; return; }
+  size_of() { ntfsresize --info --force "$1" 2>&1 | grep 'Current volume size' | grep -o '[0-9][0-9]* bytes' | head -1 | cut -d' ' -f1; }
+  before=$(size_of "${L}p1")
+  "$DE" resize "$L:1" --end 198655 --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s21_shrink_rc 0 "$rc"
+  after=$(size_of "${L}p1")
+  assert_gt s21_volume_shrank "$before" "$after"
+  detach "$L"; rm -f /tmp/s21.img
+}
+
+# btrfs 离线收缩：挂载后 btrfs filesystem resize 缩到目标，再落分区表。
+s22_btrfs_shrink() {
+  modprobe btrfs 2>/dev/null
+  newdisk /tmp/s22.img 960
+  printf 'label: gpt\n, 768M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
+  mkfs.btrfs -q -f "${L}p1" >/dev/null 2>&1 || { no s22_mkfs "mkfs.btrfs failed"; detach "$L"; rm -f /tmp/s22.img; return; }
+  "$DE" resize "$L:1" --end 1050623 --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s22_shrink_rc 0 "$rc"
+  dev=$(btrfs inspect-internal dump-super "${L}p1" 2>/dev/null | awk '$1=="total_bytes"{print $2}')
+  part=$(bytes "${L}p1")
+  assert_ge s22_btrfs_within_part "$part" "$dev"
+  assert_gt s22_btrfs_shrank "600000000" "$dev"
+  detach "$L"; rm -f /tmp/s22.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -387,11 +432,14 @@ s16_exfat_mkfs_check
 s17_f2fs_mkfs_check
 s18_ntfs_grow
 s19_f2fs_grow
+s20_vfat_grow_refused
+s21_ntfs_shrink
+s22_btrfs_shrink
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 
 /// 来宾需要的工具集：分区、文件系统、LVM、内核模块与探测。
-const PACKAGES: &str = "lvm2,btrfs-progs,xfsprogs,dosfstools,exfatprogs,ntfs-3g,f2fs-tools,kmod,\
+const PACKAGES: &str = "lvm2,btrfs-progs,xfsprogs,dosfstools,exfatprogs,ntfs-3g,f2fs-tools,fatresize,kmod,\
 e2fsprogs,util-linux,procps,pciutils,fdisk";
 
 #[test]
