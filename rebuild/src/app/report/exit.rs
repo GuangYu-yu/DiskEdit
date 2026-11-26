@@ -87,6 +87,7 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
 mod tests {
     use super::*;
 
+    // covers: I7
     #[test]
     fn every_unwritten_failure_has_one_code() {
         for (failure, expected) in [

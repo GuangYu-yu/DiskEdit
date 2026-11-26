@@ -159,3 +159,114 @@ impl<'a> WriteChannel<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::app::execute::transaction::Mint;
+    use crate::platform::{PlatformResult, TargetKind};
+
+    /// 内存目标：只用于验证写通道的边界与回读，不触盘。
+    struct MemoryTarget {
+        bytes: Vec<u8>,
+    }
+
+    impl TargetHandle for MemoryTarget {
+        fn path(&self) -> &Path {
+            Path::new("memory")
+        }
+
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+
+        fn kind(&self) -> TargetKind {
+            TargetKind::File
+        }
+
+        fn sector_size(&self) -> Option<u64> {
+            Some(512)
+        }
+
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            let end = (start + buf.len()).min(self.bytes.len());
+            let n = end - start;
+            buf[..n].copy_from_slice(&self.bytes[start..end]);
+            Ok(n)
+        }
+
+        fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            let end = (start + buf.len()).min(self.bytes.len());
+            let n = end - start;
+            self.bytes[start..end].copy_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn barrier(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn refresh_partitions(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+    }
+
+    fn token() -> Recorded {
+        Recorded::mint(&Mint::new(), 1)
+    }
+
+    // covers: I3
+    #[test]
+    fn a_write_outside_the_declared_regions_is_rejected() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 512).expect("区间")];
+        let mut channel = WriteChannel::new(&mut target, &declared);
+        let region = Region::sized(512, 512).expect("区间");
+        let error = channel
+            .write(&token(), region, &[0u8; 512])
+            .expect_err("未声明的区间必须被拒绝");
+        assert!(
+            error.to_string().contains("not declared"),
+            "实际错误：{error}"
+        );
+    }
+
+    // covers: I11
+    #[test]
+    fn a_write_past_the_target_length_is_rejected() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 8192).expect("区间")];
+        let mut channel = WriteChannel::new(&mut target, &declared);
+        let region = Region::sized(4096, 512).expect("区间");
+        let error = channel
+            .write(&token(), region, &[0u8; 512])
+            .expect_err("越过目标长度的写入必须被拒绝");
+        assert!(
+            error.to_string().contains("past the target length"),
+            "实际错误：{error}"
+        );
+    }
+
+    // covers: I3, I11
+    #[test]
+    fn a_declared_in_bounds_write_reads_back_identically() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 1024).expect("区间")];
+        let mut channel = WriteChannel::new(&mut target, &declared);
+        let region = Region::sized(0, 512).expect("区间");
+        channel
+            .write(&token(), region, &[0x5au8; 512])
+            .expect("区间内的写入应成功");
+        channel.verify_written().expect("回读摘要应一致");
+    }
+}

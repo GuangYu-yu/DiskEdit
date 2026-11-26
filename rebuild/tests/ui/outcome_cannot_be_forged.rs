@@ -8,3 +8,5 @@ fn main() {
         reason: None,
     };
 }
+
+// covers: I1

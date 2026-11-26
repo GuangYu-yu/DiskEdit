@@ -325,6 +325,7 @@ mod tests {
         profile(kind).support(verb).tools()
     }
 
+    // covers: I6
     #[test]
     fn every_content_kind_has_a_complete_row() {
         assert_eq!(ContentKind::ALL.len(), 20);

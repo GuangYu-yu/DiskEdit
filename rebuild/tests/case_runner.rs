@@ -91,6 +91,7 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     );
 }
 
+// covers: B26
 #[test]
 fn add_delete_and_set_rewrite_both_copies() {
     fixtures::prepare();
@@ -201,6 +202,114 @@ fn add_delete_and_set_rewrite_both_copies() {
     let (code, stdout, _) = run_argv(&["info", &aligned]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
+}
+
+/// 在一张镜像的指定绝对扇区写入可辨认的标记字节。
+fn stamp_at(image: &str, sector: u64, marker: &[u8]) {
+    let mut bytes = std::fs::read(image).expect("读取镜像");
+    let offset = sector as usize * 512;
+    bytes[offset..offset + marker.len()].copy_from_slice(marker);
+    std::fs::write(image, bytes).expect("写回镜像");
+}
+
+/// 读回镜像指定绝对扇区的若干字节。
+fn read_at(image: &str, sector: u64, len: usize) -> Vec<u8> {
+    let bytes = std::fs::read(image).expect("读取镜像");
+    let offset = sector as usize * 512;
+    bytes[offset..offset + len].to_vec()
+}
+
+// covers: B14, B21, D8, R0033
+#[test]
+fn move_and_copy_relocate_data_and_keep_type_guids() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s4";
+    std::fs::create_dir_all(directory).expect("搬移夹具目录可建");
+
+    // 搬移：#2（3072..4095）平移到 5120，分区内容随数据步一起搬到新位置。
+    let moved = format!("{directory}/move.img");
+    std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &moved)
+        .expect("复制 GPT 夹具");
+    let marker = *b"DATA-MARK";
+    // #2 起点之后第 28 个扇区，搬移后应出现在 5120 + 28 处。
+    stamp_at(&moved, 3100, &marker);
+    let (code, stdout, stderr) =
+        run_argv(&["move", &format!("{moved}:2"), "--start", "5120", "--yes"]);
+    assert_eq!(code, 0, "搬移应成功：{stderr}");
+    assert!(stdout.contains("moved partition #2"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &moved]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"first_lba\":5120"), "{stdout}");
+    assert!(stdout.contains("\"last_lba\":6143"), "{stdout}");
+    // D8：搬移不改写已有分区的类型 GUID。
+    assert!(
+        stdout.contains("\"type\":\"0FC63DAF-8483-4772-8E79-3D69D8477DE4\""),
+        "搬移后 #2 的类型 GUID 应保持不变：{stdout}"
+    );
+    assert!(
+        stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
+        "未参与搬移的 #1 类型 GUID 应保持不变：{stdout}"
+    );
+    // B14/B21：内容确实搬到新起点。
+    assert_eq!(
+        read_at(&moved, 5148, marker.len()),
+        marker,
+        "搬移后的分区内容缺失"
+    );
+
+    // 复制：#1（2048..3071）内容复制到新槽位 6144，源保持不变。
+    let copied = format!("{directory}/copy.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &copied,
+    )
+    .expect("复制 GPT 夹具");
+    stamp_at(&copied, 2050, &marker);
+    let (code, stdout, stderr) = run_argv(&[
+        "copy",
+        &format!("{copied}:1"),
+        "--start",
+        "6144",
+        "--name",
+        "clone",
+        "--yes",
+    ]);
+    assert_eq!(code, 0, "复制应成功：{stderr}");
+    assert!(stdout.contains("copied to partition #3"), "{stdout}");
+    let (code, stdout, _) = run_argv(&["info", &copied]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
+    assert!(stdout.contains("\"name\":\"clone\""), "{stdout}");
+    // 副本继承源类型 GUID（D8 的“不改写用户已有类型”）。
+    assert!(
+        stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
+        "副本应继承源类型 GUID：{stdout}"
+    );
+    // 源与副本都保留内容。
+    assert_eq!(
+        read_at(&copied, 2050, marker.len()),
+        marker,
+        "复制不得移动源内容"
+    );
+    assert_eq!(read_at(&copied, 6146, marker.len()), marker, "副本内容缺失");
+
+    // 越界的搬移应拒绝且不改字节。
+    let guarded = format!("{directory}/guard.img");
+    std::fs::copy(
+        std::path::Path::new(fixtures::BASE).join("gpt.img"),
+        &guarded,
+    )
+    .expect("复制 GPT 夹具");
+    let before = std::fs::read(&guarded).expect("读取镜像");
+    let (code, _, _) = run_argv(&["move", &format!("{guarded}:2"), "--start", "3072", "--yes"]);
+    assert_eq!(code, 0, "起点相同的搬移应是 no-op 成功");
+    let (code, _, _) = run_argv(&["move", &format!("{guarded}:2"), "--start", "8000", "--yes"]);
+    assert_eq!(code, 3, "越过可用区的搬移应拒绝");
+    assert_eq!(
+        std::fs::read(&guarded).expect("读取镜像"),
+        before,
+        "拒绝时不得改字节"
+    );
 }
 
 // covers: B13, B26, R0059, R0203, R0209

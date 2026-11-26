@@ -11,6 +11,7 @@
 // covers: R0176, R0177, R0178, R0180, R0182, R0183, R0184, R0185
 // covers: R0187, R0188
 // covers: R0064, R0094, R0098
+// covers: R0060, R0061
 
 /// 一条命令行用例。
 pub struct Case {
@@ -902,5 +903,19 @@ pub const CASES: &[Case] = &[
         exit: 3,
         stdout: "",
         stderr: "refused:",
+    },
+    Case {
+        name: "move without --start is a usage error",
+        argv: &["move", "target/fixtures/s1/gpt.img:2", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "needs --start",
+    },
+    Case {
+        name: "copy without --start is a usage error",
+        argv: &["copy", "target/fixtures/s1/gpt.img:1", "--yes"],
+        exit: 2,
+        stdout: "",
+        stderr: "needs --start",
     },
 ];

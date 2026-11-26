@@ -267,6 +267,7 @@ mod tests {
         assert!(unknown.clone().require_generation(floor).is_unknown());
     }
 
+    // covers: I10
     #[test]
     fn evidence_separates_absence_from_unknown_format() {
         let present: Evidence<u32> = Evidence::Present(7);

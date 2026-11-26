@@ -9,3 +9,5 @@ fn main() {
         identity: Fingerprint::strong([0; 32]),
     };
 }
+
+// covers: I2

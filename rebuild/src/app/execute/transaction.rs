@@ -254,6 +254,7 @@ fn preimage(region: Region, bytes: &[u8]) -> Preimage {
 mod tests {
     use super::*;
 
+    // covers: I4
     #[test]
     fn mint_grants_recorded_tokens() {
         let mint = Mint::new();

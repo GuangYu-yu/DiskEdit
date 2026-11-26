@@ -208,6 +208,7 @@ mod tests {
         }
     }
 
+    // covers: I8
     #[test]
     fn truncation_at_any_byte_has_a_deterministic_plan() {
         let bytes = bytes_with(&all_frames());
