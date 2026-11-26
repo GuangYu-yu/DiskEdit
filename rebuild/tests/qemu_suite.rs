@@ -272,6 +272,31 @@ s13_vfat_mkfs() {
   detach "$L"; rm -f /tmp/s13.img
 }
 
+# S14: 多设备 btrfs 的成员分区不能单独收缩——拒绝且不改盘面。
+s14_multidevice_btrfs_refused() {
+  modprobe btrfs 2>/dev/null
+  for t in a b; do
+    dd if=/dev/zero of=/tmp/s14$t.img bs=1M count=240 status=none
+    eval "L$t=\$(losetup -fP --show /tmp/s14$t.img)"; sleep 1
+    eval "D=\$L$t"; printf 'label: gpt\n, 160M, L\n' | sfdisk "$D" >/dev/null 2>&1; sleep 1
+  done
+  mkfs.btrfs -q -f -d raid1 -m raid1 "${La}p1" "${Lb}p1" >/tmp/o 2>&1 || {
+    no s14_mkfs "multi-device mkfs.btrfs failed"
+    losetup -d "$La" 2>/dev/null; losetup -d "$Lb" 2>/dev/null
+    rm -f /tmp/s14a.img /tmp/s14b.img; return
+  }
+  before=$(sfdisk -d "$La" 2>/dev/null)
+  "$DE" resize "$La:1" --end 309247 --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s14_refused 6 "$rc"
+  assert_eq s14_no_write "$before" "$(sfdisk -d "$La" 2>/dev/null)"
+  # 成员仍然可挂载：拒绝发生在任何写入之前。
+  mkdir -p /mnt/s14; mount "${La}p1" /mnt/s14 2>/tmp/o
+  assert_rc s14_fs_intact 0 "$?"
+  umount /mnt/s14 2>/dev/null
+  losetup -d "$La" 2>/dev/null; losetup -d "$Lb" 2>/dev/null
+  rm -f /tmp/s14a.img /tmp/s14b.img
+}
+
 echo "=== SCENARIOS START ==="
 s1_offline_ext4_grow
 s2_offline_ext4_shrink
@@ -286,6 +311,7 @@ s10_table_edits
 s11_mkfs_and_check
 s12_online_xfs_grow
 s13_vfat_mkfs
+s14_multidevice_btrfs_refused
 echo "=== SCENARIOS SUMMARY pass=$PASS fail=$FAIL failed=[$FAILED] ==="
 "##;
 

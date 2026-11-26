@@ -12,7 +12,7 @@ use diskedit_core::region::Region;
 use super::transaction::RecordSession;
 use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
 use crate::app::decide::{ConfirmedPlan, Step, StepKind};
-use crate::platform::{LoopBinding, Platform, TargetKind, ToolRun};
+use crate::platform::{LoopBinding, Occupancy, Platform, TargetKind, ToolRun};
 
 /// 意图记录里的固定标签：一次文件系统改写。
 const FS_INTENT: &[u8] = b"filesystem";
@@ -1021,19 +1021,34 @@ pub(super) fn shrink(
             token,
         )
         .map(|_| ()),
-        FsKind::Btrfs => grow_mounted(
-            platform,
-            device,
-            &[(
-                Program::Btrfs,
-                vec![
-                    "filesystem".to_owned(),
-                    "resize".to_owned(),
-                    bytes.to_string(),
-                ],
-            )],
-            token,
-        ),
+        // 多设备 btrfs 收缩不受支持：任何成员设备都不能单独改小。占用证据在挂载前
+        // 由目标自己的 superblock 给出（B17），所以未挂载也能拒绝，且不写任何字节。
+        FsKind::Btrfs => {
+            if let Occupancy::Used { evidence } = platform
+                .occupancy(device)
+                .map_err(|error| (ExecError::from(error), false))?
+            {
+                return Err((
+                    ExecError::Unsupported(format!(
+                        "cannot shrink this btrfs filesystem: {evidence}"
+                    )),
+                    false,
+                ));
+            }
+            grow_mounted(
+                platform,
+                device,
+                &[(
+                    Program::Btrfs,
+                    vec![
+                        "filesystem".to_owned(),
+                        "resize".to_owned(),
+                        bytes.to_string(),
+                    ],
+                )],
+                token,
+            )
+        }
         FsKind::Xfs
         | FsKind::F2fs
         | FsKind::Vfat
