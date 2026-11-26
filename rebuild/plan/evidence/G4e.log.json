@@ -1,0 +1,23 @@
+{
+ "gate": "G4e",
+ "kind": "test",
+ "command": [
+  "cargo",
+  "test",
+  "--lib"
+ ],
+ "exit_code": 0,
+ "commit": "aae8a59",
+ "tree": "d9551d9bc6ef3bfe",
+ "at": "2026-11-26T05:16:49+00:00",
+ "counts": {
+  "result_lines": 1,
+  "passed": 38,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G4e.log"
+}

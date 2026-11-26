@@ -24,6 +24,8 @@ G4a	 model	test	135	 	 	cargo test -p diskedit-core
 G4b	 model	test	4	 	 	cargo test --test contract
 G4c	 model	test	4	 	 	cargo test --test case_runner
 G4d	 model	test	3	 	 	cargo test --test residue
+G4e	 model	test	38	 	 	cargo test --lib
+G4f	 model	test	3	 	 	cargo test --test invariants
 G5a	 model	test	1	 	 	cargo test --test contract_surface
 G5b	 model	lint	1	 	target/command-surface.json	python plan/instruments/census.py surface --old ../src --new target/command-surface.json --allow plan/baseline/surface-allowed.txt
 G6	 model	lint	1	 	plan/baseline/refusal-due.tsv	python plan/instruments/census.py owners --baseline plan/baseline --map plan/baseline/refusal-map.tsv --tests tests --due plan/baseline/refusal-due.tsv

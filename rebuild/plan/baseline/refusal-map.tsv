@@ -70,3 +70,6 @@ R0098	src/app/cli/parse.rs parse_resizefs 拒绝分区形态携带尺寸	旧 cmd
 R0059	src/app/cli/parse.rs parse_resize 缺 SIZE/--end 报用法	旧 cmd/resize 同形缺尺寸实跑退 2	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
 R0203	src/app/decide/resize.rs resolve_end 终点越过 last usable 落拒绝	旧 cmd/layout.rs:875 同形拒绝	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
 R0209	src/app/decide/resize.rs filesystem_step --no-fs 收缩拒绝	旧 cmd/layout.rs:1006 同文案拒绝	tests/case_runner.rs 的 resize_rewrites_the_table_and_refuses_unsafe_shrinks
+R0033	src/app/decide/edit.rs place_range 校验目标区间在可用范围内	旧 assembly.rs:798 的 move 落位拒绝（基线 move 到越界 LBA 退 3）	tests/case_runner.rs 的 move_and_copy_relocate_data_and_keep_type_guids
+R0060	src/app/cli/parse.rs parse_move 要求 --start	旧 cli.rs:1586 实跑 move <img>:2 --yes 退 2	tests/cases/mod.rs 的 move without --start is a usage error
+R0061	src/app/cli/parse.rs parse_copy 要求 --start	旧 cli.rs:1606 实跑 copy <img>:1 --yes 退 2	tests/cases/mod.rs 的 copy without --start is a usage error
