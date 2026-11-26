@@ -44,6 +44,18 @@ pub fn resize(report: &ResizePreview) -> String {
     )
 }
 
+/// 退出码 `5` 的人读指引：三要素（发生了什么、证据在哪、下一步）固定，
+/// 末尾追加本次运行的具体原因，便于排障。
+pub fn recovery(cause: &str) -> String {
+    format!(
+        "— the target may already have been changed; check with `diskedit info` before retrying\n\
+         evidence: `diskedit inspect <target>` names any recovery file left for the target\n\
+         next: `diskedit recover` restores the bytes recorded for this target when the record still \
+         allows it; `diskedit recover --release` releases the record and leaves those bytes in place\n\
+         cause: {cause}"
+    )
+}
+
 fn verdict(record: &RecordVerdict, occupancy: &Occupancy) -> &'static str {
     match (record, occupancy) {
         (RecordVerdict::Unresolved { .. }, _) => "nothing inspected",
@@ -54,5 +66,23 @@ fn verdict(record: &RecordVerdict, occupancy: &Occupancy) -> &'static str {
         }
         (RecordVerdict::Unreadable { .. }, _) => "record state cannot be proved; do not write",
         (RecordVerdict::Absent, Occupancy::Idle) => "no record and no usage; target is idle",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: D12
+    #[test]
+    fn recovery_text_keeps_the_three_elements_and_adds_the_cause() {
+        let text = recovery("the write barrier failed");
+        assert!(
+            text.contains("the target may already have been changed"),
+            "{text}"
+        );
+        assert!(text.contains("evidence:"), "{text}");
+        assert!(text.contains("next:"), "{text}");
+        assert!(text.contains("cause: the write barrier failed"), "{text}");
     }
 }

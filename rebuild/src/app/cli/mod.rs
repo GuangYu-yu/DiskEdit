@@ -344,12 +344,16 @@ fn write(
     if outcome.succeeded() {
         println!("{note}");
     } else if let Some(reason) = outcome.reason() {
-        let prefix = if code == exit::REFUSED {
-            "refused"
+        if code == exit::PARTIAL {
+            eprintln!("{}", report::text::recovery(reason));
         } else {
-            "error"
-        };
-        eprintln!("{prefix}: {reason}");
+            let prefix = if code == exit::REFUSED {
+                "refused"
+            } else {
+                "error"
+            };
+            eprintln!("{prefix}: {reason}");
+        }
     }
     code
 }
