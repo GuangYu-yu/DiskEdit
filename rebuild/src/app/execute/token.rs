@@ -14,9 +14,6 @@ pub struct Recorded {
 
 impl Recorded {
     /// 由事务模块铸造；`Mint` 只能在其定义模块内构造，因此别处无法仿造令牌。
-    ///
-    /// S5 接线事务后即被调用；在那之前保留铸造端，避免把令牌做成公开构造。
-    #[allow(dead_code)]
     pub(crate) const fn mint(_mint: &Mint, sequence: u64) -> Self {
         Self { sequence }
     }

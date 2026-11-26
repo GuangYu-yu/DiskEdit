@@ -164,6 +164,7 @@ fn check_sector(sector: u64) -> PlatformResult<()> {
     }
 }
 
+// 命令行参数按入口顺序一一列出；拆成结构体只会把同一组参数再抄一遍。
 #[allow(clippy::too_many_arguments)]
 fn arguments(
     kernel: &Path,
