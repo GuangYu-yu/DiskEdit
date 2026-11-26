@@ -553,6 +553,7 @@ mod tests {
     const SS: u64 = 512;
     const TOTAL: u64 = 4 * 1024 * 1024;
 
+    // covers: B11
     #[test]
     fn gpt_minimum_matches_the_classic_layout() {
         assert_eq!(gpt_span(SS).unwrap(), 32);
@@ -561,6 +562,7 @@ mod tests {
         assert!(check_capacity(Format::Gpt, 68 * SS, SS).is_ok());
     }
 
+    // covers: B12
     #[test]
     fn gpt_content_writes_both_copies_with_consistent_crc() {
         let content = gpt_content(TOTAL, SS, Guid([7; 16])).expect("应可构造");
@@ -581,6 +583,7 @@ mod tests {
         assert_eq!(header.entry_array_crc32, backup_header.entry_array_crc32);
     }
 
+    // covers: B25
     #[test]
     fn protective_mbr_is_rewritten_only_when_non_canonical() {
         let canonical = protective_mbr_image(&[0u8; 512], 2048);
@@ -597,6 +600,7 @@ mod tests {
         assert!(protective_mbr_content(&dirty_tail, 2048).is_some());
     }
 
+    // covers: B25
     #[test]
     fn pmbr_size_state_distinguishes_stale_compat_and_inconsistent() {
         let mut lba0 = vec![0u8; 4096];
@@ -642,6 +646,7 @@ mod tests {
         assert!(out[512..520].iter().all(|&b| b == 0));
     }
 
+    // covers: B10
     #[test]
     fn probe_prefers_recognition_then_emptiness() {
         assert_eq!(TableProbe::classify(true, false), TableProbe::Recognized);

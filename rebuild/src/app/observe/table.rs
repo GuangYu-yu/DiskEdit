@@ -371,6 +371,7 @@ mod tests {
         assert_eq!(guid_text(guid), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
     }
 
+    // covers: B18
     #[test]
     fn candidate_order_is_preferred_then_kernel_then_defaults() {
         assert_eq!(

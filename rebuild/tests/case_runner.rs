@@ -43,6 +43,7 @@ fn copy_fixture(name: &str, destination: &str) {
     .unwrap_or_else(|error| panic!("复制夹具 {name} 失败: {error}"));
 }
 
+// covers: B10, B12
 #[test]
 fn new_writes_a_readable_table_and_refuses_to_clobber() {
     fixtures::prepare();
@@ -91,7 +92,64 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     );
 }
 
+// covers: B11
+#[test]
+fn new_refuses_a_target_below_the_gpt_minimum() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s2";
+    std::fs::create_dir_all(directory).expect("写夹具目录可建");
+    let small = format!("{directory}/below-min.img");
+    std::fs::write(&small, vec![0u8; 67 * 512]).expect("过小镜像可写");
+    let before = std::fs::read(&small).expect("读取镜像");
+    let (code, _, stderr) = run_argv(&["new", &small, "--yes"]);
+    assert_eq!(code, 3, "低于 GPT 最小容量必须拒绝：{stderr}");
+    assert_eq!(
+        std::fs::read(&small).expect("读取镜像"),
+        before,
+        "拒绝时盘面不变"
+    );
+
+    let exact = format!("{directory}/exact-min.img");
+    std::fs::write(&exact, vec![0u8; 68 * 512]).expect("最小镜像可写");
+    let (code, _, stderr) = run_argv(&["new", &exact, "--yes"]);
+    assert_eq!(code, 0, "恰好最小容量应可建表：{stderr}");
+}
+
+// covers: B25
+#[test]
+fn new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one() {
+    fixtures::prepare();
+    let directory = "target/fixtures/s2";
+    std::fs::create_dir_all(directory).expect("写夹具目录可建");
+
+    let inconsistent = format!("{directory}/pmbr-inconsistent.img");
+    let mut bytes = vec![0u8; 4 * 1024 * 1024];
+    bytes[446 + 4] = 0xEE;
+    bytes[446 + 12..446 + 16].copy_from_slice(&u32::MAX.to_le_bytes());
+    bytes[510] = 0x55;
+    bytes[511] = 0xAA;
+    std::fs::write(&inconsistent, &bytes).expect("镜像可写");
+    let (code, _, stderr) = run_argv(&["new", &inconsistent, "--yes"]);
+    assert_eq!(code, 3, "SizeInLBA 超出两种解释必须拒绝：{stderr}");
+    assert_eq!(
+        std::fs::read(&inconsistent).expect("读取镜像"),
+        bytes,
+        "拒绝时盘面不变"
+    );
+
+    let canonical = format!("{directory}/pmbr-canonical.img");
+    std::fs::write(&canonical, vec![0u8; 4 * 1024 * 1024]).expect("镜像可写");
+    let (code, _, stderr) = run_argv(&["new", &canonical, "--yes"]);
+    assert_eq!(code, 0, "空白镜像建 GPT 应成功：{stderr}");
+    let before = std::fs::read(&canonical).expect("读取镜像");
+    let (code, _, stderr) = run_argv(&["add", &canonical, "1M", "--yes"]);
+    assert_eq!(code, 0, "新增分区应成功：{stderr}");
+    let after = std::fs::read(&canonical).expect("读取镜像");
+    assert_eq!(&after[..512], &before[..512], "已合规的保护 MBR 不得重写");
+}
+
 // covers: B26
+// covers: B12
 #[test]
 fn add_delete_and_set_rewrite_both_copies() {
     fixtures::prepare();

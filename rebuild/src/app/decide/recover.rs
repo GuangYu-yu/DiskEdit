@@ -350,6 +350,24 @@ mod tests {
         assert!(matches!(plan, Decision::Refuse(Refusal::Occupied { .. })));
     }
 
+    // covers: D6
+    #[test]
+    fn an_undecidable_occupancy_is_not_treated_as_idle() {
+        let plan = decide(
+            &snapshot(
+                Some(Vec::new()),
+                Occupancy::Unknown {
+                    why: "holders unreadable".to_owned(),
+                },
+            ),
+            &request(RecoverMode::Default),
+        );
+        assert!(matches!(
+            plan,
+            Decision::Refuse(Refusal::OccupancyUnknown { .. })
+        ));
+    }
+
     // covers: D2
     #[test]
     fn a_foreign_record_is_refused_and_never_rolled_back() {

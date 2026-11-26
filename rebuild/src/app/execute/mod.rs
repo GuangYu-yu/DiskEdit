@@ -170,6 +170,7 @@ mod tests {
         assert!(!outcome.succeeded());
     }
 
+    // covers: D1
     #[test]
     fn recovery_outcomes_are_not_success() {
         let outcome = Outcome::needs_recovery("interrupted");
@@ -177,6 +178,7 @@ mod tests {
         assert!(!outcome.succeeded());
     }
 
+    // covers: D1
     #[test]
     fn completed_is_the_only_success() {
         assert!(Outcome::completed().succeeded());

@@ -237,7 +237,7 @@ mod tests {
         );
     }
 
-    // covers: I11
+    // covers: B20, I11
     #[test]
     fn a_write_past_the_target_length_is_rejected() {
         let mut target = MemoryTarget {
