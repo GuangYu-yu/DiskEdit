@@ -6,9 +6,9 @@
   "plan/instruments/footprint.py"
  ],
  "exit_code": 0,
- "commit": "8983230",
- "tree": "8bf2afea14852bf4",
- "at": "2026-11-26T12:43:38+00:00",
+ "commit": "7835d50",
+ "tree": "0dcf1833ece655fb",
+ "at": "2026-11-26T12:53:19+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,

@@ -200,6 +200,11 @@ fn capture_failed(
             );
             return exit::UNSUPPORTED;
         }
+        // 宿主本身不提供这项能力：不是目标拒绝，而是平台不支持。
+        observe::CaptureError::Platform(platform::PlatformError::NotSupported(why)) => {
+            eprintln!("unsupported: {why}");
+            return exit::UNSUPPORTED;
+        }
         other @ (observe::CaptureError::Platform(_)
         | observe::CaptureError::NoTarget
         | observe::CaptureError::Identity(_)

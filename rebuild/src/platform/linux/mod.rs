@@ -505,25 +505,100 @@ fn block_occupancy(path: &Path, _metadata: &std::fs::Metadata) -> PlatformResult
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| PlatformError::parse("block device path has no name"))?;
-    let holders = Path::new("/sys/class/block").join(name).join("holders");
-    match std::fs::read_dir(&holders) {
-        Ok(entries) => {
-            let names: Vec<String> = entries
-                .flatten()
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .collect();
-            if names.is_empty() {
-                Ok(Occupancy::Idle)
-            } else {
-                Ok(Occupancy::Used {
-                    evidence: format!("held by {}", names.join(", ")),
-                })
+    match holders(Path::new(SYSFS), name) {
+        Ok(names) if !names.is_empty() => Ok(Occupancy::Used {
+            evidence: format!("held by {}", names.join(", ")),
+        }),
+        Ok(_) => {
+            // 未挂载、无 holders 的多设备 btrfs 成员仍是别人的数据：superblock 记录着
+            // 全网设备数，成员数大于 1 时不能当空闲分区盘处理。
+            if let Some(evidence) = btrfs_multidevice(path) {
+                return Ok(Occupancy::Used { evidence });
             }
+            Ok(Occupancy::Idle)
         }
-        Err(error) => Ok(Occupancy::Unknown {
-            why: format!("cannot read {}: {error}", holders.display()),
+        // 没有 sysfs 节点：无从判定。
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Occupancy::Unknown {
+            why: format!("cannot locate the holders of {name}: {error}"),
+        }),
+        // 来源存在却读不出：fail-closed，按已占用处理，不把"看不见"当成"没有"。
+        Err(error) => Ok(Occupancy::Used {
+            evidence: format!("cannot confirm the holders of {name}: {error}"),
         }),
     }
+}
+
+/// sysfs 挂载点；单元测试把它换成临时目录。
+const SYSFS: &str = "/sys";
+/// holders 链的最大深度：dm/md/多路径叠加不会更深。
+const HOLDERS_DEPTH: usize = 8;
+/// btrfs superblock 的魔数。
+const BTRFS_MAGIC: &[u8; 8] = b"_BHRfS_M";
+/// btrfs superblock 的三份副本偏移（64K、64M、256G）。
+const BTRFS_SUPERBLOCK_OFFSETS: [u64; 3] = [0x1_0000, 0x400_0000, 0x40_0000_0000];
+/// superblock 中 `num_devices` 的位置。
+const BTRFS_NUM_DEVICES: std::ops::Range<usize> = 0x88..0x90;
+
+/// 递归收集设备的上层 holders（阵列、dm、多路径）。`depth` 限制层数。
+fn holders(sysfs: &Path, name: &str) -> std::io::Result<Vec<String>> {
+    let base = sysfs.join("class/block").join(name);
+    if !base.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} has no sysfs node", base.display()),
+        ));
+    }
+    let mut found = Vec::new();
+    let mut frontier = vec![(name.to_owned(), 0usize)];
+    while let Some((current, level)) = frontier.pop() {
+        if level >= HOLDERS_DEPTH {
+            continue;
+        }
+        let directory = sysfs.join("class/block").join(&current).join("holders");
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let holder = entry?.file_name().to_string_lossy().into_owned();
+            if !found.contains(&holder) {
+                found.push(holder.clone());
+                frontier.push((holder, level + 1));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// 目标是多设备 btrfs 的成员时给出证据。
+fn btrfs_multidevice(path: &Path) -> Option<String> {
+    let superblock = btrfs_superblock(path)?;
+    let devices = btrfs_num_devices(&superblock)?;
+    (devices > 1).then(|| format!("member of a {devices}-device btrfs filesystem"))
+}
+
+/// 读第一份可用的 btrfs superblock 副本。
+fn btrfs_superblock(path: &Path) -> Option<Vec<u8>> {
+    let file = File::open(path).ok()?;
+    let mut buffer = vec![0u8; 4096];
+    for offset in BTRFS_SUPERBLOCK_OFFSETS {
+        let read = FileExt::read_at(&file, &mut buffer, offset).ok()?;
+        if read == buffer.len() && &buffer[64..72] == BTRFS_MAGIC {
+            return Some(buffer);
+        }
+    }
+    None
+}
+
+/// 从 superblock 读 `num_devices`；不是 btrfs 或长度不足时为 `None`。
+fn btrfs_num_devices(superblock: &[u8]) -> Option<u64> {
+    if superblock.len() < BTRFS_NUM_DEVICES.end || &superblock[64..72] != BTRFS_MAGIC {
+        return None;
+    }
+    Some(u64::from_le_bytes(
+        superblock[BTRFS_NUM_DEVICES].try_into().ok()?,
+    ))
 }
 
 fn walk(root: &Path, found: &mut Vec<PathBuf>) -> PlatformResult<()> {
@@ -593,5 +668,75 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "不应留下临时文件: {leftovers:?}");
         std::fs::remove_dir_all(&base).expect("清理临时根");
+    }
+
+    fn temporary_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("diskedit-{tag}-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&root));
+        std::fs::create_dir_all(&root).expect("临时根可建立");
+        root
+    }
+
+    fn link_holder(sysfs: &Path, device: &str, holder: &str) {
+        std::fs::create_dir_all(
+            sysfs
+                .join("class/block")
+                .join(device)
+                .join("holders")
+                .join(holder),
+        )
+        .expect("holder 节点可建立");
+    }
+
+    // covers: B4
+    #[test]
+    fn holders_are_followed_through_every_layer() {
+        let sysfs = temporary_root("b4");
+        // sda1 被 md0 占用，md0 又叠在 dm-0 之上：只查一层会漏掉 dm-0。
+        link_holder(&sysfs, "sda1", "md0");
+        link_holder(&sysfs, "md0", "dm-0");
+        let found = holders(&sysfs, "sda1").expect("可读 holders");
+        assert!(found.contains(&"md0".to_owned()), "{found:?}");
+        assert!(found.contains(&"dm-0".to_owned()), "{found:?}");
+
+        // 空闲设备没有上层。
+        std::fs::create_dir_all(sysfs.join("class/block/sdb")).expect("设备节点");
+        assert!(holders(&sysfs, "sdb").expect("可读 holders").is_empty());
+
+        // 超过上限的更深一层不再展开，但已有各层都保留。
+        for depth in 0..HOLDERS_DEPTH + 2 {
+            link_holder(&sysfs, &format!("h{depth}"), &format!("h{}", depth + 1));
+        }
+        link_holder(&sysfs, "sdc", "h0");
+        assert!(holders(&sysfs, "sdc").expect("可读 holders").len() == HOLDERS_DEPTH);
+
+        std::fs::remove_dir_all(&sysfs).expect("清理临时根");
+    }
+
+    // covers: B17
+    #[test]
+    fn a_multi_device_btrfs_member_is_occupied() {
+        let mut superblock = vec![0u8; 4096];
+        superblock[64..72].copy_from_slice(BTRFS_MAGIC);
+        superblock[BTRFS_NUM_DEVICES].copy_from_slice(&2u64.to_le_bytes());
+        assert_eq!(btrfs_num_devices(&superblock), Some(2));
+
+        let root = temporary_root("b17");
+        let image = root.join("member.img");
+        let mut bytes = vec![0u8; 0x1_0000 + 4096];
+        bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
+        std::fs::write(&image, &bytes).expect("镜像可写");
+        assert!(
+            btrfs_multidevice(&image).is_some(),
+            "多设备成员即便未挂载也应判为已占用"
+        );
+
+        superblock[BTRFS_NUM_DEVICES].copy_from_slice(&1u64.to_le_bytes());
+        assert_eq!(btrfs_num_devices(&superblock), Some(1));
+        bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
+        std::fs::write(&image, &bytes).expect("镜像可写");
+        assert!(btrfs_multidevice(&image).is_none(), "单设备不算占用");
+
+        std::fs::remove_dir_all(&root).expect("清理临时根");
     }
 }

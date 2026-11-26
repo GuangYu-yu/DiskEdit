@@ -12,7 +12,7 @@ use diskedit_core::region::Region;
 use super::transaction::RecordSession;
 use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
 use crate::app::decide::{ConfirmedPlan, Step, StepKind};
-use crate::platform::{LoopBinding, Platform, TargetKind};
+use crate::platform::{LoopBinding, Platform, TargetKind, ToolRun};
 
 /// 意图记录里的固定标签：一次文件系统改写。
 const FS_INTENT: &[u8] = b"filesystem";
@@ -511,9 +511,10 @@ pub(super) fn run_checked(
     program: Program,
     args: &[String],
 ) -> Result<(), (ExecError, bool)> {
-    match platform.run(program, args) {
-        Ok(run) if run.code == Some(0) => Ok(()),
-        Ok(run) => Err((
+    match run_outcome(platform.run(program, args)) {
+        ToolOutcome::Done => Ok(()),
+        // 进程跑过、结局已知或不可知：目标可能已被改动，进恢复流程。
+        ToolOutcome::Failed(run) | ToolOutcome::Indeterminate(run) => Err((
             ExecError::Postcondition(format!(
                 "{} exited {}: {}",
                 platform.tool_name(program),
@@ -522,7 +523,34 @@ pub(super) fn run_checked(
             )),
             true,
         )),
-        Err(error) => Err((ExecError::from(error), false)),
+        // 进程根本没启动：目标一个字节都没动。
+        ToolOutcome::NotStarted(error) => Err((ExecError::from(error), false)),
+    }
+}
+
+/// 外部工具一次运行的可观察结局。
+///
+/// 关键是"没跑起来"与"跑过但结局不可知"必须分开：前者可以直接报未改动，
+/// 后者可能已经写了一半，只有它能进入恢复流程。
+enum ToolOutcome {
+    /// 启动并退出 0。
+    Done,
+    /// 启动并退出非零。
+    Failed(ToolRun),
+    /// 没有启动，工具不可用或无法执行。
+    NotStarted(crate::platform::PlatformError),
+    /// 启动了但拿不到退出状态（被信号终止）。
+    Indeterminate(ToolRun),
+}
+
+fn run_outcome(result: crate::platform::PlatformResult<ToolRun>) -> ToolOutcome {
+    match result {
+        Err(error) => ToolOutcome::NotStarted(error),
+        Ok(run) => match run.code {
+            Some(0) => ToolOutcome::Done,
+            Some(_) => ToolOutcome::Failed(run),
+            None => ToolOutcome::Indeterminate(run),
+        },
     }
 }
 
@@ -701,5 +729,35 @@ mod tests {
         assert_eq!(floor_to_unit(4097, 512), 4096);
         assert_eq!(ceil_to_unit(4097, 512), 4608);
         assert_eq!(SIGNATURE_SITE_BYTES % 1024, 0);
+    }
+
+    // covers: B27
+    #[test]
+    fn a_tool_without_an_exit_status_is_indeterminate() {
+        use crate::platform::PlatformError;
+
+        let done = ToolRun {
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(matches!(run_outcome(Ok(done.clone())), ToolOutcome::Done));
+
+        let failed = ToolRun {
+            code: Some(1),
+            ..done.clone()
+        };
+        assert!(matches!(run_outcome(Ok(failed)), ToolOutcome::Failed(_)));
+
+        let signalled = ToolRun { code: None, ..done };
+        assert!(matches!(
+            run_outcome(Ok(signalled)),
+            ToolOutcome::Indeterminate(_)
+        ));
+
+        assert!(matches!(
+            run_outcome(Err(PlatformError::not_supported("no tool"))),
+            ToolOutcome::NotStarted(_)
+        ));
     }
 }

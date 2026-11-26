@@ -492,3 +492,15 @@ fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
     let code = dispatch(&memory, &["diskedit", "add", "memory", "1M", "--yes"]);
     assert_eq!(code, UNSUPPORTED, "集合外扇区尺寸应按 unsupported 拒绝");
 }
+
+// covers: D10
+#[test]
+fn a_host_without_a_backend_refuses_with_the_unsupported_code() {
+    // 未接入的宿主端口对每个能力都返回不支持；上层必须落 6，而不是当作目标拒绝。
+    let args: Vec<std::ffi::OsString> = ["diskedit", "inspect", "x.img"]
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect();
+    let code = diskedit::app::cli::dispatch_with(&diskedit::platform::UnsupportedPlatform, args);
+    assert_eq!(code, UNSUPPORTED);
+}
