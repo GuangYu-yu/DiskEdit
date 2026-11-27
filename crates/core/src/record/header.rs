@@ -112,6 +112,12 @@ mod tests {
     }
 
     #[test]
+    fn the_record_magic_is_drec() {
+        // 记录标识是跨实现契约：布局或语义变化必须换新标识，不能沿用旧值。
+        assert_eq!(MAGIC, *b"DREC");
+    }
+
+    #[test]
     fn foreign_magic_is_rejected() {
         let mut bytes = RecordHeader::of_payload(b"x")
             .expect("载荷应可编码")
