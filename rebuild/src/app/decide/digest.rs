@@ -355,7 +355,7 @@ fn encode_kind(out: &mut Vec<u8>, kind: &StepKind) {
 
 const fn recover_tag(mode: RecoverMode) -> u8 {
     match mode {
-        RecoverMode::Default => 1,
+        RecoverMode::Undo => 1,
         RecoverMode::ReplayTableOnly => 2,
         RecoverMode::Release {
             discard_replay: false,

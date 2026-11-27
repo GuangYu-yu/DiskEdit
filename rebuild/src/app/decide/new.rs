@@ -126,7 +126,7 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
         Ok(plan) => Decision::Execute {
             plan: plan.with_request_digest(request_digest),
             note: format!(
-                "created {} table (verify with: diskedit info {})",
+                "created {} table (verify with: diskedit layout {})",
                 match format {
                     TableFormat::Gpt => "gpt",
                     TableFormat::Mbr => "mbr",

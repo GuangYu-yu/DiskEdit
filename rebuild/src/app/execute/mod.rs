@@ -9,13 +9,15 @@ pub mod digest;
 pub mod filesystem;
 pub mod lvm;
 pub mod postcondition;
-pub mod recover;
+pub mod release;
 pub mod relocate;
+pub mod replay;
 pub mod resize;
 pub mod state;
 pub mod table;
 pub mod token;
 pub mod transaction;
+pub mod undo;
 pub mod write;
 
 pub use state::{ExecutionState, StateMachine, TransitionError};

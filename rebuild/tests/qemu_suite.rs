@@ -199,14 +199,14 @@ s8_move_preserves_data() {
   detach "$L"; rm -f /tmp/s8.img
 }
 
-# S9: 会自我识别的设备上给 --identity 必须被拒绝且不改盘面。
-s9_identity_refused() {
+# S9: 会自我识别的设备上给 --alias 必须被拒绝且不改盘面。
+s9_alias_refused() {
   newdisk /tmp/s9.img 200
   printf 'label: gpt\n, 100M, L\n' | sfdisk "$L" >/dev/null 2>&1; sleep 1
   before=$(sfdisk -d "$L" 2>/dev/null)
-  "$DE" resize "$L:1" --grow-to-end --identity nope --yes >/tmp/o 2>&1; rc=$?
-  assert_rc s9_identity_rc 2 "$rc"
-  grep -qi identity /tmp/o && ok s9_identity_message || no s9_identity_message "$(cat /tmp/o)"
+  "$DE" resize "$L:1" --grow-to-end --alias nope --yes >/tmp/o 2>&1; rc=$?
+  assert_rc s9_alias_rc 2 "$rc"
+  grep -qi alias /tmp/o && ok s9_alias_message || no s9_alias_message "$(cat /tmp/o)"
   after=$(sfdisk -d "$L" 2>/dev/null)
   assert_eq s9_refusal_changed_nothing "$before" "$after"
   detach "$L"; rm -f /tmp/s9.img
@@ -217,8 +217,8 @@ s10_table_edits() {
   newdisk /tmp/s10.img 200
   "$DE" new "$L" --table gpt --yes >/tmp/o 2>&1; rc=$?
   assert_rc s10_new_rc 0 "$rc"
-  "$DE" info "$L" >/tmp/o 2>&1
-  grep -q '"label":"gpt"' /tmp/o && ok s10_info_gpt || no s10_info_gpt "$(cat /tmp/o)"
+  "$DE" layout "$L" --json >/tmp/o 2>&1
+  grep -q '"label":"gpt"' /tmp/o && ok s10_layout_gpt || no s10_layout_gpt "$(cat /tmp/o)"
   "$DE" add "$L" 64M --yes >/tmp/o 2>&1; rc=$?
   assert_rc s10_add_rc 0 "$rc"
   sleep 1
@@ -255,7 +255,7 @@ s12_online_xfs_grow() {
   assert_gt s12_part_grew "$(bytes "${L}p1")" "$before"
   fsafter=$(df -B1 --output=size /mnt/s12 | tail -1)
   assert_gt s12_mounted_fs_grew "$fsafter" "$fsbefore"
-  "$DE" inspect "$L" >/tmp/o 2>&1
+  "$DE" records show "$L" >/tmp/o 2>&1
   grep -q '^record: absent' /tmp/o && ok s12_no_pending_record || no s12_no_pending_record "$(cat /tmp/o)"
   umount /mnt/s12; xfs_repair -n "${L}p1" >/dev/null 2>&1; assert_rc s12_fs_clean 0 "$?"
   detach "$L"; rm -f /tmp/s12.img
@@ -481,7 +481,7 @@ s24_set_label_uuid() {
   "$DE" set "$L:7" label BLAB --yes >/tmp/o 2>&1; assert_rc s24_btrfs_label_rc 0 "$?"
   assert_eq s24_btrfs_label BLAB "$(blkid -o value -s LABEL "${L}p7" 2>/dev/null)"
 
-  "$DE" inspect "$L" >/tmp/o 2>&1
+  "$DE" records show "$L" >/tmp/o 2>&1
   grep -q '^record: absent' /tmp/o && ok s24_no_pending_record || no s24_no_pending_record "$(cat /tmp/o)"
   detach "$L"; rm -f /tmp/s24.img
 }
@@ -495,7 +495,7 @@ s5_online_ext4_grow
 s6_swap_grow
 s7_lvm_online_pv_grow
 s8_move_preserves_data
-s9_identity_refused
+s9_alias_refused
 s10_table_edits
 s11_mkfs_and_check
 s12_online_xfs_grow

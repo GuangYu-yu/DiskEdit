@@ -57,12 +57,12 @@ pub fn dispatch_with(platform: &dyn Platform, args: impl IntoIterator<Item = OsS
 /// 执行一条已解析的请求。
 fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
     let decision = match request.command() {
-        Command::RecordsScan => return scan(platform, request),
-        Command::RecordsList if request.target_spec().is_none() => {
+        Command::RecordsList { root: Some(root) } => return scan_root(platform, root, request),
+        Command::RecordsList { root: None } if request.target_spec().is_none() => {
             decide::records::list(None, platform.state_root())
         }
-        Command::Info { grow } => match observe_or_exit(platform, request, observe::capture) {
-            Ok(snapshot) => decide::info::decide(&snapshot, request, *grow),
+        Command::Layout { .. } => match observe_or_exit(platform, request, observe::capture) {
+            Ok(snapshot) => decide::layout::decide(&snapshot, request),
             Err(code) => return code,
         },
         Command::Check { partition } => {
@@ -71,11 +71,13 @@ fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
                 Err(code) => return code,
             }
         }
-        Command::Inspect => match observe_or_exit(platform, request, observe::capture_inspect) {
-            Ok(snapshot) => decide::inspect::decide(&snapshot),
-            Err(code) => return code,
-        },
-        Command::RecordsList => {
+        Command::RecordsShow => {
+            match observe_or_exit(platform, request, observe::capture_record_site) {
+                Ok(snapshot) => decide::records::show(&snapshot),
+                Err(code) => return code,
+            }
+        }
+        Command::RecordsList { root: None } => {
             match observe_or_exit(platform, request, observe::capture_records) {
                 Ok(snapshot) => decide::records::list(Some(&snapshot), platform.state_root()),
                 Err(code) => return code,
@@ -117,9 +119,10 @@ fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
                 Err(code) => return code,
             }
         }
-        Command::Resizefs { .. } => {
+        // `--fs-only` 的两种形态消费文件系统现场；分区几何形态消费完整快照。
+        Command::Resize(resize) if resize.fs_only => {
             match observe_or_exit(platform, request, observe::capture_filesystem) {
-                Ok(snapshot) => decide::resizefs::decide(&snapshot, request),
+                Ok(snapshot) => decide::resize::decide_filesystem(&snapshot, request),
                 Err(code) => return code,
             }
         }
@@ -127,30 +130,37 @@ fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
             Ok(snapshot) => decide::resize::decide(&snapshot, request),
             Err(code) => return code,
         },
-        Command::Recover(_) => match observe_or_exit(platform, request, observe::capture_recover) {
-            Ok(snapshot) => decide::recover::decide(&snapshot, request),
+        Command::Undo => match observe_or_exit(platform, request, observe::capture_recover) {
+            Ok(snapshot) => decide::undo::decide(&snapshot, request),
             Err(code) => return code,
         },
+        Command::Replay => match observe_or_exit(platform, request, observe::capture_recover) {
+            Ok(snapshot) => decide::replay::decide(&snapshot, request),
+            Err(code) => return code,
+        },
+        Command::Release { .. } => {
+            match observe_or_exit(platform, request, observe::capture_recover) {
+                Ok(snapshot) => decide::release::decide(&snapshot, request),
+                Err(code) => return code,
+            }
+        }
     };
     conclude(platform, request, decision)
 }
 
-/// `records scan`：先证明根是可读目录，再交给判定层。
-fn scan(platform: &dyn Platform, request: &observe::Request) -> u8 {
-    let Some(path) = request.target() else {
-        return usage();
-    };
-    if !platform.is_directory(path) {
+/// `records list --root`：先证明根是可读目录，再交给判定层。
+fn scan_root(platform: &dyn Platform, root: &std::path::Path, request: &observe::Request) -> u8 {
+    if !platform.is_directory(root) {
         eprintln!(
             "refused: {} does not exist or is not a directory",
-            path.display()
+            root.display()
         );
         return exit::REFUSED;
     }
-    let files = match platform.list_files(path) {
+    let files = match platform.list_files(root) {
         Ok(files) => files,
         Err(error) => {
-            eprintln!("error: cannot scan {}: {error}", path.display());
+            eprintln!("error: cannot scan {}: {error}", root.display());
             return exit::ENVIRONMENT;
         }
     };
@@ -165,7 +175,7 @@ fn scan(platform: &dyn Platform, request: &observe::Request) -> u8 {
     conclude(
         platform,
         request,
-        decide::records::scan_with(path, &records),
+        decide::records::scan_with(root, &records),
     )
 }
 
@@ -187,7 +197,7 @@ fn capture_failed(
     let error = match error {
         observe::CaptureError::DeclaredIdentityNotApplicable => {
             eprintln!(
-                "diskedit: --identity applies only to block devices with no readable WWN, EUI or \
+                "diskedit: --alias applies only to block devices with no readable WWN, EUI or \
                  repeatable serial; images and identified devices are addressed by their own identity"
             );
             return usage();
@@ -229,7 +239,7 @@ fn capture_failed(
     };
     match request.command() {
         // `records list` 在目标读不到时仍然给出空列表，并以成功退出。
-        Command::RecordsList => {
+        Command::RecordsList { .. } => {
             eprintln!("note: {why}");
             conclude(
                 platform,
@@ -237,7 +247,7 @@ fn capture_failed(
                 decide::records::list(None, platform.state_root()),
             )
         }
-        // 装不下一个扇区的目标对 `check` 等于没有分区表；对 `info` 是读失败。
+        // 装不下一个扇区的目标对 `check` 等于没有分区表；对 `layout` 是读失败。
         Command::Check { .. } if matches!(error, observe::CaptureError::TooSmall { .. }) => {
             conclude(
                 platform,
@@ -251,10 +261,9 @@ fn capture_failed(
             eprintln!("error: {why}");
             exit::ENVIRONMENT
         }
-        Command::Info { .. }
-        | Command::Inspect
+        Command::Layout { .. }
+        | Command::RecordsShow
         | Command::RecordsVerify { .. }
-        | Command::RecordsScan
         | Command::Resize(_)
         | Command::Move(_)
         | Command::Copy(_)
@@ -262,8 +271,9 @@ fn capture_failed(
         | Command::Set(_)
         | Command::Check { .. }
         | Command::Mkfs { .. }
-        | Command::Resizefs { .. }
-        | Command::Recover(_)
+        | Command::Undo
+        | Command::Replay
+        | Command::Release { .. }
         | Command::New { .. }
         | Command::Add(_) => {
             eprintln!("refused: {why}");
@@ -278,10 +288,26 @@ fn conclude(platform: &dyn Platform, request: &observe::Request, decision: Decis
         Decision::Refuse(refusal) => refuse(&refusal),
         Decision::Report { report, .. } => match report {
             decide::Report::Check(query) => check(platform, &query),
-            other @ (decide::Report::Info(_)
-            | decide::Report::Inspect(_)
-            | decide::Report::Records(_)
-            | decide::Report::Resize(_)) => match report::render(&other) {
+            // `layout` 的输出形态由请求里的 `--json` 选择。
+            decide::Report::Layout(report) => {
+                let Command::Layout { json } = request.command() else {
+                    return exit::INTERNAL;
+                };
+                let text = if *json {
+                    report::json::layout(&report)
+                } else {
+                    report::text::layout(&report)
+                };
+                println!("{text}");
+                exit::SUCCESS
+            }
+            decide::Report::Show(report) => {
+                println!("{}", report::text::show(&report));
+                exit::SUCCESS
+            }
+            other @ (decide::Report::Records(_)
+            | decide::Report::Resize(_)
+            | decide::Report::Add(_)) => match report::render(&other) {
                 Some(report::Rendered::Json(text)) | Some(report::Rendered::Text(text)) => {
                     println!("{text}");
                     exit::SUCCESS
@@ -351,7 +377,7 @@ fn write(
             | decide::StepKind::RecoverRecords { .. } => None,
         })
         .unwrap_or(path);
-    let current = observe_identity(platform, identity_path, request.identity());
+    let current = observe_identity(platform, identity_path, request.alias());
     let plan = match decide::confirm(plan, request.confirmed(), &current) {
         Ok(plan) => plan,
         Err(refusal) => return refuse(&refusal),
@@ -362,10 +388,6 @@ fn write(
             decide::StepKind::MovePartition { .. } | decide::StepKind::CopyPartition { .. }
         )
     });
-    let recovery = plan
-        .steps()
-        .iter()
-        .any(|step| matches!(step.kind, decide::StepKind::RecoverRecords { .. }));
     let filesystem = plan.steps().iter().any(|step| {
         matches!(
             step.kind,
@@ -398,8 +420,21 @@ fn write(
             .steps()
             .iter()
             .any(|step| matches!(step.kind, decide::StepKind::RefreshKernelView { .. }));
-    let outcome = if recovery {
-        execute::recover::run(platform, path, &plan)
+    // 恢复计划按形态分派：回滚与表区回放共用一条回放通路，放弃不写目标字节。
+    let recovery_mode = plan.steps().iter().find_map(|step| {
+        if let decide::StepKind::RecoverRecords { mode } = &step.kind {
+            Some(*mode)
+        } else {
+            None
+        }
+    });
+    let outcome = if let Some(mode) = recovery_mode {
+        match mode {
+            observe::RecoverMode::Release { .. } => execute::release::run(platform, path, &plan),
+            observe::RecoverMode::Undo | observe::RecoverMode::ReplayTableOnly => {
+                execute::undo::run(platform, path, &plan)
+            }
+        }
     } else if pv_online {
         // PV 被占用但未挂载：写表、同步内核视图、再让 PV 吸收新空间。
         execute::resize::run_pv_online(platform, &plan)
@@ -439,9 +474,9 @@ fn write(
 
 /// 锁外观测身份；执行器会在持锁后再次核对。
 ///
-/// 与 `observe::snapshot::open_target` 同一规则：`--identity` 声明的名字只在目标
+/// 与 `observe::snapshot::open_target` 同一规则：`--alias` 声明的名字只在目标
 /// 自身无法给出 Strong 身份时生效，且此时它就是这个目标的身份。否则块设备上的确认
-/// 会因自动身份不适用而误报"身份不可证明"，让所有 `--identity` 写入都失败。
+/// 会因自动身份不适用而误报"身份不可证明"，让所有 `--alias` 写入都失败。
 fn observe_identity(
     platform: &dyn Platform,
     path: &std::path::Path,
@@ -459,7 +494,7 @@ fn observe_identity(
         Ok(_) => match declared {
             Some(name) => Observation::known(
                 Fingerprint::declared(name),
-                Source::new("--identity"),
+                Source::new("--alias"),
                 Generation::FIRST,
             ),
             None => Observation::not_applicable("the target gives no comparable identity"),
@@ -467,7 +502,7 @@ fn observe_identity(
         Err(error) => match declared {
             Some(name) => Observation::known(
                 Fingerprint::declared(name),
-                Source::new("--identity"),
+                Source::new("--alias"),
                 Generation::FIRST,
             ),
             None => Observation::unknown(error.to_string()),

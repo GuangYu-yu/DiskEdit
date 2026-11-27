@@ -12,11 +12,7 @@ struct Entry {
 
 const ENTRIES: &[Entry] = &[
     Entry {
-        command: "info",
-        slice: "S1",
-    },
-    Entry {
-        command: "inspect",
+        command: "layout",
         slice: "S1",
     },
     Entry {
@@ -28,7 +24,7 @@ const ENTRIES: &[Entry] = &[
         slice: "S1",
     },
     Entry {
-        command: "records scan",
+        command: "records show",
         slice: "S1",
     },
     Entry {
@@ -64,16 +60,20 @@ const ENTRIES: &[Entry] = &[
         slice: "S5",
     },
     Entry {
-        command: "resizefs",
-        slice: "S5",
+        command: "undo",
+        slice: "S7",
+    },
+    Entry {
+        command: "replay",
+        slice: "S7",
+    },
+    Entry {
+        command: "release",
+        slice: "S7",
     },
     Entry {
         command: "resize",
         slice: "S6",
-    },
-    Entry {
-        command: "recover",
-        slice: "S7",
     },
 ];
 

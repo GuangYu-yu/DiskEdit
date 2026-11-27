@@ -83,9 +83,9 @@ fn a_grown_container_is_repaired_in_the_same_table_write() {
 
     // 修复后的表按新容器读回是合法的 GPT。
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
-        .args(["info", &path])
+        .args(["layout", &path, "--json"])
         .output()
-        .expect("运行 info");
+        .expect("运行 layout");
     assert_eq!(output.status.code(), Some(0));
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("\"label\":\"gpt\""),
@@ -95,12 +95,12 @@ fn a_grown_container_is_repaired_in_the_same_table_write() {
 
 #[test]
 fn a_stale_backup_and_protective_mbr_are_reported_before_the_write() {
-    // 判定期就能看见需要修复：同一镜像的 `check`/`info` 不允许把损坏说成没有表。
-    let path = extended_image("grown-info.img");
+    // 判定期就能看见需要修复：同一镜像的 `check`/`layout` 不允许把损坏说成没有表。
+    let path = extended_image("grown-layout.img");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
-        .args(["info", &path])
+        .args(["layout", &path, "--json"])
         .output()
-        .expect("运行 info");
+        .expect("运行 layout");
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("\"label\":\"gpt\""));
 }

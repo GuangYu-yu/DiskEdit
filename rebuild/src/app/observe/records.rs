@@ -17,7 +17,7 @@ pub const RECORD_FILE: &str = "record";
 pub struct RecordState {
     /// 记录目录；身份不可用或宿主没有状态目录时为 `None`。
     pub directory: Option<PathBuf>,
-    /// 记录目录是否存在；锁定位置的存在性是 inspect 的前置事实。
+    /// 记录目录是否存在；锁定位置的存在性是 `records show` 的前置事实。
     pub directory_exists: bool,
     /// 记录文件路径。
     pub file: Option<PathBuf>,

@@ -22,8 +22,8 @@ pub use filesystem::{FilesystemSnapshot, PartitionFacts, capture as capture_file
 pub use new::{CapturedRegion, NewSnapshot, PriorRecord, PriorState, capture_new};
 pub use resize::{ResizeSnapshot, capture_resize};
 pub use snapshot::{
-    CaptureError, InspectSnapshot, RecordSnapshot, RecoverSnapshot, Snapshot, TargetFacts, capture,
-    capture_inspect, capture_records, capture_recover,
+    CaptureError, RecordSiteSnapshot, RecordSnapshot, RecoverSnapshot, Snapshot, TargetFacts,
+    capture, capture_record_site, capture_records, capture_recover,
 };
 
 /// 分区表格式。
@@ -65,7 +65,7 @@ impl TargetSpec {
 pub struct Request {
     target: Option<TargetSpec>,
     sector_size: Option<u64>,
-    identity: Option<String>,
+    alias: Option<String>,
     /// 用户已给出 `--yes`。
     confirmed: bool,
     command: Command,
@@ -76,7 +76,7 @@ impl Request {
         Self {
             target: Some(target),
             sector_size: None,
-            identity: None,
+            alias: None,
             confirmed: false,
             command,
         }
@@ -87,7 +87,7 @@ impl Request {
         Self {
             target: None,
             sector_size: None,
-            identity: None,
+            alias: None,
             confirmed: false,
             command,
         }
@@ -109,14 +109,14 @@ impl Request {
         self
     }
 
-    /// 用户声明的身份名（`--identity`）：仅用于自动身份不可得的目标。
-    pub fn with_identity(mut self, identity: Option<String>) -> Self {
-        self.identity = identity;
+    /// 用户声明的别名（`--alias`）：仅用于自动身份不可得的目标。
+    pub fn with_alias(mut self, alias: Option<String>) -> Self {
+        self.alias = alias;
         self
     }
 
-    pub fn identity(&self) -> Option<&str> {
-        self.identity.as_deref()
+    pub fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 
     pub fn sector_size(&self) -> Option<u64> {
@@ -144,16 +144,18 @@ impl Request {
 /// 16 个入口及各自的参数。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// 整盘信息；`grow` 为真的形态只接受分区目标并给出扩容预览。
-    Info {
-        grow: bool,
+    /// 整盘布局；`json` 选择结构化明细输出。
+    Layout {
+        json: bool,
     },
-    Inspect,
-    RecordsList,
+    RecordsList {
+        /// `--root ROOT`：扫描一个记录容器目录，而不是列目标自己的记录。
+        root: Option<PathBuf>,
+    },
     RecordsVerify {
         token: String,
     },
-    RecordsScan,
+    RecordsShow,
     Resize(ResizeRequest),
     Move(MoveRequest),
     Copy(CopyRequest),
@@ -169,11 +171,11 @@ pub enum Command {
         filesystem: MkfsKind,
         label: Option<String>,
     },
-    Resizefs {
-        partition: Option<PartitionSelector>,
-        bytes: Option<u64>,
+    Undo,
+    Replay,
+    Release {
+        discard_replay: bool,
     },
-    Recover(RecoverMode),
     New {
         table: TableFormat,
         overwrite: bool,
@@ -201,7 +203,7 @@ pub enum SizeSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResizeRequest {
     pub partition: Option<PartitionSelector>,
-    /// 位置参数 SIZE 的原始形态。
+    /// 位置参数 SIZE 的原始形态；`--fs-only` 的挂载点形态用它携带可选的 BYTES。
     pub size: Option<SizeSpec>,
     /// `--end` 指定的新终点 LBA。
     pub end: Option<u64>,
@@ -212,6 +214,8 @@ pub struct ResizeRequest {
     pub grow_lv: bool,
     pub lv: Option<String>,
     pub no_fs: bool,
+    /// `--fs-only`：只动文件系统（离线长满分区，或挂载点在线扩容）。
+    pub fs_only: bool,
     pub dry_run: bool,
 }
 
@@ -247,6 +251,8 @@ pub struct AddRequest {
     pub part_number: Option<u32>,
     pub name: Option<String>,
     pub type_guid: Option<TypeSelector>,
+    /// `--dry-run`：只给出落位预览，不写盘。
+    pub dry_run: bool,
 }
 
 /// 自动放置的对齐策略。
@@ -324,14 +330,14 @@ pub enum StartSpec {
     Align,
 }
 
-/// `recover` 的三种形态。
+/// 恢复步骤的三种形态：回滚、只回放表区原像、放弃。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecoverMode {
-    /// 回滚未完成的记录。
-    Default,
-    /// 只回放表区原像。
+    /// 回滚未完成的记录（`undo`）。
+    Undo,
+    /// 只回放表区原像（`replay`）。
     ReplayTableOnly,
-    /// 放弃回滚；`discard_replay` 表示同时放弃可重放区间。
+    /// 放弃回滚；`discard_replay` 表示同时放弃可重放区间（`release`）。
     Release { discard_replay: bool },
 }
 

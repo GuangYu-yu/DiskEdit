@@ -651,6 +651,8 @@ def main() -> int:
     dchk = sub.add_parser("drift-check")
     dchk.add_argument("--defs", type=pathlib.Path, required=True)
     dchk.add_argument("--out", type=pathlib.Path, required=True)
+    naming = sub.add_parser("check-naming")
+    naming.add_argument("--root", type=pathlib.Path, default=pathlib.Path("."))
     args = parser.parse_args()
     if args.command == "selftest":
         return selftest()
@@ -680,7 +682,78 @@ def main() -> int:
         return drift_record(args)
     if args.command == "drift-check":
         return drift_check(args)
+    if args.command == "check-naming":
+        return check_naming(args.root)
     return check(args)
+
+
+# ---- 命名法三门（三条命名法见 06-防漂移执行手册） ----
+
+# 法①②：命令名不得互为前缀（resize/resizefs 之病）；近义词由 docsgen 单源 +
+# residue 禁词兜底，此处机检可判定的部分。域词（recovery/identity）不在扫描面。
+_RETIRED_TOKENS = (
+    "diskedit recover",
+    "diskedit info",
+    "diskedit inspect",
+    "--replay-table-only",
+    "--discard-replayable",
+    "--identity",
+    "resizefs",
+    "records scan",
+)
+
+# 法③：行为输入显式随调用——env 只准用于定位与探测（state 目录、PATH 工具发现、
+# carrier 子进程握手协议），白名单按变量名；出现白名单外的变量（即用户可设的行为
+# 旋钮，如 chunk 类）即红。
+_ENV_ALLOWED_VARS = (
+    "STATE_DIR_ENV",
+    "LOCALAPPDATA",
+    "XDG_STATE_HOME",
+    "HOME",
+    "PATH",
+    "BUNDLE_ENV",
+    "FROM_INIT",
+    "TOKEN",
+)
+
+
+def check_naming(root: pathlib.Path) -> int:
+    failures: list[str] = []
+    # 法①②：命令名互为前缀检查（读 declare.rs 的 name: "..." 注册表）
+    declare = root / "src" / "app" / "cli" / "declare.rs"
+    names = re.findall(r'name: "((?:records |)[a-z-]+)"', declare.read_text(encoding="utf-8"))
+    for a in names:
+        for b in names:
+            if a != b and b.startswith(a + " "):
+                continue  # records 名词族按空格分词，不是前缀病
+            if a != b and (b.startswith(a) and a != "records" and not b.startswith("records ")):
+                failures.append(f"法①②：命令 `{b}` 是 `{a}` 的前缀——一概念一动词被破坏（resize/resizefs 之病）")
+    # 旧面词残留（src 全部 rs + docs 全部 md；历史引文列在 refusal-map 旧列，不在扫描面）
+    for base in ("src", "docs"):
+        for path in (root / base).rglob("*"):
+            if not path.is_file() or path.suffix not in (".rs", ".md"):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for token in _RETIRED_TOKENS:
+                if token in text:
+                    failures.append(f"旧面词残留：{path.relative_to(root)} 含 `{token}`")
+    # 法③：env::var / var_os 按变量名白名单
+    for path in (root / "src").rglob("*.rs"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "env::var" not in text and "env::var_os" not in text:
+            continue
+        for line in text.splitlines():
+            if "env::var" not in line and "env::var_os" not in line:
+                continue
+            if not any(v in line for v in _ENV_ALLOWED_VARS):
+                failures.append(f"法③：{path.relative_to(root)} 读取白名单外的环境变量——行为输入必须显式随调用：{line.strip()[:80]}")
+    if failures:
+        print("check-naming 红：")
+        for f in failures:
+            print("  -", f)
+        return 1
+    print(f"check-naming: {len(set(names))} 入口无前缀冲突，旧面词零残留，env 白名单外零读取")
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
-//! `recover` 的唯一执行器：持锁、锁内重探身份、按记录回写原像或归档记录。
+//! `undo` 的唯一执行器：持锁、锁内重探身份、按记录回写原像。
 //!
 //! B9 的准入顺序在这里落地：取记录目录锁 → 锁内重探身份 → 锁内重读记录 →
 //! 再按纯恢复器的结论动作。回滚先做只读判定（B7 第五条 / B24）：当前字节必须
 //! 是本工具写后的样子、停在写前/写后之间的唯一断点，或已经是原像；三者之外一律
 //! 拒绝并保留记录，绝不覆盖外部改动。判定通过后逆序写回原像并读回核对（B6）。
-//! 清理与放弃都先回读再删除、删除后对目录 `fsync`（B23）。
+//! 清理先回读再删除、删除后对目录 `fsync`（B23）。`replay` 复用这里的回放通路，
+//! `release` 复用这里的锁内现场准备与错误归档。
 
 use std::path::{Path, PathBuf};
 
@@ -20,10 +21,7 @@ use crate::app::observe::RecoverMode;
 use crate::app::observe::records::{RECORD_FILE, hex16};
 use crate::platform::{Platform, TargetHandle};
 
-/// 归档文件名的前缀：`record.<N>.abandoned`，编号顺延且不覆盖。
-const ABANDONED_PREFIX: &str = "record.";
-
-/// 执行一份已确认的恢复计划。
+/// 执行一份已确认的回滚计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
     match execute(platform, target, plan) {
         Ok(outcome) => outcome,
@@ -36,8 +34,79 @@ fn execute(
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<Outcome, (ExecError, bool)> {
-    let mode = plan
-        .steps()
+    let mode = mode_of(plan)?;
+    match mode {
+        RecoverMode::Undo | RecoverMode::ReplayTableOnly => {}
+        RecoverMode::Release { .. } => {
+            return Err((
+                ExecError::InvalidPlan("the plan asks for a release, not a rollback".to_owned()),
+                false,
+            ));
+        }
+    }
+    let site = prepare(platform, target, plan)?;
+    let identity = plan.identity();
+    rollback(
+        platform,
+        target,
+        &site.directory,
+        &site.file,
+        site.bytes,
+        identity,
+    )
+}
+
+/// 锁内现场：记录目录、记录文件与记录字节。回放与放弃共用这一段准入。
+pub(super) struct Site {
+    /// 记录目录（含锁文件）。
+    pub(super) directory: PathBuf,
+    /// 记录文件路径。
+    pub(super) file: PathBuf,
+    /// 锁内读到的记录字节；没有记录时为 `None`。
+    pub(super) bytes: Option<Vec<u8>>,
+}
+
+/// 锁内现场准入：建目录、取锁、重探身份、读记录。
+pub(super) fn prepare(
+    platform: &dyn Platform,
+    target: &Path,
+    plan: &ConfirmedPlan,
+) -> Result<Site, (ExecError, bool)> {
+    let identity = plan.identity();
+    let root = platform.state_root().ok_or_else(|| {
+        (
+            ExecError::Record("the host has no state directory".to_owned()),
+            false,
+        )
+    })?;
+    // B3：记录目录按目标身份派生；锁与记录同目录。
+    let directory: PathBuf = root.join("images").join(hex16(identity));
+    platform
+        .create_directory_all(&directory)
+        .map_err(|error| (ExecError::from(error), false))?;
+    let _lock = platform
+        .lock_state(&directory.join(LOCK_FILE))
+        .map_err(|error| (ExecError::from(error), false))?;
+    // B7 / B9：持锁后重探身份，计划指向的对象必须仍是当前对象。
+    if !super::identity_still_matches(platform, target, identity) {
+        return Err((
+            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
+            false,
+        ));
+    }
+    let file = directory.join(RECORD_FILE);
+    let bytes = platform
+        .read_file(&file)
+        .map_err(|error| (ExecError::from(error), false))?;
+    Ok(Site {
+        directory,
+        file,
+        bytes,
+    })
+}
+
+pub(super) fn mode_of(plan: &ConfirmedPlan) -> Result<RecoverMode, (ExecError, bool)> {
+    plan.steps()
         .iter()
         .find_map(|step| match &step.kind {
             StepKind::RecoverRecords { mode } => Some(*mode),
@@ -68,39 +137,7 @@ fn execute(
                 ExecError::InvalidPlan("the plan has no recovery step".to_owned()),
                 false,
             )
-        })?;
-    let identity = plan.identity();
-    let root = platform.state_root().ok_or_else(|| {
-        (
-            ExecError::Record("the host has no state directory".to_owned()),
-            false,
-        )
-    })?;
-    // B3：记录目录按目标身份派生；锁与记录同目录。
-    let directory: PathBuf = root.join("images").join(hex16(identity));
-    platform
-        .create_directory_all(&directory)
-        .map_err(|error| (ExecError::from(error), false))?;
-    let _lock = platform
-        .lock_state(&directory.join(LOCK_FILE))
-        .map_err(|error| (ExecError::from(error), false))?;
-    // B7 / B9：持锁后重探身份，计划指向的对象必须仍是当前对象。
-    if !super::identity_still_matches(platform, target, identity) {
-        return Err((
-            ExecError::IdentityChanged("target identity changed after planning".to_owned()),
-            false,
-        ));
-    }
-    let file = directory.join(RECORD_FILE);
-    let bytes = platform
-        .read_file(&file)
-        .map_err(|error| (ExecError::from(error), false))?;
-    match mode {
-        RecoverMode::Release { .. } => release(platform, &directory, &file, bytes, identity),
-        mode @ (RecoverMode::Default | RecoverMode::ReplayTableOnly) => {
-            rollback(platform, target, &directory, &file, bytes, identity, mode)
-        }
-    }
+        })
 }
 
 fn rollback(
@@ -110,7 +147,6 @@ fn rollback(
     file: &Path,
     bytes: Option<Vec<u8>>,
     identity: Fingerprint,
-    _mode: RecoverMode,
 ) -> Result<Outcome, (ExecError, bool)> {
     let Some(bytes) = bytes else {
         // 记录在执行层取锁前被清理：已无事可做。
@@ -143,29 +179,6 @@ fn rollback(
             Ok(Outcome::rolled_back())
         }
     }
-}
-
-fn release(
-    platform: &dyn Platform,
-    directory: &Path,
-    file: &Path,
-    bytes: Option<Vec<u8>>,
-    identity: Fingerprint,
-) -> Result<Outcome, (ExecError, bool)> {
-    let Some(bytes) = bytes else {
-        return Ok(Outcome::completed());
-    };
-    // B8：放弃只看对象与归属。若记录能解码且属于别的载体，拒绝动它。
-    if let Ok(decoded) = diskedit_core::record::decode(&bytes)
-        && !decoded.body.target.matches(identity)
-    {
-        return Err((
-            ExecError::Record("the record belongs to a different target".to_owned()),
-            false,
-        ));
-    }
-    abandon(platform, directory, file, &bytes).map_err(|error| (error, false))?;
-    Ok(Outcome::completed())
 }
 
 /// 一条待回写的原像：区间、原始字节与本步写后字节。
@@ -483,35 +496,8 @@ fn clear(
     Ok(())
 }
 
-/// B8 放弃：同目录归档为 `record.<N>.abandoned`，编号顺延不覆盖，目录 `fsync`。
-fn abandon(
-    platform: &dyn Platform,
-    directory: &Path,
-    file: &Path,
-    bytes: &[u8],
-) -> Result<(), ExecError> {
-    let mut number = 1u64;
-    let archived = loop {
-        let candidate = directory.join(format!("{ABANDONED_PREFIX}{number}.abandoned"));
-        if platform.read_file(&candidate)?.is_none() {
-            break candidate;
-        }
-        number += 1;
-        if number == u64::MAX {
-            return Err(ExecError::Record(
-                "cannot find a free abandoned name".to_owned(),
-            ));
-        }
-    };
-    platform.write_state_file(&archived, bytes)?;
-    platform.sync_directory(directory)?;
-    platform.remove_state_file(file)?;
-    platform.sync_directory(directory)?;
-    Ok(())
-}
-
 /// 把执行错误归档为可报告的终态。
-fn failure(error: ExecError, wrote: bool) -> Outcome {
+pub(super) fn failure(error: ExecError, wrote: bool) -> Outcome {
     if wrote {
         return Outcome::needs_recovery(error.to_string());
     }

@@ -23,6 +23,23 @@ const MARKERS: &[&str] = &[
     "deprecated",
 ];
 
+/// 已改名的旧用法面 token；只对 CLI 源码（src/）做精确匹配。
+///
+/// 域概念词（recovery、identity、RecoverMode 等）不在禁词之列；`recover` 只禁
+/// 命令名字符串字面量与 `diskedit recover` 的消息引用，不禁纯核的 `recover`
+/// 恢复器与其调用。`inspect-internal` 是 btrfs 的子命令参数，不匹配
+/// `diskedit inspect`。
+const RETIRED_FACE_TOKENS: &[&str] = &[
+    "\"recover\"", // 命令名字符串字面量（声明、分派与消息）
+    "diskedit recover",
+    "--replay-table-only",
+    "resizefs",
+    "records scan",
+    "--identity",
+    "diskedit info",
+    "diskedit inspect",
+];
+
 #[test]
 fn retired_paths_are_absent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -70,6 +87,26 @@ fn no_backup_or_patch_files_are_left_behind() {
             || name.ends_with(".orig")
             || name.ends_with(".rej");
         assert!(!stale, "{} 是编辑残留", file.display());
+    }
+}
+
+// covers: D8
+#[test]
+fn cli_sources_have_no_retired_face_tokens() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    collect(&root.join("src"), &mut files, "rs");
+    assert!(!files.is_empty());
+    for file in files {
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("读 {} 失败: {error}", file.display()));
+        for token in RETIRED_FACE_TOKENS {
+            assert!(
+                !text.contains(token),
+                "{} 含有旧用法面 token {token}——命令面已改名，面词零残留",
+                file.display()
+            );
+        }
     }
 }
 

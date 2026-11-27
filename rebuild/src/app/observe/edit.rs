@@ -101,19 +101,19 @@ pub fn capture_edit(
     let prior = prior_state(&record);
     let tools = match request.command() {
         Command::Set(set) => set_tools(&view, set, platform),
-        Command::Info { .. }
-        | Command::Inspect
-        | Command::RecordsList
+        Command::Layout { .. }
+        | Command::RecordsList { .. }
         | Command::RecordsVerify { .. }
-        | Command::RecordsScan
+        | Command::RecordsShow
         | Command::Resize(_)
         | Command::Move(_)
         | Command::Copy(_)
         | Command::Delete { .. }
         | Command::Check { .. }
         | Command::Mkfs { .. }
-        | Command::Resizefs { .. }
-        | Command::Recover(_)
+        | Command::Undo
+        | Command::Replay
+        | Command::Release { .. }
         | Command::New { .. }
         | Command::Add(_) => Vec::new(),
     };

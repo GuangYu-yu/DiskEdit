@@ -27,6 +27,16 @@
 
 本表是差异的唯一来源：行为、理由、撤回条件、测试位置四项只在这里维护。`01-目标与边界.md` 第 5 节只摘录行为一句并指向本表，不另写撤回条件与测试位置。新增差异只改本表；未经本表登记的行为差异一律按未通过计。
 
+## 换版批次：CLI 用法面重造（D20–D26，一批零残留）
+
+| D20 | `info` 与 `inspect`（逐分区明细）合一为 `layout`，`--json` 承载结构化明细 | 一概念一动词（命名法②）；两读命令互为近义词，分工只能靠文档记忆 | 首个外部用户出现即锁定本面 | `tests/contract_surface.rs` 面枚举 + `layout --json` 与旧 info 逐字段一致（equivalence） |
+| D21 | inspect 的记录现场呈现并入 `records show` | inspect 本意是日志旁证，归 records 名词族（list/verify/show）taxonomy 一致 | 首个外部用户出现即锁定本面 | `tests/case_runner.rs::records_show_refuses_a_damaged_or_foreign_record` |
+| D22 | `recover` 三形态拆 `undo` / `replay` / `release` 三动词（WAL 三原语命名） | 动词按意图命名（命名法①）：撤销/补完/结账是三个意图，不是一个命令的三个旗标；`--discard-replay` 旗标名不变 | 首个外部用户出现即锁定本面 | `tests/case_runner.rs::undo_refuses_a_target_without_a_record` 等 undo/replay/release 全组 |
+| D23 | `resizefs` 并入 `resize`（`--fs-only`，挂载点在线形式同批并入；与 `--no-fs` 互斥） | resize/resizefs 互为前缀是近义词病（命名法②），fs 轴用旗标表达 | 首个外部用户出现即锁定本面 | `tests/case_runner.rs` resize --fs-only 组 + `check-naming` 前缀闸 |
+| D24 | `records scan` 并入 `records list [--root ROOT]` | 与 list 语义重叠，扫描起点是参数不是命令 | 首个外部用户出现即锁定本面 | `tests/contract_surface.rs` 面枚举 |
+| D25 | `--identity` → `--alias` | 名字说用户决策（为无法自证身份的目标声明稳定句柄），identity 是域概念词保留内部 | 首个外部用户出现即锁定本面 | `tests/fault_injection.rs`（--alias）+ residue 禁词 |
+| D26 | `info --grow` 落位预览退役，职责由 `add --dry-run` 承接（add 落位判定现成，只补输出通道） | 预览住在动词里（命名法②）：想做的事是"新增分区"，动词是 add；info 是读几何不该夹预览 | 首个外部用户出现即锁定本面 | `tests/cases/mod.rs` add --dry-run 两条 case |
+
 ## 登记资格
 
 - 每条降级、收窄或“不支持”，必须引用 `baseline/` 里基线证据的具体条目，证明基线在该形态下确实没有可复现的行为。引不出证据的，写进 `05-静态自检.md` 的未执行清单，不得进入本表。

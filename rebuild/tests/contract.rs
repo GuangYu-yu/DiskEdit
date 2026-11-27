@@ -23,11 +23,13 @@ fn command_surface_has_sixteen_named_entries() {
     let unique: BTreeSet<&str> = names.iter().copied().collect();
     assert_eq!(unique.len(), names.len(), "命令名不得重复");
     for expected in [
-        "info",
-        "inspect",
+        "layout",
         "records list",
         "records verify",
-        "records scan",
+        "records show",
+        "undo",
+        "replay",
+        "release",
         "resize",
         "move",
         "copy",
@@ -35,8 +37,6 @@ fn command_surface_has_sixteen_named_entries() {
         "set",
         "check",
         "mkfs",
-        "resizefs",
-        "recover",
         "new",
         "add",
     ] {
@@ -84,10 +84,10 @@ fn help_and_usage_choose_the_documented_process_codes() {
     assert_eq!(run(&["--version"]), exit::SUCCESS);
     assert_eq!(run(&["-V"]), exit::SUCCESS);
     assert_eq!(run(&["bogus"]), exit::USAGE);
-    assert_eq!(run(&["help", "info"]), exit::SUCCESS);
+    assert_eq!(run(&["help", "layout"]), exit::SUCCESS);
     assert_eq!(run(&["help", "records", "list"]), exit::SUCCESS);
-    assert_eq!(run(&["info", "--help"]), exit::SUCCESS);
-    assert_eq!(run(&["--help", "info"]), exit::SUCCESS);
+    assert_eq!(run(&["layout", "--help"]), exit::SUCCESS);
+    assert_eq!(run(&["--help", "layout"]), exit::SUCCESS);
     assert_eq!(run(&["help", "bogus"]), exit::USAGE);
     assert_eq!(run(&["help", "records"]), exit::USAGE);
 }

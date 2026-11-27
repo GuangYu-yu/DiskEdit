@@ -22,6 +22,7 @@ use crate::app::observe::{
     TableFormat, TypeSelector,
 };
 
+use super::report::{AddPreview, Report};
 use super::step::{PropertyValue, Step, StepKind, TableSegment};
 use super::{Decision, Plan, Refusal, repair};
 
@@ -124,7 +125,7 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         snapshot,
         plan,
         format!(
-            "moved partition #{number} to LBA {new_start} (verify with: diskedit info {})",
+            "moved partition #{number} to LBA {new_start} (verify with: diskedit layout {})",
             snapshot.target.display
         ),
     )
@@ -243,7 +244,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         snapshot,
         plan,
         format!(
-            "copied to partition #{number} (verify with: diskedit info {})",
+            "copied to partition #{number} (verify with: diskedit layout {})",
             snapshot.target.display
         ),
     )
@@ -507,8 +508,9 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
             };
             repair::append_protective(&mut segments, repaired.protective_mbr);
             let number = u32::try_from(index + 1).expect("条目下标可表示");
-            finish(
+            conclude_add(
                 snapshot,
+                add.dry_run,
                 table_plan(
                     TableFormat::Gpt,
                     *sector_size,
@@ -516,8 +518,14 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     snapshot.stamp,
                     identity,
                 ),
+                AddPreview {
+                    partition: number,
+                    start_lba: placed.0,
+                    end_lba: placed.1,
+                    sector_size: *sector_size,
+                },
                 format!(
-                    "added partition #{number} (verify with: diskedit info {})",
+                    "added partition #{number} (verify with: diskedit layout {})",
                     snapshot.target.display
                 ),
             )
@@ -576,8 +584,9 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 region: region(0, sector_size),
                 bytes,
             }];
-            finish(
+            conclude_add(
                 snapshot,
+                add.dry_run,
                 table_plan(
                     TableFormat::Mbr,
                     sector_size,
@@ -585,8 +594,14 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     snapshot.stamp,
                     identity,
                 ),
+                AddPreview {
+                    partition: number,
+                    start_lba: placed.0,
+                    end_lba: placed.1,
+                    sector_size,
+                },
                 format!(
-                    "added partition #{number} (verify with: diskedit info {})",
+                    "added partition #{number} (verify with: diskedit layout {})",
                     snapshot.target.display
                 ),
             )
@@ -658,7 +673,7 @@ pub fn delete(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     identity,
                 ),
                 format!(
-                    "deleted partition #{number} (verify with: diskedit info {})",
+                    "deleted partition #{number} (verify with: diskedit layout {})",
                     snapshot.target.display
                 ),
             )
@@ -686,7 +701,7 @@ pub fn delete(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     identity,
                 ),
                 format!(
-                    "deleted partition #{number} (verify with: diskedit info {})",
+                    "deleted partition #{number} (verify with: diskedit layout {})",
                     snapshot.target.display
                 ),
             )
@@ -799,7 +814,7 @@ fn set_gpt(
             }
             entries[index].partition_type_guid = guid;
             note = format!(
-                "type set on partition #{number} (verify with: diskedit info {})",
+                "type set on partition #{number} (verify with: diskedit layout {})",
                 snapshot.target.display
             );
         }
@@ -878,7 +893,7 @@ fn set_mbr(
             match edit::set_mbr_type(lba0, number, byte) {
                 Ok(bytes) => {
                     note = format!(
-                        "type set on partition #{number} (verify with: diskedit info {})",
+                        "type set on partition #{number} (verify with: diskedit layout {})",
                         snapshot.target.display
                     );
                     bytes
@@ -1223,6 +1238,27 @@ fn refuse_edit(why: &str) -> Decision {
     Decision::Refuse(Refusal::TableEdit {
         why: why.to_owned(),
     })
+}
+
+/// `add` 的收尾：`--dry-run` 只给落位预览（同一条判定链，只换输出通道），
+/// 否则按执行计划收尾。
+fn conclude_add(
+    snapshot: &EditSnapshot,
+    dry_run: bool,
+    plan: Result<Plan, Refusal>,
+    preview: AddPreview,
+    note: String,
+) -> Decision {
+    if dry_run {
+        if let Err(refusal) = plan {
+            return Decision::Refuse(refusal);
+        }
+        return super::report::decision(
+            Report::Add(preview),
+            vec![Step::new(StepKind::Inspect, Vec::new())],
+        );
+    }
+    finish(snapshot, plan, note)
 }
 
 /// 组装执行计划，并处理未收尾记录的同计划续跑/异计划冲突。

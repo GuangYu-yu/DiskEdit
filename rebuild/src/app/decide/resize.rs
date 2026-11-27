@@ -11,11 +11,12 @@ use diskedit_core::table::edit::{self, GptTable};
 use crate::app::observe::resize::ResizeSnapshot;
 use crate::app::observe::table::TableView;
 use crate::app::observe::{
-    Command, PartitionSelector, PriorState, Request, ResizeRequest, SizeSpec, TableFacts,
-    TableFormat,
+    Command, FilesystemSnapshot, PartitionSelector, PriorState, Request, ResizeRequest, SizeSpec,
+    TableFacts, TableFormat,
 };
 use crate::platform::Occupancy;
 
+use super::filesystem as fsops;
 use super::report::{Report, ResizePreview};
 use super::step::{Step, StepKind, TableSegment};
 use super::{Decision, Plan, Refusal};
@@ -31,6 +32,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let Command::Resize(resize) = request.command() else {
         return refuse("resize reached with a different command");
     };
+    if resize.fs_only {
+        return refuse("resize --fs-only reached the partition-geometry path");
+    }
     if matches!(snapshot.view, TableView::None) {
         return superfloppy(snapshot, resize);
     }
@@ -293,7 +297,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         snapshot,
         plan,
         format!(
-            "resized partition #{number} to LBA {start}..{new_end}{relocated} (verify with: diskedit info {})",
+            "resized partition #{number} to LBA {start}..{new_end}{relocated} (verify with: diskedit layout {})",
             snapshot.target.display
         ),
     )
@@ -952,7 +956,7 @@ fn superfloppy(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         snapshot,
         plan,
         format!(
-            "superfloppy: {} grown to full device ({current} bytes) — verify with: diskedit info {}",
+            "superfloppy: {} grown to full device ({current} bytes) — verify with: diskedit layout {}",
             content.as_str(),
             snapshot.target.display
         ),
@@ -1242,7 +1246,7 @@ fn pv_online_decide(
         snapshot,
         plan,
         format!(
-            "resized LVM2 PV partition #{number} online to LBA {start}..{new_end} (verify with: diskedit info {})",
+            "resized LVM2 PV partition #{number} online to LBA {start}..{new_end} (verify with: diskedit layout {})",
             snapshot.target.display
         ),
     )
@@ -1333,7 +1337,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
                 why:
                     "grow would not extend the partition — no usable free space to its right; the \
                       online path cannot relocate blocking partitions (unmount to grow offline, or \
-                      fill the filesystem with `resizefs <mountpoint>`)"
+                      fill the filesystem with `resize <mountpoint> --fs-only`)"
                         .to_owned(),
             });
         }
@@ -1345,7 +1349,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         return Decision::Refuse(Refusal::TableEdit {
             why: "grow would not extend the partition — no usable free space to its right; the \
                   online path cannot relocate blocking partitions (unmount to grow offline, or \
-                  fill the filesystem with `resizefs <mountpoint>`)"
+                  fill the filesystem with `resize <mountpoint> --fs-only`)"
                 .to_owned(),
         });
     }
@@ -1462,7 +1466,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         snapshot,
         plan,
         format!(
-            "resized partition #{number} online to LBA {start}..{new_end} (verify with: diskedit info {})",
+            "resized partition #{number} online to LBA {start}..{new_end} (verify with: diskedit layout {})",
             snapshot.target.display
         ),
     )
@@ -1657,4 +1661,203 @@ fn plan_relocations(
 
 fn region(start: u64, len: u64) -> diskedit_core::region::Region {
     diskedit_core::region::Region::sized(start, len).expect("由当前盘面导出的区间自洽")
+}
+
+// ---------------------------------------------------------------------------
+// `--fs-only`：只动文件系统的两个形态（离线与挂载点在线）。
+// ---------------------------------------------------------------------------
+
+/// 判定 `resize --fs-only`：离线 `<TARGET>:N` 长满分区，或挂载点在线扩容。
+pub fn decide_filesystem(snapshot: &FilesystemSnapshot, request: &Request) -> Decision {
+    let Command::Resize(resize) = request.command() else {
+        return refuse("resize --fs-only reached with a different command");
+    };
+    if resize.no_fs {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "--fs-only and --no-fs are mutually exclusive".to_owned(),
+        });
+    }
+    if resize.partition.is_some() {
+        fs_offline(snapshot)
+    } else {
+        filesystem_online(snapshot, resize.size.as_ref())
+    }
+}
+
+/// 离线形态只扩容：文件系统末尾之前的分区空间此刻已经属于分区，工具把文件系统
+/// 长满即可。
+fn fs_offline(snapshot: &FilesystemSnapshot) -> Decision {
+    if let Some(refusal) = fsops::admission(snapshot, "resize") {
+        return Decision::Refuse(refusal);
+    }
+    let partition = match fsops::selected(snapshot) {
+        Ok(partition) => partition,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let identity = match fsops::identity(snapshot) {
+        Ok(identity) => identity,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let content = partition.content;
+    match content {
+        ContentKind::Unknown => {
+            return Decision::Refuse(Refusal::FilesystemUnknown {
+                number: partition.number,
+            });
+        }
+        ContentKind::Swap => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: "resize --fs-only swap".to_owned(),
+                why: "a swap area has no in-place resize; rebuild it at the target size".to_owned(),
+            });
+        }
+        ContentKind::Lvm2Pv => {
+            return Decision::Refuse(Refusal::NoFilesystem {
+                number: partition.number,
+                what: "an LVM physical volume".to_owned(),
+            });
+        }
+        ContentKind::Filesystem(_) => {}
+        ContentKind::Luks | ContentKind::BitLocker => {
+            return Decision::Refuse(Refusal::NoFilesystem {
+                number: partition.number,
+                what: content.as_str().to_owned(),
+            });
+        }
+    }
+    match catalog::profile(content).support(Verb::Grow) {
+        Support::Tools(_) => {}
+        Support::Unsupported(why) => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize --fs-only {}", content.as_str()),
+                why: why.to_owned(),
+            });
+        }
+        Support::NotApplicable => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize --fs-only {}", content.as_str()),
+                why: "this content kind carries no filesystem to resize".to_owned(),
+            });
+        }
+    }
+    let Some(filesystem) = content.filesystem() else {
+        return Decision::Refuse(Refusal::ContentUnsupported {
+            what: format!("resize --fs-only {}", content.as_str()),
+            why: "this content kind carries no filesystem to resize".to_owned(),
+        });
+    };
+    if let Some((program, _)) = snapshot.tools.iter().find(|(_, available)| !available) {
+        return Decision::Refuse(Refusal::ToolMissing { program: *program });
+    }
+    let step = Step::new(
+        StepKind::GrowFilesystem {
+            partition: partition.number,
+            filesystem,
+            bytes: partition.bytes,
+        },
+        vec![fsops::region(partition)],
+    );
+    fsops::finish(
+        snapshot,
+        Plan::write(vec![step], identity),
+        format!(
+            "resized the filesystem on partition #{} (verify with: diskedit layout {})",
+            partition.number, snapshot.target.display
+        ),
+    )
+}
+
+/// 挂载点形态：在用户已有的挂载上把文件系统撑满所在分区。
+///
+/// 不写分区表、不卸载挂载。尺寸只允许省略或等于分区容量：大于容量要先改表，
+/// 小于容量是收缩，两者都在任何写盘之前拒绝。
+fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>) -> Decision {
+    use crate::platform::MountFacts;
+
+    let requested = match requested {
+        None => None,
+        Some(SizeSpec::Absolute(bytes)) => Some(*bytes),
+        Some(_) => {
+            return refuse("the mountpoint form takes an absolute BYTES value or none");
+        }
+    };
+    let Some(MountFacts::Mounted {
+        mount_point,
+        device,
+        disk,
+        partition: number,
+    }) = snapshot.mount.clone()
+    else {
+        return Decision::Refuse(Refusal::FactUnknown {
+            what: "the mount point did not resolve to a mounted partition".to_owned(),
+        });
+    };
+    let Some(selected) = snapshot
+        .selected
+        .as_ref()
+        .filter(|facts| facts.number == number)
+    else {
+        return Decision::Refuse(Refusal::PartitionMissing { number });
+    };
+    if let Some(requested) = requested {
+        if requested > selected.bytes {
+            return Decision::Refuse(Refusal::CapacityInsufficient {
+                needed: requested,
+                available: selected.bytes,
+            });
+        }
+        if requested < selected.bytes {
+            return Decision::Refuse(Refusal::OnlineShrink {
+                why: "this form grows the filesystem to fill its partition and never changes the \
+                      partition table"
+                    .to_owned(),
+            });
+        }
+    }
+    let content = selected.content;
+    let Some(filesystem) = content.filesystem() else {
+        return Decision::Refuse(Refusal::ContentUnsupported {
+            what: format!("resize --fs-only {}", content.as_str()),
+            why: "this content kind carries no filesystem to resize".to_owned(),
+        });
+    };
+    match catalog::profile(content).support(Verb::Grow) {
+        Support::Tools(_) => {}
+        Support::Unsupported(why) => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize --fs-only {}", content.as_str()),
+                why: why.to_owned(),
+            });
+        }
+        Support::NotApplicable => {
+            return Decision::Refuse(Refusal::ContentUnsupported {
+                what: format!("resize --fs-only {}", content.as_str()),
+                why: "this content kind carries no filesystem to resize".to_owned(),
+            });
+        }
+    }
+    if let Some((program, _)) = snapshot.tools.iter().find(|(_, available)| !available) {
+        return Decision::Refuse(Refusal::ToolMissing { program: *program });
+    }
+    let Ok(identity) = fsops::identity(snapshot) else {
+        return Decision::Refuse(Refusal::IdentityUnprovable {
+            why: "the target gives no comparable identity".to_owned(),
+        });
+    };
+    let step = Step::new(
+        StepKind::GrowFilesystemOnline {
+            mount_point,
+            device,
+            disk,
+            partition: number,
+            filesystem,
+            bytes: selected.bytes,
+        },
+        Vec::new(),
+    );
+    fsops::finish(
+        snapshot,
+        Plan::external(vec![step], identity),
+        format!("resized the filesystem on partition #{number} through its mounted volume"),
+    )
 }

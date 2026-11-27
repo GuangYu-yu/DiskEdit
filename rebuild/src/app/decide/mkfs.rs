@@ -69,7 +69,7 @@ pub fn decide(snapshot: &FilesystemSnapshot, request: &Request) -> Decision {
         snapshot,
         Plan::write(vec![step], identity),
         format!(
-            "created {} on partition #{} (verify with: diskedit info {})",
+            "created {} on partition #{} (verify with: diskedit layout {})",
             filesystem.as_str(),
             partition.number,
             snapshot.target.display

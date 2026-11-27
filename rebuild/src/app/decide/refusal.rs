@@ -160,7 +160,7 @@ impl Refusal {
                 "let a writing command create the anchor directory first, or inspect the target on the host that owns it"
             }
             Self::RecordDirectoryUnresolved { .. } => {
-                "give --identity NAME for a block device without a readable WWN, EUI or serial, or address an image"
+                "give --alias NAME for a block device without a readable WWN, EUI or serial, or address an image"
             }
             Self::PartitionMissing { .. } => {
                 "confirm the partition number with a listing command first"
@@ -214,10 +214,10 @@ impl Refusal {
                 "keep the record file for manual inspection; nothing may write to this target until then"
             }
             Self::RecordConflict { .. } => {
-                "finish or abandon the existing record with recover before starting a different plan"
+                "finish or abandon the existing record with `diskedit undo`, `diskedit replay` or `diskedit release` before starting a different plan"
             }
             Self::RecoveryRefused { .. } => {
-                "inspect the record with `diskedit inspect`, then choose `recover --replay-table-only` or `recover --release`"
+                "inspect the record with `diskedit records show`, then choose `diskedit replay` or `diskedit release`"
             }
             Self::TableEdit { .. } => {
                 "inspect the current table and adjust the request so the edit can be placed"

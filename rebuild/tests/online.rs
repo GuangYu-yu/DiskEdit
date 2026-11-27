@@ -294,7 +294,7 @@ fn a_sector_size_on_a_block_device_is_refused_before_it_is_opened() {
     fake.kind = TargetKind::BlockDevice;
     let code = diskedit::app::cli::dispatch_with(
         &fake,
-        ["diskedit", "info", "/dev/sda", "--sector-size", "4096"].map(std::ffi::OsString::from),
+        ["diskedit", "layout", "/dev/sda", "--sector-size", "4096"].map(std::ffi::OsString::from),
     );
     assert_eq!(code, exit::REFUSED);
     assert!(fake.calls().is_empty(), "rejection precedes any tool");
@@ -449,6 +449,7 @@ fn resize_command(size: Option<SizeSpec>, end: Option<u64>) -> ResizeRequest {
         grow_lv: false,
         lv: None,
         no_fs: false,
+        fs_only: false,
         dry_run: false,
     }
 }

@@ -1,7 +1,7 @@
 //! 文件系统命令共用的准入与收尾：分区节点、表形态、占用、身份与记录。
 //!
-//! `mkfs` 与 `resizefs` 只差"选哪种内容能力"和"计划哪一步"，其余前置完全一致；
-//! 这里只保留那部分一致的事实判断，不产生任何写。
+//! `mkfs` 与 `resize --fs-only` 只差"选哪种内容能力"和"计划哪一步"，其余前置完
+//! 全一致；这里只保留那部分一致的事实判断，不产生任何写。
 
 use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::region::Region;

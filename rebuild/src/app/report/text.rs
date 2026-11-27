@@ -1,10 +1,49 @@
 //! 现场结论的文本渲染。
 
-use crate::app::decide::report::{InspectReport, RecordVerdict, ResizePreview};
+use crate::app::decide::report::{
+    AddPreview, LayoutPartition, LayoutReport, RecordSiteReport, RecordVerdict, ResizePreview,
+};
 use crate::platform::Occupancy;
 
-/// `inspect` 的固定文本行。
-pub fn inspect(report: &InspectReport) -> String {
+/// `layout` 的固定文本行；`--json` 的结构化明细走 `json::layout`。
+pub fn layout(report: &LayoutReport) -> String {
+    let mut lines = vec![
+        format!("label: {}", report.label.as_str()),
+        format!("sector_size: {}", report.sector_size),
+        format!("size_bytes: {}", report.size_bytes),
+    ];
+    if let Some(guid) = &report.disk_guid {
+        lines.push(format!("disk_guid: {guid}"));
+    }
+    if let Some(last) = report.last_part {
+        lines.push(format!("last_part: {last}"));
+    }
+    for partition in &report.partitions {
+        lines.push(partition_line(partition));
+    }
+    lines.join("\n")
+}
+
+fn partition_line(partition: &LayoutPartition) -> String {
+    let name = if partition.name.is_empty() {
+        "-".to_owned()
+    } else {
+        partition.name.clone()
+    };
+    format!(
+        "partition {}: LBA {}..{} ({} bytes) type {} name {} fs {}",
+        partition.number,
+        partition.first_lba,
+        partition.last_lba,
+        partition.size_bytes,
+        partition.type_text,
+        name,
+        partition.content.as_str()
+    )
+}
+
+/// `records show` 的固定文本行。
+pub fn show(report: &RecordSiteReport) -> String {
     let evidence = match &report.evidence {
         Some(path) => path.display().to_string(),
         None => "(none)".to_owned(),
@@ -43,14 +82,23 @@ pub fn resize(report: &ResizePreview) -> String {
     )
 }
 
+/// `add --dry-run` 的落位预览；不写字节。
+pub fn add_preview(preview: &AddPreview) -> String {
+    let bytes = (preview.end_lba - preview.start_lba + 1).saturating_mul(preview.sector_size);
+    format!(
+        "partition #{}: LBA {}..{} ({} bytes)\n(dry run: no bytes were written)",
+        preview.partition, preview.start_lba, preview.end_lba, bytes
+    )
+}
+
 /// 退出码 `5` 的人读指引：三要素（发生了什么、证据在哪、下一步）固定，
 /// 末尾追加本次运行的具体原因，便于排障。
 pub fn recovery(cause: &str) -> String {
     format!(
-        "— the target may already have been changed; check with `diskedit info` before retrying\n\
-         evidence: `diskedit inspect <target>` names any recovery file left for the target\n\
-         next: `diskedit recover` restores the bytes recorded for this target when the record still \
-         allows it; `diskedit recover --release` releases the record and leaves those bytes in place\n\
+        "— the target may already have been changed; check with `diskedit layout` before retrying\n\
+         evidence: `diskedit records show <target>` names any recovery file left for the target\n\
+         next: `diskedit undo` restores the bytes recorded for this target when the record still \
+         allows it; `diskedit release` releases the record and leaves those bytes in place\n\
          cause: {cause}"
     )
 }
@@ -58,7 +106,7 @@ pub fn recovery(cause: &str) -> String {
 fn verdict(record: &RecordVerdict, occupancy: &Occupancy) -> &'static str {
     match (record, occupancy) {
         (RecordVerdict::Unresolved { .. }, _) => "nothing inspected",
-        (RecordVerdict::Present { .. }, _) => "record present; run recover before writing",
+        (RecordVerdict::Present { .. }, _) => "record present; run undo before writing",
         (_, Occupancy::Used { .. }) => "target is in use; read-only commands remain available",
         (_, Occupancy::Unknown { .. }) => {
             "occupancy cannot be decided; treat the target as occupied"

@@ -14,11 +14,12 @@ use super::step::Step;
 /// 一次只读判定的报告。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Report {
-    Info(InfoReport),
-    Inspect(InspectReport),
+    Layout(LayoutReport),
+    Show(RecordSiteReport),
     Records(RecordsReport),
     Check(CheckQuery),
     Resize(ResizePreview),
+    Add(AddPreview),
 }
 
 /// `resize --dry-run` 的计算预览：只给区间与文件系统动作，不写任何字节。
@@ -35,28 +36,27 @@ pub struct ResizePreview {
     pub grow: bool,
 }
 
-/// `info` 的整盘视图。
+/// `layout` 的整盘视图。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InfoReport {
-    pub label: InfoLabel,
+pub struct LayoutReport {
+    pub label: LayoutLabel,
     pub damaged: bool,
     pub sector_size: u64,
     pub size_bytes: u64,
     pub disk_guid: Option<String>,
     pub last_part: Option<u32>,
-    pub partitions: Vec<InfoPartition>,
-    pub preview: Option<GrowPreview>,
+    pub partitions: Vec<LayoutPartition>,
 }
 
 /// 表形态的展示名。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InfoLabel {
+pub enum LayoutLabel {
     Gpt,
     Mbr,
     None,
 }
 
-impl InfoLabel {
+impl LayoutLabel {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Gpt => "gpt",
@@ -68,7 +68,7 @@ impl InfoLabel {
 
 /// 一个分区的展示视图。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InfoPartition {
+pub struct LayoutPartition {
     pub number: u32,
     pub first_lba: u64,
     pub last_lba: u64,
@@ -78,32 +78,21 @@ pub struct InfoPartition {
     pub name: String,
 }
 
-/// `info --grow` 的扩容预览。
+/// `records show` 的现场视图。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrowPreview {
-    pub partition: u32,
-    pub new_end_lba: u64,
-    pub sector_size: u64,
-    pub moves: Vec<GrowMove>,
-}
-
-/// 预览中被右移的分区。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GrowMove {
-    pub number: u32,
-    pub first_lba: u64,
-    pub last_lba: u64,
-    pub delta_lba: u64,
-    pub bytes: u64,
-    pub swap: bool,
-}
-
-/// `inspect` 的现场视图。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InspectReport {
+pub struct RecordSiteReport {
     pub evidence: Option<PathBuf>,
     pub record: RecordVerdict,
     pub occupancy: Occupancy,
+}
+
+/// `add --dry-run` 的落位预览：只给新分区将落在哪，不写任何字节。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddPreview {
+    pub partition: u32,
+    pub start_lba: u64,
+    pub end_lba: u64,
+    pub sector_size: u64,
 }
 
 /// 记录文件的存在与可读性。

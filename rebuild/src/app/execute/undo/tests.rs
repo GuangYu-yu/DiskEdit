@@ -267,7 +267,12 @@ fn confirmed(mode: RecoverMode, regions: Vec<Region>) -> ConfirmedPlan {
 
 fn run_mode(memory: &Memory, mode: RecoverMode) -> Outcome {
     let plan = confirmed(mode, Vec::new());
-    run(memory, Path::new("memory"), &plan)
+    match mode {
+        RecoverMode::Release { .. } => {
+            crate::app::execute::release::run(memory, Path::new("memory"), &plan)
+        }
+        RecoverMode::Undo | RecoverMode::ReplayTableOnly => run(memory, Path::new("memory"), &plan),
+    }
 }
 
 fn recovered(outcome: &Outcome) -> bool {
@@ -297,7 +302,7 @@ fn rollback_verifies_the_preimage_and_cleans_the_record() {
         ]),
     );
     let plan = confirmed(
-        RecoverMode::Default,
+        RecoverMode::Undo,
         vec![Region::sized(0, SECTOR as u64).unwrap()],
     );
     let outcome = run(&memory, Path::new("memory"), &plan);
@@ -329,7 +334,7 @@ fn a_mismatched_region_is_refused_and_kept() {
         ]),
     );
     let plan = confirmed(
-        RecoverMode::Default,
+        RecoverMode::Undo,
         vec![Region::sized(0, SECTOR as u64).unwrap()],
     );
     let outcome = run(&memory, Path::new("memory"), &plan);
@@ -532,7 +537,7 @@ fn cleanup_refuses_when_the_record_changed_under_the_lock() {
         },
     ]);
     memory.put(&record_path(), bytes);
-    let outcome = run_mode(&memory, RecoverMode::Default);
+    let outcome = run_mode(&memory, RecoverMode::Undo);
     assert!(recovered(&outcome), "{:?}", outcome.reason());
     assert!(memory.get(&record_path()).is_none());
     assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
@@ -605,7 +610,7 @@ fn a_failed_rollback_write_keeps_the_rest_of_the_record_and_reports_partial() {
         .fail_writes
         .store(2, std::sync::atomic::Ordering::SeqCst);
     let plan = confirmed(
-        RecoverMode::Default,
+        RecoverMode::Undo,
         vec![
             Region::sized(0, SECTOR as u64).unwrap(),
             Region::sized(SECTOR as u64, SECTOR as u64).unwrap(),
@@ -640,7 +645,7 @@ fn a_record_with_non_monotonic_frames_is_refused_before_writing() {
     second.seq = 0;
     memory.put(&record_path(), record_bytes(&[intent_frame(), second]));
     let plan = confirmed(
-        RecoverMode::Default,
+        RecoverMode::Undo,
         vec![Region::sized(0, SECTOR as u64).unwrap()],
     );
     let outcome = run(&memory, Path::new("memory"), &plan);

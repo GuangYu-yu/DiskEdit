@@ -62,11 +62,13 @@ enum Access {
 }
 
 const ACCESS: &[(&str, Access)] = &[
-    ("info", Access::ReadOnly),
-    ("inspect", Access::ReadOnly),
+    ("layout", Access::ReadOnly),
     ("records list", Access::ReadOnly),
     ("records verify", Access::ReadOnly),
-    ("records scan", Access::ReadOnly),
+    ("records show", Access::ReadOnly),
+    ("undo", Access::Write),
+    ("replay", Access::Write),
+    ("release", Access::Write),
     ("resize", Access::Write),
     ("move", Access::Write),
     ("copy", Access::Write),
@@ -74,14 +76,17 @@ const ACCESS: &[(&str, Access)] = &[
     ("set", Access::Write),
     ("check", Access::Filesystem),
     ("mkfs", Access::Write),
-    ("resizefs", Access::Write),
-    ("recover", Access::Write),
     ("new", Access::Write),
     ("add", Access::Write),
 ];
 
 /// 选项的展示值与说明；顺序即文档顺序，生成前会按声明核对完整性。
 const OPTIONS: &[(&str, &str, &str)] = &[
+    (
+        "--alias",
+        "`NAME`",
+        "name a target without WWN, EUI or repeatable serial (nbd, rbd, dm, md)",
+    ),
     ("--align", "`A`", "placement alignment: mib|none"),
     (
         "--allow-move",
@@ -96,7 +101,7 @@ const OPTIONS: &[(&str, &str, &str)] = &[
     (
         "--discard-replay",
         "—",
-        "confirm giving up a range `recover` could still replay",
+        "confirm giving up a range `diskedit replay` could still replay",
     ),
     (
         "--dry-run",
@@ -105,9 +110,9 @@ const OPTIONS: &[(&str, &str, &str)] = &[
     ),
     ("--end", "`LBA`", "new end LBA for in-place resizing"),
     (
-        "--grow",
+        "--fs-only",
         "—",
-        "append a relocation preview for partition :N",
+        "resize only the filesystem: grow it into its partition, or through a mountpoint",
     ),
     (
         "--grow-lv",
@@ -120,9 +125,9 @@ const OPTIONS: &[(&str, &str, &str)] = &[
         "pin the end at the last usable LBA (fill semantics)",
     ),
     (
-        "--identity",
-        "`NAME`",
-        "name a target without WWN, EUI or repeatable serial (nbd, rbd, dm, md)",
+        "--json",
+        "—",
+        "print the structured per-partition detail instead of the text layout",
     ),
     (
         "--keep-partuuid",
@@ -155,17 +160,12 @@ const OPTIONS: &[(&str, &str, &str)] = &[
         "`N`",
         "1-based entry slot; it must be empty",
     ),
+    (
+        "--root",
+        "`ROOT`",
+        "scan a record container directory instead of listing a target's record",
+    ),
     ("--random", "—", "ask the target to generate a new value"),
-    (
-        "--release",
-        "—",
-        "drop the recovery files, keeping the writes they describe",
-    ),
-    (
-        "--replay-table-only",
-        "—",
-        "replay only the recorded table regions of a completed move",
-    ),
     (
         "--sector-size",
         "`N`",
@@ -194,7 +194,7 @@ fn reference() -> String {
     let mut out = String::from(HEADER);
     out.push_str(
         "# diskedit command reference\n\nWrite commands on a block device without a WWN, EUI or \
-         repeatable serial\n(nbd, rbd, dm, md) need `--identity NAME`; images and devices with \
+         repeatable serial\n(nbd, rbd, dm, md) need `--alias NAME`; images and devices with \
          an\nidentity of their own reject the flag.\n",
     );
     for (group, heading) in [

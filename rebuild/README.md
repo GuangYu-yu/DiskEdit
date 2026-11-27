@@ -7,8 +7,8 @@ English | [简体中文](README.zh-CN.md)
 - **One code path for images and block devices.** A `.img` file and `/dev/sdX` differ only in how the target is opened.
 - **GPT/MBR are handled in-process.** Table parsing and commit do not go through libparted or sfdisk. A GPT commit writes the backup entry array, backup header, primary entry array and primary header in that order, syncing after each step, so an interruption at any point leaves at least one self-consistent copy and CRC tells the copies apart. When partitions of a block device are mounted, the kernel re-read cannot succeed; that path writes the table with `sfdisk --no-reread` and syncs the kernel with `partx -u`.
 - **Filesystems go through their own tools.** mkfs, fsck, resize, label and UUID are run against an offset loop device (`losetup`), so each filesystem is edited by its official implementation.
-- **Long jobs are resumable.** A partition relocation, grow or mkfs interrupted midway continues from its recovery record when the same command is re-run. `inspect` and `records` report the scene, `recover` rolls the recorded writes back, `recover --release` drops the scene.
-- **Machine-readable output.** `info` and `records list|verify|scan` print JSON; `info --grow` carries the relocation preview in the same document as the report.
+- **Long jobs are resumable.** A partition relocation, grow or mkfs interrupted midway continues from its recovery record when the same command is re-run. `records show` and `records list` report the scene, `undo` rolls the recorded writes back, `release` drops the scene.
+- **Machine-readable output.** `layout --json` and `records list|verify` print JSON.
 
 ## Requirements
 
@@ -18,9 +18,9 @@ English | [简体中文](README.zh-CN.md)
 
 | Operation | Image file | Block device |
 |---|---|---|
-| `info` / `inspect` / `records` | no root | no root |
-| Table writes (`new`/`add`/`delete`/`resize`/`copy`/`set`/`recover`/`move`) | no root | root |
-| Filesystem layer (`mkfs`/`resizefs`/`check`/`set label\|uuid`) | root, or the VM carrier | root |
+| `layout` / `records` | no root | no root |
+| Table writes (`new`/`add`/`delete`/`resize`/`copy`/`set`/`undo`/`replay`/`release`/`move`) | no root | root |
+| Filesystem layer (`mkfs`/`resize --fs-only`/`check`/`set label\|uuid`) | root, or the VM carrier | root |
 
 `resize` needs root when it has a filesystem step; `--no-fs` declares that growing the filesystem is not a postcondition, which keeps an image grow rootless. A target whose filesystem cannot be identified (`unknown`) is refused unless `--no-fs` is given — "not recognised" does not mean "nothing there".
 
@@ -45,17 +45,17 @@ truncate -s 8G disk.img
 diskedit new disk.img --table gpt --yes
 diskedit add disk.img 4G --yes
 sudo diskedit mkfs disk.img:1 ext4 --yes
-diskedit info disk.img | jq .
+diskedit layout disk.img --json | jq .
 ```
 
 More examples, as printed by `diskedit help`:
 
 ```bash
-diskedit info /dev/sdb
-diskedit info /dev/sdb:2 --grow
+diskedit layout /dev/sdb --json
+diskedit add /dev/sdb 10G --dry-run
 diskedit resize /dev/sdb:1 +2G --yes
 diskedit resize disk.img grow --allow-move --chunk 4 --yes
-diskedit recover /dev/sdb --yes
+diskedit undo /dev/sdb --yes
 ```
 
 `<TARGET>` is an image path or a block device; `:N` addresses partition N (1-based) and `:last` the last partition a command can act on. `diskedit help <CMD>` prints the full help for one command.
@@ -86,7 +86,7 @@ The target is edited in place; no new whole-disk copy is made. A relayout is a s
 
 ## Supported filesystems
 
-Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashfs, erofs, hfsplus, apfs, lvm2_pv, luks, bitlocker, bcachefs, jfs, reiserfs, udf; anything else is `unknown`. The last six are identified only — none of their `mkfs`/`check`/`resize` steps is wired (bcachefs may span several devices, so its member list is not read either).
+Identification (`layout`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashfs, erofs, hfsplus, apfs, lvm2_pv, luks, bitlocker, bcachefs, jfs, reiserfs, udf; anything else is `unknown`. The last six are identified only — none of their `mkfs`/`check`/`resize` steps is wired (bcachefs may span several devices, so its member list is not read either).
 
 | FS | mkfs | grow | shrink | check | label | UUID |
 |---|---|---|---|---|---|---|
@@ -101,7 +101,7 @@ Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashf
 | lvm2_pv | — | ✓ | ✓ | — | — | — |
 
 - `check` runs a read-only consistency check for every type except f2fs (`e2fsck -n`, `ntfsfix -n`, `xfs_repair -n`, `btrfs check`, `fsck.vfat -n`, `fsck.exfat -n`, `fsck.f2fs`); a non-zero tool exit is a failed check, exit 3 — or exit 5 for f2fs, which can rewrite global metadata even without `-f`.
-- `resize` grows or shrinks a GPT or MBR primary partition from a size expression (`+2G`, `-500M`, `10G`, `grow`); a shrink runs the filesystem step offline first. MBR covers partitions 1..4 — extended containers and logical partitions are out of scope. `resize --dry-run` prints the plan and writes nothing. `resizefs` only grows, except the online btrfs form, which can also shrink. If the filesystem cannot shrink, the table is left alone.
+- `resize` grows or shrinks a GPT or MBR primary partition from a size expression (`+2G`, `-500M`, `10G`, `grow`); a shrink runs the filesystem step offline first. MBR covers partitions 1..4 — extended containers and logical partitions are out of scope. `resize --dry-run` prints the plan and writes nothing. `resize --fs-only` only grows the filesystem (offline into its partition, or online through a mountpoint), except the online btrfs form, which can also shrink. If the filesystem cannot shrink, the table is left alone.
 - `mkfs` refuses an LVM PV; use `pvcreate(8)` / `wipefs(8)`.
 - `ntfs` UUID can only be regenerated (`ntfslabel --new-serial`), not set; that serial is not the Windows volume UUID.
 - `swap` grows by rebuilding with `mkswap` after the entry is resized; UUID, PARTUUID and partition number are kept.
@@ -110,7 +110,7 @@ Identification (`info`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squashf
 
 ## Output and exit codes
 
-`info` and `records list|verify|scan` always print one JSON document on stdout; a failure adds an `error` string and leaves undetermined fields `null`. Nothing is printed on stdout before the document is complete, so a consumer can always parse it.
+`layout --json` and `records list|verify` always print one JSON document on stdout; a failure adds an `error` string and leaves undetermined fields `null`. Nothing is printed on stdout before the document is complete, so a consumer can always parse it.
 
 | Code | Meaning |
 |---|---|

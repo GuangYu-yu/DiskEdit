@@ -5,7 +5,7 @@
 //! 断言在注释所指的用例里（集成用例在 `tests/`，单元用例在 `src/` 与 `crates/core/src/`）。
 //! 末尾一条用例校验两本账自洽：每个旧构造点都有 4 列 map 行，且都在此列出。
 
-// tests/case_runner.rs 的 inspect_refuses_a_damaged_or_foreign_record
+// tests/case_runner.rs 的 records_show_refuses_a_damaged_or_foreign_record
 // covers: R0001, R0002, R0003, R0137, R0138, R0139, R0140, R0141
 // covers: R0142, R0147, R0246, R0247, R0248, R0255, R0256, R0258
 // covers: R0259, R0260, R0261, R0263, R0264, R0265, R0266, R0267
@@ -40,7 +40,7 @@
 // tests/fault_injection.rs 的 a_table_that_changes_after_the_write_reports_partial
 // covers: R0042, R0043, R0217, R0517, R0588, R0589, R0590, R0592
 // covers: R0858, R0928, R0931, R0932
-// tests/cases/mod.rs 的 inspect without a target
+// tests/cases/mod.rs 的 records show without a target
 // covers: R0045
 // tests/cases/mod.rs 的 unknown command is a usage error
 // covers: R0047, R0070, R0073, R0079, R0080, R0093
@@ -50,13 +50,13 @@
 // covers: R0051, R0084, R0087
 // tests/cases/mod.rs 的 records verify without an id
 // covers: R0053
-// tests/cases/mod.rs 的 records scan without a root
+// tests/cases/mod.rs 的 records list --root without a value is a usage error
 // covers: R0056
 // tests/cases/mod.rs 的 resize without a size is a usage error
 // covers: R0058
 // tests/cases/mod.rs 的 set type refuses an empty value
 // covers: R0062
-// tests/cases/mod.rs 的 resizefs without a target is a usage error
+// tests/cases/mod.rs 的 resize --fs-only without a target is a usage error
 // covers: R0065, R0066
 // tests/cases/mod.rs 的 add refuses an MBR type byte for GPT
 // covers: R0068
@@ -104,10 +104,10 @@
 // covers: R0728, R0729
 // tests/contract.rs 的 command_surface_has_sixteen_named_entries
 // covers: R0249, R0250, R0251, R0252, R0253, R0254
-// tests/cases/mod.rs 的 records scan needs a directory
+// tests/cases/mod.rs 的 records list --root needs a directory
 // covers: R0278, R0279, R0280, R0281, R0283, R0284, R0285, R0288
 // covers: R0289
-// tests/case_runner.rs 的 recover_refuses_a_target_without_a_record
+// tests/case_runner.rs 的 undo_refuses_a_target_without_a_record
 // covers: R0290, R0291, R0292, R0293, R0294, R0295, R0296, R0297
 // covers: R0298, R0299, R0300, R0815
 // tests/refusal_claims.rs 的 release_archives_instead_of_touching_the_target

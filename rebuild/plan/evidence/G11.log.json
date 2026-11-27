@@ -2,7 +2,7 @@
  "gate": "G11",
  "kind": "lint",
  "command": [
-  "python",
+  "python3",
   "plan/instruments/audit.py",
   "check",
   "--ledger",
@@ -23,9 +23,9 @@
   "."
  ],
  "exit_code": 0,
- "commit": "deb935b",
- "tree": "a2a29206ee96afdd",
- "at": "2026-11-26T19:40:42+00:00",
+ "commit": "a5d01f1",
+ "tree": "58b3e07e4f403979",
+ "at": "2026-11-27T10:31:19+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,

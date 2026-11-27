@@ -43,7 +43,7 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "help with a topic",
-        argv: &["help", "info"],
+        argv: &["help", "layout"],
     },
     Scenario {
         name: "help with a two-word topic",
@@ -51,11 +51,11 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "help flag after a command",
-        argv: &["info", "--help"],
+        argv: &["layout", "--help"],
     },
     Scenario {
         name: "help flag before a command",
-        argv: &["--help", "info"],
+        argv: &["--help", "layout"],
     },
     Scenario {
         name: "unknown help topic",
@@ -67,68 +67,80 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "missing target",
-        argv: &["info"],
+        argv: &["layout"],
     },
     Scenario {
         name: "unknown option",
-        argv: &["info", "--bogus"],
+        argv: &["layout", "--bogus"],
     },
     Scenario {
-        name: "info on a GPT image",
-        argv: &["info", "target/fixtures/s1/gpt.img"],
+        name: "layout on a GPT image",
+        argv: &["layout", "target/fixtures/s1/gpt.img"],
     },
     Scenario {
-        name: "info on an MBR image",
-        argv: &["info", "target/fixtures/s1/mbr.img"],
+        name: "layout on an MBR image",
+        argv: &["layout", "target/fixtures/s1/mbr.img"],
     },
     Scenario {
-        name: "info on an empty image",
-        argv: &["info", "target/fixtures/s1/empty.img"],
+        name: "layout on an empty image",
+        argv: &["layout", "target/fixtures/s1/empty.img"],
     },
     Scenario {
-        name: "info on a damaged GPT image",
-        argv: &["info", "target/fixtures/s1/damaged.img"],
+        name: "layout on a damaged GPT image",
+        argv: &["layout", "target/fixtures/s1/damaged.img"],
     },
     Scenario {
-        name: "info with a partition and no grow",
-        argv: &["info", "target/fixtures/s1/gpt.img:1"],
+        name: "layout rejects a partition selector",
+        argv: &["layout", "target/fixtures/s1/gpt.img:1"],
     },
     Scenario {
-        name: "info grow on the last partition",
-        argv: &["info", "target/fixtures/s1/gpt.img:2", "--grow"],
+        name: "add --dry-run on a GPT image",
+        argv: &["add", "target/fixtures/s1/gpt.img", "1M", "--dry-run"],
     },
     Scenario {
-        name: "info grow on the first partition",
-        argv: &["info", "target/fixtures/s1/gpt.img:1", "--grow"],
-    },
-    Scenario {
-        name: "info grow on MBR",
-        argv: &["info", "target/fixtures/s1/mbr.img:1", "--grow"],
-    },
-    Scenario {
-        name: "info with an invalid sector size",
-        argv: &["info", "target/fixtures/s1/gpt.img", "--sector-size", "123"],
-    },
-    Scenario {
-        name: "info with a 4096 sector size",
+        name: "add --dry-run with a slot hint",
         argv: &[
-            "info",
+            "add",
+            "target/fixtures/s1/gpt.img",
+            "1M",
+            "--part-number",
+            "3",
+            "--dry-run",
+        ],
+    },
+    Scenario {
+        name: "add --dry-run on MBR",
+        argv: &["add", "target/fixtures/s1/mbr.img", "1M", "--dry-run"],
+    },
+    Scenario {
+        name: "layout with an invalid sector size",
+        argv: &[
+            "layout",
+            "target/fixtures/s1/gpt.img",
+            "--sector-size",
+            "123",
+        ],
+    },
+    Scenario {
+        name: "layout with a 4096 sector size",
+        argv: &[
+            "layout",
             "target/fixtures/s1/gpt.img",
             "--sector-size",
             "4096",
         ],
     },
     Scenario {
-        name: "info on a missing target",
-        argv: &["info", "target/fixtures/s1/missing.img"],
+        name: "layout on a missing target",
+        argv: &["layout", "target/fixtures/s1/missing.img"],
     },
     Scenario {
-        name: "inspect",
-        argv: &["inspect", "target/fixtures/s1/gpt.img"],
+        name: "records show",
+        argv: &["records", "show", "target/fixtures/s1/gpt.img"],
     },
     Scenario {
-        name: "inspect on a missing target",
-        argv: &["inspect", "target/fixtures/s1/missing.img"],
+        name: "records show on a missing target",
+        argv: &["records", "show", "target/fixtures/s1/missing.img"],
     },
     Scenario {
         name: "records list without a target",
@@ -152,12 +164,12 @@ const SCENARIOS: &[Scenario] = &[
         argv: &["records", "verify", "target/fixtures/s1/gpt.img", "zz"],
     },
     Scenario {
-        name: "records scan a directory",
-        argv: &["records", "scan", "target/fixtures/s1"],
+        name: "records list --root a directory",
+        argv: &["records", "list", "--root", "target/fixtures/s1"],
     },
     Scenario {
-        name: "records scan a missing directory",
-        argv: &["records", "scan", "target/fixtures/s1/missing"],
+        name: "records list --root a missing directory",
+        argv: &["records", "list", "--root", "target/fixtures/s1/missing"],
     },
     Scenario {
         name: "check on an identified filesystem",
@@ -176,25 +188,25 @@ const SCENARIOS: &[Scenario] = &[
         argv: &["check", "target/fixtures/s1/missing.img:1"],
     },
     Scenario {
-        name: "info on a target smaller than one sector",
-        argv: &["info", "target/fixtures/s1/tiny.img"],
+        name: "layout on a target smaller than one sector",
+        argv: &["layout", "target/fixtures/s1/tiny.img"],
     },
     Scenario {
-        name: "info on an empty file",
-        argv: &["info", "target/fixtures/s1/zero.img"],
+        name: "layout on an empty file",
+        argv: &["layout", "target/fixtures/s1/zero.img"],
     },
     Scenario {
-        name: "info grow without a partition selector",
-        argv: &["info", "--grow", "target/fixtures/s1/gpt.img"],
+        name: "add --dry-run refuses a partition selector",
+        argv: &["add", "target/fixtures/s1/gpt.img:1", "1M", "--dry-run"],
     },
     Scenario {
-        name: "info with a missing option value",
-        argv: &["info", "target/fixtures/s1/gpt.img", "--sector-size"],
+        name: "layout with a missing option value",
+        argv: &["layout", "target/fixtures/s1/gpt.img", "--sector-size"],
     },
     Scenario {
-        name: "info with a repeated value option",
+        name: "layout with a repeated value option",
         argv: &[
-            "info",
+            "layout",
             "target/fixtures/s1/gpt.img",
             "--sector-size",
             "512",
@@ -203,35 +215,35 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
     Scenario {
-        name: "info with a value on a bare flag",
-        argv: &["info", "--grow=1", "target/fixtures/s1/gpt.img"],
+        name: "layout with a value on a bare flag",
+        argv: &["layout", "--json=1", "target/fixtures/s1/gpt.img"],
     },
     Scenario {
-        name: "info with an extra argument",
-        argv: &["info", "target/fixtures/s1/gpt.img", "extra"],
+        name: "layout with an extra argument",
+        argv: &["layout", "target/fixtures/s1/gpt.img", "extra"],
     },
     Scenario {
-        name: "inspect without a target",
-        argv: &["inspect"],
+        name: "records show without a target",
+        argv: &["records", "show"],
     },
     Scenario {
-        name: "inspect refuses a partition selector",
-        argv: &["inspect", "target/fixtures/s1/gpt.img:1"],
+        name: "records show refuses a partition selector",
+        argv: &["records", "show", "target/fixtures/s1/gpt.img:1"],
     },
     Scenario {
         name: "records list refuses a partition selector",
         argv: &["records", "list", "target/fixtures/s1/gpt.img:1"],
     },
     Scenario {
-        name: "records list identity without a target",
-        argv: &["records", "list", "--identity", "declared-name"],
+        name: "records list --alias without a target",
+        argv: &["records", "list", "--alias", "declared-name"],
     },
     Scenario {
-        name: "records list identity on an image",
+        name: "records list --alias on an image",
         argv: &[
             "records",
             "list",
-            "--identity",
+            "--alias",
             "declared-name",
             "target/fixtures/s1/gpt.img",
         ],
@@ -250,12 +262,12 @@ const SCENARIOS: &[Scenario] = &[
         ],
     },
     Scenario {
-        name: "records scan without a root",
-        argv: &["records", "scan"],
+        name: "records list --root without a value",
+        argv: &["records", "list", "--root"],
     },
     Scenario {
-        name: "records scan refuses a file",
-        argv: &["records", "scan", "target/fixtures/s1/gpt.img"],
+        name: "records list --root refuses a file",
+        argv: &["records", "list", "--root", "target/fixtures/s1/gpt.img"],
     },
     Scenario {
         name: "check on a directory",
@@ -397,8 +409,9 @@ fn capture(program: &std::path::Path, argv: &[&str]) -> std::process::Output {
 }
 
 // covers: D9
+// 注：对照的基线二进制仍是旧命令面；改名后该对照只对未改名的条目有意义。
 #[test]
-fn both_binaries_agree_on_info_json_fields() {
+fn both_binaries_agree_on_layout_json_fields() {
     let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
         eprintln!("NotApplicable: 未提供 DISKEDIT_BASELINE，JSON 字段对照未执行");
         return;
@@ -407,19 +420,26 @@ fn both_binaries_agree_on_info_json_fields() {
     let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
     fixtures::prepare();
     let cases: &[&[&str]] = &[
-        &["info", "target/fixtures/s1/gpt.img"],
-        &["info", "target/fixtures/s1/mbr.img"],
-        &["info", "target/fixtures/s1/empty.img"],
-        &["info", "target/fixtures/s1/damaged.img"],
-        &["info", "target/fixtures/s1/gpt.img:1"],
-        &["info", "target/fixtures/s1/gpt.img:2", "--grow"],
+        &["layout", "target/fixtures/s1/gpt.img", "--json"],
+        &["layout", "target/fixtures/s1/mbr.img", "--json"],
+        &["layout", "target/fixtures/s1/empty.img", "--json"],
+        &["layout", "target/fixtures/s1/damaged.img", "--json"],
+        &["layout", "target/fixtures/s1/gpt.img:1", "--json"],
+        &["add", "target/fixtures/s1/gpt.img", "1M", "--dry-run"],
         &[
-            "info",
+            "layout",
             "target/fixtures/s1/gpt.img",
             "--sector-size",
             "4096",
+            "--json",
         ],
-        &["info", "target/fixtures/s1/gpt.img", "--sector-size", "123"],
+        &[
+            "layout",
+            "target/fixtures/s1/gpt.img",
+            "--sector-size",
+            "123",
+            "--json",
+        ],
     ];
     for argv in cases {
         let base = capture(&baseline, argv);
@@ -440,7 +460,7 @@ fn both_binaries_agree_on_info_json_fields() {
             serde_json::from_slice(&cand.stdout).unwrap_or_else(|error| {
                 panic!("候选 {argv:?} 的 stdout 不是 JSON：{error}");
             });
-        assert_eq!(actual, expected, "{argv:?} 的 info JSON 不一致");
+        assert_eq!(actual, expected, "{argv:?} 的 layout JSON 不一致");
     }
 }
 

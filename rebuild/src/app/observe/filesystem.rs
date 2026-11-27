@@ -75,7 +75,7 @@ pub fn capture(
         .map(|program| (program, platform.tool_available(program)))
         .collect();
     // 离线扩容经临时挂载的家族还要证明挂载与卸载程序可用。
-    if matches!(request.command(), Command::Resizefs { .. })
+    if matches!(request.command(), Command::Resize(resize) if resize.fs_only)
         && let Some(partition) = &selected
         && matches!(
             partition.content,
@@ -186,7 +186,7 @@ pub(super) fn open_disk(
         .ok()
         .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
     let identity = request
-        .identity()
+        .alias()
         .map(diskedit_core::fingerprint::Fingerprint::declared)
         .or(strong);
     let sector_size = match handle.sector_size() {
@@ -228,17 +228,17 @@ fn selector_of(command: &Command) -> Option<PartitionSelector> {
     match command {
         Command::Mkfs { partition, .. } => *partition,
         Command::Delete { partition } | Command::Check { partition } => Some(*partition),
-        Command::Resizefs { partition, .. } => *partition,
-        Command::Info { .. }
-        | Command::Inspect
-        | Command::RecordsList
+        Command::Resize(resize) => resize.partition,
+        Command::Layout { .. }
+        | Command::RecordsList { .. }
         | Command::RecordsVerify { .. }
-        | Command::RecordsScan
-        | Command::Resize(_)
+        | Command::RecordsShow
         | Command::Move(_)
         | Command::Copy(_)
         | Command::Set(_)
-        | Command::Recover(_)
+        | Command::Undo
+        | Command::Replay
+        | Command::Release { .. }
         | Command::New { .. }
         | Command::Add(_) => None,
     }
@@ -250,21 +250,22 @@ fn required_programs(command: &Command, selected: Option<&PartitionFacts>) -> Ve
         Command::Mkfs { filesystem, .. } => {
             programs(catalog::profile(filesystem.content()).support(Verb::Mkfs))
         }
-        Command::Resizefs { .. } => selected
+        Command::Resize(resize) if resize.fs_only => selected
             .map(|partition| programs(catalog::profile(partition.content).support(Verb::Grow)))
             .unwrap_or_default(),
-        Command::Info { .. }
-        | Command::Inspect
-        | Command::RecordsList
+        Command::Layout { .. }
+        | Command::RecordsList { .. }
         | Command::RecordsVerify { .. }
-        | Command::RecordsScan
+        | Command::RecordsShow
         | Command::Resize(_)
         | Command::Move(_)
         | Command::Copy(_)
         | Command::Delete { .. }
         | Command::Set(_)
         | Command::Check { .. }
-        | Command::Recover(_)
+        | Command::Undo
+        | Command::Replay
+        | Command::Release { .. }
         | Command::New { .. }
         | Command::Add(_) => Vec::new(),
     }

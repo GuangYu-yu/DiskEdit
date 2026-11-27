@@ -3,12 +3,14 @@
 //! 解析只产出 [`Request`]；任何不认识、重复或缺失的参数都变成 [`UsageError`]，
 //! 由命令层统一以用法错误退出。目标上的分区是否存在不在这里判断。
 
+use std::path::PathBuf;
+
 use diskedit_core::fs::MkfsKind;
 use diskedit_core::table::Guid;
 
 use crate::app::observe::{
-    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, RecoverMode, Request,
-    ResizeRequest, SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
+    Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, ResizeRequest,
+    SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
 };
 
 /// 用法错误：外层打印到 stderr 并以 2 退出。
@@ -32,8 +34,7 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
     };
     let rest = &args[1..];
     match command.as_str() {
-        "info" => parse_info(rest),
-        "inspect" => parse_inspect(rest),
+        "layout" => parse_layout(rest),
         "records" => parse_records(rest),
         "check" => parse_check(rest),
         "new" => parse_new(rest),
@@ -43,69 +44,70 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
         "move" => parse_move(rest),
         "copy" => parse_copy(rest),
         "mkfs" => parse_mkfs(rest),
-        "resizefs" => parse_resizefs(rest),
         "resize" => parse_resize(rest),
-        "recover" => parse_recover(rest),
+        "undo" => parse_undo(rest),
+        "replay" => parse_replay(rest),
+        "release" => parse_release(rest),
         other => Err(UsageError::new(format!("unknown command `{other}`"))),
     }
 }
 
-fn parse_info(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--sector-size"], &["--grow"])?;
-    let target = one_target(&tokens, "info")?;
-    let sector_size = sector_size(&tokens)?;
-    let grow = tokens.has("--grow");
-    if grow {
-        if target.partition.is_none() {
-            return Err(UsageError::new("info --grow needs <TARGET>:N"));
-        }
-    } else if target.partition.is_some() {
-        return Err(UsageError::new(
-            "info accepts a partition selector only with --grow",
-        ));
-    }
-    let mut request = Request::new(target, Command::Info { grow });
-    request = request.with_sector_size(sector_size);
-    Ok(request)
-}
-
-fn parse_inspect(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--identity"], &[])?;
-    let target = one_target(&tokens, "inspect")?;
+fn parse_layout(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(args, &["--sector-size"], &["--json"])?;
+    let target = one_target(&tokens, "layout")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
-            "inspect does not accept a partition selector",
+            "layout takes a whole target — drop the :N suffix",
         ));
     }
-    Ok(Request::new(target, Command::Inspect).with_identity(identity(&tokens)))
+    Ok(Request::new(
+        target,
+        Command::Layout {
+            json: tokens.has("--json"),
+        },
+    )
+    .with_sector_size(sector_size(&tokens)?))
 }
 
 fn parse_records(args: &[String]) -> Result<Request, UsageError> {
     let Some(subcommand) = args.first() else {
-        return Err(UsageError::new("records needs list, verify or scan"));
+        return Err(UsageError::new("records needs list, verify or show"));
     };
     match subcommand.as_str() {
         "list" => {
-            let tokens = Tokens::scan(&args[1..], &["--identity"], &[])?;
+            let tokens = Tokens::scan(&args[1..], &["--alias", "--root"], &[])?;
+            let root = tokens.value("--root").map(PathBuf::from);
+            if root.is_some() {
+                // `--root` 形态扫描一个记录容器目录，与目标形态互斥。
+                if !tokens.positionals.is_empty() {
+                    return Err(UsageError::new("give either a target or --root, not both"));
+                }
+                if tokens.has("--alias") {
+                    return Err(UsageError::new(
+                        "`--alias` names a target; give TARGET or drop the option",
+                    ));
+                }
+                return Ok(Request::without_target(Command::RecordsList { root }));
+            }
             let target = optional_target(&tokens)?;
             if let Some(target) = &target
                 && target.partition.is_some()
             {
                 return Err(UsageError::new("records list does not accept a selector"));
             }
-            if target.is_none() && tokens.has("--identity") {
+            if target.is_none() && tokens.has("--alias") {
                 return Err(UsageError::new(
-                    "`--identity` names a target; give TARGET or drop the option",
+                    "`--alias` names a target; give TARGET or drop the option",
                 ));
             }
             Ok(match target {
-                Some(target) => Request::new(target, Command::RecordsList),
-                None => Request::without_target(Command::RecordsList),
+                Some(target) => Request::new(target, Command::RecordsList { root: None }),
+                None => Request::without_target(Command::RecordsList { root: None }),
             }
-            .with_identity(identity(&tokens)))
+            .with_alias(alias(&tokens)))
         }
         "verify" => {
-            let tokens = Tokens::scan(&args[1..], &["--identity"], &[])?;
+            let tokens = Tokens::scan(&args[1..], &["--alias"], &[])?;
             if tokens.positionals.len() != 2 {
                 return Err(UsageError::new("records verify needs <TARGET> <ID>"));
             }
@@ -116,13 +118,17 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
                 ));
             }
             let token = record_token(&tokens.positionals[1])?;
-            Ok(Request::new(target, Command::RecordsVerify { token })
-                .with_identity(identity(&tokens)))
+            Ok(Request::new(target, Command::RecordsVerify { token }).with_alias(alias(&tokens)))
         }
-        "scan" => {
-            let tokens = Tokens::scan(&args[1..], &[], &[])?;
-            let target = one_target(&tokens, "records scan")?;
-            Ok(Request::new(target, Command::RecordsScan))
+        "show" => {
+            let tokens = Tokens::scan(&args[1..], &["--alias"], &[])?;
+            let target = one_target(&tokens, "records show")?;
+            if target.partition.is_some() {
+                return Err(UsageError::new(
+                    "records show does not accept a partition selector",
+                ));
+            }
+            Ok(Request::new(target, Command::RecordsShow).with_alias(alias(&tokens)))
         }
         other => Err(UsageError::new(format!(
             "unknown records subcommand `{other}`"
@@ -140,11 +146,7 @@ fn parse_check(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--label", "--identity", "--sector-size"],
-        &["--yes"],
-    )?;
+    let tokens = Tokens::scan(args, &["--label", "--alias", "--sector-size"], &["--yes"])?;
     if !tokens.has("--yes") {
         return Err(UsageError::new("`mkfs` needs --yes"));
     }
@@ -165,94 +167,73 @@ fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
     };
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
-fn parse_resizefs(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--identity", "--sector-size"], &["--yes"])?;
+/// `undo`/`replay`/`release`：三个恢复入口，各自回滚、回放或放弃记录。
+fn parse_undo(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
     if !tokens.has("--yes") {
-        return Err(UsageError::new("`resizefs` needs --yes"));
+        return Err(UsageError::new("`undo` needs --yes"));
     }
-    if tokens.positionals.is_empty() || tokens.positionals.len() > 2 {
-        return Err(UsageError::new(
-            "resizefs needs <TARGET>:N [BYTES] or <MOUNTPOINT> [BYTES]",
-        ));
-    }
-    let target = target_spec(&tokens.positionals[0])?;
-    if target.partition.is_none() && tokens.has("--sector-size") {
-        return Err(UsageError::new(
-            "--sector-size only applies to image targets — a mountpoint form takes no sector size",
-        ));
-    }
-    if target.partition.is_some() && tokens.positionals.len() > 1 {
-        return Err(UsageError::new(
-            "a size only applies to the mountpoint form — offline resizefs grows the filesystem into its partition",
-        ));
-    }
-    let bytes = tokens
-        .positionals
-        .get(1)
-        .map(|raw| absolute_size(raw))
-        .transpose()?;
-    let command = Command::Resizefs {
-        partition: target.partition,
-        bytes,
-    };
-    Ok(Request::new(target, command)
-        .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
-        .with_confirmation(true))
-}
-
-/// `recover`：默认回滚、`--replay-table-only` 或 `--release [--discard-replay]`，三者互斥。
-fn parse_recover(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--identity", "--sector-size"],
-        &[
-            "--yes",
-            "--replay-table-only",
-            "--release",
-            "--discard-replay",
-        ],
-    )?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`recover` needs --yes"));
-    }
-    let target = one_target(&tokens, "recover")?;
+    let target = one_target(&tokens, "undo")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
-            "`recover` handles the whole target's record — drop the :N selector",
+            "`undo` handles the whole target's record — drop the :N selector",
         ));
     }
-    let replay = tokens.has("--replay-table-only");
-    let release = tokens.has("--release");
-    let discard = tokens.has("--discard-replay");
-    if replay && release {
-        return Err(UsageError::new(
-            "--replay-table-only and --release are mutually exclusive",
-        ));
-    }
-    if discard && !release {
-        return Err(UsageError::new("--discard-replay requires --release"));
-    }
-    let mode = if release {
-        RecoverMode::Release {
-            discard_replay: discard,
-        }
-    } else if replay {
-        RecoverMode::ReplayTableOnly
-    } else {
-        RecoverMode::Default
-    };
-    Ok(Request::new(target, Command::Recover(mode))
+    Ok(Request::new(target, Command::Undo)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
+}
+
+fn parse_replay(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`replay` needs --yes"));
+    }
+    let target = one_target(&tokens, "replay")?;
+    if target.partition.is_some() {
+        return Err(UsageError::new(
+            "`replay` handles the whole target's record — drop the :N selector",
+        ));
+    }
+    Ok(Request::new(target, Command::Replay)
+        .with_sector_size(sector_size(&tokens)?)
+        .with_alias(alias(&tokens))
+        .with_confirmation(true))
+}
+
+fn parse_release(args: &[String]) -> Result<Request, UsageError> {
+    let tokens = Tokens::scan(
+        args,
+        &["--alias", "--sector-size"],
+        &["--yes", "--discard-replay"],
+    )?;
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`release` needs --yes"));
+    }
+    let target = one_target(&tokens, "release")?;
+    if target.partition.is_some() {
+        return Err(UsageError::new(
+            "`release` handles the whole target's record — drop the :N selector",
+        ));
+    }
+    Ok(Request::new(
+        target,
+        Command::Release {
+            discard_replay: tokens.has("--discard-replay"),
+        },
+    )
+    .with_sector_size(sector_size(&tokens)?)
+    .with_alias(alias(&tokens))
+    .with_confirmation(true))
 }
 
 /// `resize`：分区与文件系统一起扩缩；SIZE、`--end` 与 `--grow-to-end` 三选一。
+/// `--fs-only` 走文件系统形态：离线 `<TARGET>:N`，或挂载点在线 `<MOUNTPOINT> [BYTES]`。
 fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(
         args,
@@ -261,7 +242,7 @@ fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
             "--align",
             "--chunk",
             "--lv",
-            "--identity",
+            "--alias",
             "--sector-size",
         ],
         &[
@@ -270,9 +251,13 @@ fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
             "--allow-move",
             "--grow-lv",
             "--no-fs",
+            "--fs-only",
             "--dry-run",
         ],
     )?;
+    if tokens.has("--fs-only") {
+        return parse_resize_fs_only(&tokens);
+    }
     let dry_run = tokens.has("--dry-run");
     if !dry_run && !tokens.has("--yes") {
         return Err(UsageError::new("`resize` needs --yes"));
@@ -339,12 +324,77 @@ fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
         grow_lv,
         lv,
         no_fs: tokens.has("--no-fs"),
+        fs_only: false,
         dry_run,
     });
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(tokens.has("--yes")))
+}
+
+/// `resize --fs-only`：只动文件系统。离线形态 `<TARGET>:N`（长满分区），或
+/// 挂载点在线形态 `<MOUNTPOINT> [BYTES]`；两者都不接受分区几何旗标。
+fn parse_resize_fs_only(tokens: &Tokens) -> Result<Request, UsageError> {
+    if !tokens.has("--yes") {
+        return Err(UsageError::new("`resize` needs --yes"));
+    }
+    for flag in [
+        "--align",
+        "--allow-move",
+        "--chunk",
+        "--dry-run",
+        "--end",
+        "--grow-lv",
+        "--grow-to-end",
+        "--lv",
+    ] {
+        if tokens.has(flag) {
+            return Err(UsageError::new(format!(
+                "`--fs-only` does not accept `{flag}`"
+            )));
+        }
+    }
+    if tokens.positionals.is_empty() || tokens.positionals.len() > 2 {
+        return Err(UsageError::new(
+            "resize --fs-only needs <TARGET>:N or <MOUNTPOINT> [BYTES]",
+        ));
+    }
+    let target = target_spec(&tokens.positionals[0])?;
+    let partition = target.partition;
+    if partition.is_none() && tokens.has("--sector-size") {
+        return Err(UsageError::new(
+            "--sector-size only applies to image targets — a mountpoint form takes no sector size",
+        ));
+    }
+    if partition.is_some() && tokens.positionals.len() > 1 {
+        return Err(UsageError::new(
+            "a size only applies to the mountpoint form — offline --fs-only grows the filesystem into its partition",
+        ));
+    }
+    let bytes = tokens
+        .positionals
+        .get(1)
+        .map(|raw| absolute_size(raw))
+        .transpose()?;
+    let command = Command::Resize(ResizeRequest {
+        partition,
+        size: bytes.map(SizeSpec::Absolute),
+        end: None,
+        grow_to_end: false,
+        align: None,
+        allow_move: false,
+        chunk: None,
+        grow_lv: false,
+        lv: None,
+        no_fs: false,
+        fs_only: true,
+        dry_run: false,
+    });
+    Ok(Request::new(target, command)
+        .with_sector_size(sector_size(tokens)?)
+        .with_alias(alias(tokens))
+        .with_confirmation(true))
 }
 
 /// `resize` 的 SIZE：绝对、`+N`/`-N`、`+N%`/`-N%` 与 `grow`。
@@ -384,7 +434,7 @@ fn parse_size_spec(raw: &str) -> Result<SizeSpec, UsageError> {
 fn parse_new(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(
         args,
-        &["--table", "--identity", "--sector-size"],
+        &["--table", "--alias", "--sector-size"],
         &["--yes", "--overwrite-data"],
     )?;
     if !tokens.has("--yes") {
@@ -411,7 +461,7 @@ fn parse_new(args: &[String]) -> Result<Request, UsageError> {
     };
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
@@ -424,12 +474,13 @@ fn parse_add(args: &[String]) -> Result<Request, UsageError> {
             "--part-number",
             "--name",
             "--type-guid",
-            "--identity",
+            "--alias",
             "--sector-size",
         ],
-        &["--yes"],
+        &["--yes", "--dry-run"],
     )?;
-    if !tokens.has("--yes") {
+    let dry_run = tokens.has("--dry-run");
+    if !dry_run && !tokens.has("--yes") {
         return Err(UsageError::new("`add` needs --yes"));
     }
     if tokens.positionals.len() != 2 {
@@ -469,15 +520,16 @@ fn parse_add(args: &[String]) -> Result<Request, UsageError> {
         part_number,
         name,
         type_guid,
+        dry_run,
     });
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
-        .with_confirmation(true))
+        .with_alias(alias(&tokens))
+        .with_confirmation(tokens.has("--yes")))
 }
 
 fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--identity", "--sector-size"], &["--yes"])?;
+    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
     if !tokens.has("--yes") {
         return Err(UsageError::new("`delete` needs --yes"));
     }
@@ -489,16 +541,12 @@ fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
     };
     Ok(Request::new(target, Command::Delete { partition })
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
 fn parse_set(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--identity", "--sector-size"],
-        &["--yes", "--random"],
-    )?;
+    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes", "--random"])?;
     if !tokens.has("--yes") {
         return Err(UsageError::new("`set` needs --yes"));
     }
@@ -561,20 +609,14 @@ fn parse_set(args: &[String]) -> Result<Request, UsageError> {
     });
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
 fn parse_move(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(
         args,
-        &[
-            "--align",
-            "--start",
-            "--chunk",
-            "--identity",
-            "--sector-size",
-        ],
+        &["--align", "--start", "--chunk", "--alias", "--sector-size"],
         &["--yes"],
     )?;
     if !tokens.has("--yes") {
@@ -597,7 +639,7 @@ fn parse_move(args: &[String]) -> Result<Request, UsageError> {
     });
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
@@ -609,7 +651,7 @@ fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
             "--start",
             "--chunk",
             "--name",
-            "--identity",
+            "--alias",
             "--sector-size",
         ],
         &["--yes", "--keep-partuuid"],
@@ -636,7 +678,7 @@ fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
     });
     Ok(Request::new(target, command)
         .with_sector_size(sector_size(&tokens)?)
-        .with_identity(identity(&tokens))
+        .with_alias(alias(&tokens))
         .with_confirmation(true))
 }
 
@@ -824,8 +866,8 @@ fn sector_size(tokens: &Tokens) -> Result<Option<u64>, UsageError> {
     Ok(Some(size))
 }
 
-fn identity(tokens: &Tokens) -> Option<String> {
-    tokens.value("--identity").map(str::to_owned)
+fn alias(tokens: &Tokens) -> Option<String> {
+    tokens.value("--alias").map(str::to_owned)
 }
 
 /// 一次扫描得到的原始参数。
@@ -926,44 +968,42 @@ mod tests {
     }
 
     #[test]
-    fn info_accepts_whole_target_and_sector_size() {
-        let request = parse_words(&["info", "disk.img", "--sector-size", "4096"]).expect("合法");
+    fn layout_accepts_whole_target_and_sector_size() {
+        let request = parse_words(&["layout", "disk.img", "--sector-size", "4096"]).expect("合法");
         assert_eq!(request.sector_size(), Some(4096));
-        assert!(matches!(request.command(), Command::Info { grow: false }));
+        assert!(matches!(request.command(), Command::Layout { json: false }));
         assert!(request.partition_selector().is_none());
     }
 
     #[test]
-    fn info_grow_needs_a_partition() {
-        assert!(parse_words(&["info", "disk.img", "--grow"]).is_err());
-        let request = parse_words(&["info", "disk.img:last", "--grow"]).expect("合法");
-        assert_eq!(request.partition_selector(), Some(PartitionSelector::Last));
-        assert!(matches!(request.command(), Command::Info { grow: true }));
+    fn layout_json_selects_the_structured_detail() {
+        let request = parse_words(&["layout", "disk.img", "--json"]).expect("合法");
+        assert!(matches!(request.command(), Command::Layout { json: true }));
     }
 
     #[test]
-    fn info_rejects_a_selector_without_grow() {
-        assert!(parse_words(&["info", "disk.img:1"]).is_err());
+    fn layout_rejects_a_selector() {
+        assert!(parse_words(&["layout", "disk.img:1"]).is_err());
     }
 
     #[test]
     fn sector_size_must_be_a_large_power_of_two() {
         for bad in ["0", "123", "256"] {
-            assert!(parse_words(&["info", "disk.img", "--sector-size", bad]).is_err());
+            assert!(parse_words(&["layout", "disk.img", "--sector-size", bad]).is_err());
         }
         for good in ["512", "1024", "4096"] {
-            assert!(parse_words(&["info", "disk.img", "--sector-size", good]).is_ok());
+            assert!(parse_words(&["layout", "disk.img", "--sector-size", good]).is_ok());
         }
     }
 
     #[test]
     fn target_suffix_keeps_unparseable_colons_in_the_path() {
-        let request = parse_words(&["info", "weird:name.img"]).expect("合法");
+        let request = parse_words(&["layout", "weird:name.img"]).expect("合法");
         assert_eq!(
             request.target().expect("目标").to_str(),
             Some("weird:name.img")
         );
-        assert!(parse_words(&["info", "disk.img:0"]).is_err());
+        assert!(parse_words(&["layout", "disk.img:0"]).is_err());
     }
 
     #[test]
@@ -984,10 +1024,10 @@ mod tests {
 
     #[test]
     fn unknown_options_and_duplicates_are_usage_errors() {
-        assert!(parse_words(&["info", "disk.img", "--bogus"]).is_err());
+        assert!(parse_words(&["layout", "disk.img", "--bogus"]).is_err());
         assert!(
             parse_words(&[
-                "info",
+                "layout",
                 "disk.img",
                 "--sector-size",
                 "512",
@@ -1064,19 +1104,19 @@ mod tests {
                 assert_eq!(copy.name.as_deref(), Some("clone"));
                 assert!(copy.keep_partuuid);
             }
-            Command::Info { .. }
-            | Command::Inspect
-            | Command::RecordsList
+            Command::Layout { .. }
+            | Command::RecordsList { .. }
             | Command::RecordsVerify { .. }
-            | Command::RecordsScan
+            | Command::RecordsShow
             | Command::Resize(_)
             | Command::Move(_)
             | Command::Delete { .. }
             | Command::Set(_)
             | Command::Check { .. }
             | Command::Mkfs { .. }
-            | Command::Resizefs { .. }
-            | Command::Recover(_)
+            | Command::Undo
+            | Command::Replay
+            | Command::Release { .. }
             | Command::New { .. }
             | Command::Add(_) => panic!("expected copy"),
         }

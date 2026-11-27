@@ -58,7 +58,7 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     let (code, stdout, stderr) = run_argv(&["new", gpt, "--yes"]);
     assert_eq!(code, 0, "空白镜像建 GPT 应成功：{stderr}");
     assert!(stdout.contains("created gpt table"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", gpt]);
+    let (code, stdout, _) = run_argv(&["layout", gpt, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"label\":\"gpt\""), "{stdout}");
 
@@ -66,7 +66,7 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     copy_fixture("blank.img", mbr);
     let (code, _, stderr) = run_argv(&["new", mbr, "--yes", "--table", "mbr"]);
     assert_eq!(code, 0, "空白镜像建 MBR 应成功：{stderr}");
-    let (code, stdout, _) = run_argv(&["info", mbr]);
+    let (code, stdout, _) = run_argv(&["layout", mbr, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"label\":\"mbr\""), "{stdout}");
 
@@ -82,7 +82,7 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     );
     let (code, _, stderr) = run_argv(&["new", occupied, "--yes", "--overwrite-data"]);
     assert_eq!(code, 0, "显式覆盖应成功：{stderr}");
-    let (code, stdout, _) = run_argv(&["info", occupied]);
+    let (code, stdout, _) = run_argv(&["layout", occupied, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"label\":\"gpt\""), "{stdout}");
 
@@ -171,7 +171,7 @@ fn add_delete_and_set_rewrite_both_copies() {
     let (code, stdout, stderr) = run_argv(&["add", &gpt, "1M", "--yes"]);
     assert_eq!(code, 0, "GPT 新增应成功：{stderr}");
     assert!(stdout.contains("added partition #3"), "{stdout}");
-    let (code, stdout, stderr) = run_argv(&["info", &gpt]);
+    let (code, stdout, stderr) = run_argv(&["layout", &gpt, "--json"]);
     assert_eq!(code, 0, "{stderr}");
     assert!(stdout.contains("\"num\":3"), "{stdout}");
     assert!(stdout.contains("\"first_lba\":4096"), "{stdout}");
@@ -185,7 +185,7 @@ fn add_delete_and_set_rewrite_both_copies() {
     let (code, stdout, stderr) = run_argv(&["set", &format!("{gpt}:1"), "name", "rootfs", "--yes"]);
     assert_eq!(code, 0, "改 GPT 名字应成功：{stderr}");
     assert!(stdout.contains("renamed partition #1"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    let (code, stdout, _) = run_argv(&["layout", &gpt, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"name\":\"rootfs\""), "{stdout}");
 
@@ -197,7 +197,7 @@ fn add_delete_and_set_rewrite_both_copies() {
         "--yes",
     ]);
     assert_eq!(code, 0, "改 GPT 类型应成功：{stderr}");
-    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    let (code, stdout, _) = run_argv(&["layout", &gpt, "--json"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
@@ -212,14 +212,14 @@ fn add_delete_and_set_rewrite_both_copies() {
     let (code, stdout, stderr) = run_argv(&["delete", &format!("{gpt}:3"), "--yes"]);
     assert_eq!(code, 0, "GPT 删除应成功：{stderr}");
     assert!(stdout.contains("deleted partition #3"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &gpt]);
+    let (code, stdout, _) = run_argv(&["layout", &gpt, "--json"]);
     assert_eq!(code, 0);
     assert!(!stdout.contains("\"num\":3"), "{stdout}");
 
     let (code, stdout, stderr) = run_argv(&["add", &mbr, "512K", "--yes"]);
     assert_eq!(code, 0, "MBR 新增应成功：{stderr}");
     assert!(stdout.contains("added partition #2"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &mbr]);
+    let (code, stdout, _) = run_argv(&["layout", &mbr, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"num\":2"), "{stdout}");
 
@@ -249,7 +249,7 @@ fn add_delete_and_set_rewrite_both_copies() {
     .expect("复制 GPT 夹具");
     let (code, _, stderr) = run_argv(&["add", &explicit, "1M", "--start", "5000", "--yes"]);
     assert_eq!(code, 0, "显式起点应成功：{stderr}");
-    let (code, stdout, _) = run_argv(&["info", &explicit]);
+    let (code, stdout, _) = run_argv(&["layout", &explicit, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":5000"), "{stdout}");
 
@@ -263,7 +263,7 @@ fn add_delete_and_set_rewrite_both_copies() {
         "add", &aligned, "300K", "--start", "5000", "--align", "mib", "--yes",
     ]);
     assert_eq!(code, 0, "对齐起点应成功：{stderr}");
-    let (code, stdout, _) = run_argv(&["info", &aligned]);
+    let (code, stdout, _) = run_argv(&["layout", &aligned, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
 }
@@ -301,7 +301,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
         run_argv(&["move", &format!("{moved}:2"), "--start", "5120", "--yes"]);
     assert_eq!(code, 0, "搬移应成功：{stderr}");
     assert!(stdout.contains("moved partition #2"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &moved]);
+    let (code, stdout, _) = run_argv(&["layout", &moved, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":5120"), "{stdout}");
     assert!(stdout.contains("\"last_lba\":6143"), "{stdout}");
@@ -340,7 +340,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
     ]);
     assert_eq!(code, 0, "复制应成功：{stderr}");
     assert!(stdout.contains("copied to partition #3"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &copied]);
+    let (code, stdout, _) = run_argv(&["layout", &copied, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
     assert!(stdout.contains("\"name\":\"clone\""), "{stdout}");
@@ -415,7 +415,7 @@ fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
         run_argv(&["resize", &format!("{image}:2"), "grow", "--no-fs", "--yes"]);
     assert_eq!(code, 0, "只改表的扩容应成功：{stderr}");
     assert!(stdout.contains("resized partition #2"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &image]);
+    let (code, stdout, _) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"last_lba\":8158"), "{stdout}");
 
@@ -674,7 +674,7 @@ fn filesystem_commands_refuse_without_touching_the_target() {
     let (code, _, _) = run_argv(&["mkfs", &format!("{image}:5"), "ext4", "--yes"]);
     assert_eq!(code, 3, "不存在的分区应拒绝");
 
-    let (code, _, _) = run_argv(&["resizefs", &format!("{image}:1"), "--yes"]);
+    let (code, _, _) = run_argv(&["resize", &format!("{image}:1"), "--fs-only", "--yes"]);
     assert_eq!(code, 3, "内容未识别时不得臆测文件系统");
 
     assert_eq!(
@@ -729,7 +729,7 @@ fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
 // covers: R0302
 // covers: R0851, R0853, R0855, R0857, R0859
 #[test]
-fn recover_refuses_a_target_without_a_record() {
+fn undo_refuses_a_target_without_a_record() {
     fixtures::prepare();
     let directory = "target/fixtures/s7";
     std::fs::create_dir_all(directory).expect("夹具目录可建");
@@ -738,23 +738,23 @@ fn recover_refuses_a_target_without_a_record() {
     let state = "target/fixtures/s7/state";
     drop(std::fs::remove_dir_all(state));
     let (code, _stdout, stderr) =
-        run_argv_env(&["recover", image, "--yes"], &[("XDG_STATE_HOME", state)]);
+        run_argv_env(&["undo", image, "--yes"], &[("XDG_STATE_HOME", state)]);
     assert_eq!(code, 3, "没有记录应被拒绝：{stderr}");
     assert!(stderr.contains("no recovery record"), "{stderr}");
 }
 
 // covers: R0301
 #[test]
-fn recover_refuses_a_partition_selector() {
-    let (code, _stdout, stderr) = run_argv(&["recover", "disk.img:1", "--yes"]);
-    assert_eq!(code, 2, "recover 不接受分区选择器：{stderr}");
+fn undo_refuses_a_partition_selector() {
+    let (code, _stdout, stderr) = run_argv(&["undo", "disk.img:1", "--yes"]);
+    assert_eq!(code, 2, "undo 不接受分区选择器：{stderr}");
 }
 
 // covers: D9
 #[test]
-fn read_only_info_emits_one_structured_json_document() {
+fn read_only_layout_emits_one_structured_json_document() {
     // 只读命令统一输出本实现的结构化 JSON：单个对象、字段集稳定。
-    let (code, stdout, _) = run_argv(&["info", "target/fixtures/s1/gpt.img"]);
+    let (code, stdout, _) = run_argv(&["layout", "target/fixtures/s1/gpt.img", "--json"]);
     assert_eq!(code, 0);
     let trimmed = stdout.trim();
     assert!(
@@ -771,8 +771,8 @@ fn read_only_info_emits_one_structured_json_document() {
 fn read_only_commands_leave_the_target_bytes_unchanged() {
     let path = "target/fixtures/s1/gpt.img";
     let before = std::fs::read(path).expect("读取夹具");
-    let (code, _stdout, stderr) = run_argv(&["info", path]);
-    assert_eq!(code, 0, "只读 info 应成功：{stderr}");
+    let (code, _stdout, stderr) = run_argv(&["layout", path, "--json"]);
+    assert_eq!(code, 0, "只读 layout 应成功：{stderr}");
     assert_eq!(
         std::fs::read(path).expect("读取夹具"),
         before,
@@ -782,10 +782,10 @@ fn read_only_commands_leave_the_target_bytes_unchanged() {
 
 // 无盘标的目标只报告空表，不崩溃、不写盘（parted disk_set 曾在无盘标时崩溃）。
 #[test]
-fn info_reports_an_empty_table_without_crashing() {
+fn layout_reports_an_empty_table_without_crashing() {
     let path = "target/fixtures/s1/empty.img";
     let before = std::fs::read(path).expect("读取夹具");
-    let (code, stdout, stderr) = run_argv(&["info", path]);
+    let (code, stdout, stderr) = run_argv(&["layout", path, "--json"]);
     assert_eq!(code, 0, "无表目标应正常报告：{stderr}");
     assert!(stdout.contains("\"label\":\"none\""), "{stdout}");
     assert!(stdout.contains("\"partitions\":[]"), "{stdout}");
@@ -894,9 +894,9 @@ fn record_body(
 // covers: R0149, R0150, R0151, R0152, R0153, R0154
 #[cfg(target_os = "linux")]
 #[test]
-fn inspect_refuses_a_damaged_or_foreign_record() {
+fn records_show_refuses_a_damaged_or_foreign_record() {
     fixtures::prepare();
-    let directory = "target/fixtures/s7/inspect";
+    let directory = "target/fixtures/s7/records-show";
     drop(std::fs::remove_dir_all(directory));
     std::fs::create_dir_all(directory).expect("夹具目录可建");
     let image = format!("{directory}/gpt.img");
@@ -912,7 +912,8 @@ fn inspect_refuses_a_damaged_or_foreign_record() {
 
     // 截断：头部声明长度大于实际字节。
     std::fs::write(&record, &valid[..valid.len() - 4]).expect("记录可写");
-    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    let (code, _stdout, stderr) =
+        run_argv_env(&["records", "show", &image], &[("XDG_STATE_HOME", &state)]);
     assert_eq!(code, 3, "截断记录必须拒绝：{stderr}");
     assert!(
         stderr.contains("shorter than its declared length"),
@@ -924,13 +925,15 @@ fn inspect_refuses_a_damaged_or_foreign_record() {
     let at = corrupt.len() / 2;
     corrupt[at] ^= 0xFF;
     std::fs::write(&record, &corrupt).expect("记录可写");
-    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    let (code, _stdout, stderr) =
+        run_argv_env(&["records", "show", &image], &[("XDG_STATE_HOME", &state)]);
     assert_eq!(code, 3, "校验不符必须拒绝：{stderr}");
     assert!(stderr.contains("CRC does not match"), "{stderr}");
 
     // 格式不认：长度足够但标识不是本实现的格式。
     std::fs::write(&record, vec![0u8; 200]).expect("记录可写");
-    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    let (code, _stdout, stderr) =
+        run_argv_env(&["records", "show", &image], &[("XDG_STATE_HOME", &state)]);
     assert_eq!(code, 3, "格式不认必须拒绝：{stderr}");
     assert!(stderr.contains("not recognized"), "{stderr}");
 
@@ -941,14 +944,16 @@ fn inspect_refuses_a_damaged_or_foreign_record() {
     )
     .expect("记录可编码");
     std::fs::write(&record, &foreign).expect("记录可写");
-    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    let (code, _stdout, stderr) =
+        run_argv_env(&["records", "show", &image], &[("XDG_STATE_HOME", &state)]);
     assert_eq!(code, 3, "外来记录必须拒绝：{stderr}");
     assert!(stderr.contains("belongs to a different target"), "{stderr}");
 
     // 非普通文件：记录位置被目录占住，读不出字节。
     std::fs::remove_file(&record).expect("记录可删");
     std::fs::create_dir(&record).expect("目录可建");
-    let (code, _stdout, stderr) = run_argv_env(&["inspect", &image], &[("XDG_STATE_HOME", &state)]);
+    let (code, _stdout, stderr) =
+        run_argv_env(&["records", "show", &image], &[("XDG_STATE_HOME", &state)]);
     assert_eq!(code, 3, "非普通记录条目必须拒绝：{stderr}");
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
@@ -988,7 +993,7 @@ fn resize_allow_move_relocates_the_blocking_partition() {
         "应报告搬移了挡路分区：{stdout}"
     );
 
-    let (code, stdout, _) = run_argv(&["info", &image]);
+    let (code, stdout, _) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("\"first_lba\":2048,\"fs\":\"unknown\",\"last_lba\":7134"),
@@ -1026,7 +1031,7 @@ fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
     let (code, stdout, stderr) = run_argv(&["resize", &image, "grow", "--yes"]);
     assert_eq!(code, 0, "superfloppy 扩容应成功：{stderr}");
     assert!(stdout.contains("superfloppy: ext grown"), "{stdout}");
-    let (code, stdout, _) = run_argv(&["info", &image]);
+    let (code, stdout, _) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("\"size_bytes\":8388608"), "{stdout}");
 
@@ -1072,7 +1077,7 @@ fn a_gpt_boot_flag_becomes_the_esp_type_and_leaves_the_protective_mbr_alone() {
     assert_eq!(after[446], 0x00, "保护 MBR 的启动位必须保持 0");
     assert_eq!(after[450], 0xEE, "保护 MBR 的类型必须仍是 0xEE");
 
-    let (code, stdout, _) = run_argv(&["info", &image]);
+    let (code, stdout, _) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0);
     assert!(
         stdout.contains("C12A7328-F81F-11D2-BA4B-00A0C93EC93B"),
@@ -1123,7 +1128,7 @@ fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
     std::fs::write(&image, &bytes).expect("写回混合 MBR");
     let before = std::fs::read(&image).expect("读取混合 MBR");
 
-    let (code, _, stderr) = run_argv(&["info", &image]);
+    let (code, _, stderr) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0, "混合 MBR 应可读：{stderr}");
     assert_eq!(
         std::fs::read(&image).expect("读取镜像"),
@@ -1196,13 +1201,13 @@ fn duplicate_partuuids_are_read_and_preserved_not_rewritten() {
     std::fs::write(&image, &bytes).expect("写回重复身份");
     let duplicated = std::fs::read(&image).expect("读取镜像");
 
-    let (code, stdout, stderr) = run_argv(&["info", &image]);
+    let (code, stdout, stderr) = run_argv(&["layout", &image, "--json"]);
     assert_eq!(code, 0, "重复 PARTUUID 应可读：{stderr}");
     assert!(stdout.contains("\"num\":2"), "{stdout}");
     assert_eq!(
         std::fs::read(&image).expect("读取镜像"),
         duplicated,
-        "只读 info 不得改写盘面"
+        "只读 layout 不得改写盘面"
     );
 
     let (code, _, stderr) = run_argv(&["set", &format!("{image}:2"), "name", "two", "--yes"]);

@@ -41,11 +41,10 @@
 
 | 命令 | 镜像文件 | 块设备 | 其他平台 |
 |---|---|---|---|
-| `info` | 可以 | 可以 | 可以 |
-| `inspect` | 可以 | 可以 | 可以 |
+| `layout` | 可以 | 可以 | 可以 |
 | `records list` | 可以 | 可以 | 可以 |
 | `records verify` | 可以 | 可以 | 可以 |
-| `records scan` | 可以 | 可以 | 可以 |
+| `records show` | 可以 | 可以 | 可以 |
 | `resize` | 可以 | 可以（需 root） | 拒绝（6） |
 | `move` | 可以 | 可以（需 root） | 拒绝（6） |
 | `copy` | 可以 | 可以（需 root） | 拒绝（6） |
@@ -53,8 +52,8 @@
 | `set` | 可以 | 可以（需 root） | 拒绝（6） |
 | `check` | 可以 | 可以 | 可以 |
 | `mkfs` | 可以 | 可以（需 root） | 拒绝（6） |
-| `resizefs` | 可以 | 可以（需 root） | 拒绝（6） |
-| `recover` | 可以 | 可以（需 root） | 拒绝（6） |
+| `resize --fs-only` | 可以 | 可以（需 root） | 拒绝（6） |
+| `undo` / `replay` / `release` | 可以 | 可以（需 root） | 拒绝（6） |
 | `new` | 可以 | 可以（需 root） | 拒绝（6） |
 | `add` | 可以 | 可以（需 root） | 拒绝（6） |
 

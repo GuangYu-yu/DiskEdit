@@ -1,11 +1,13 @@
-//! `recover` 的判定：把纯恢复器的结论落到一条命令决策上。
+//! `undo` 的判定：把纯恢复器的结论落到一条回滚命令决策上。
 //!
 //! 判定只读快照，不碰目标字节，也不取锁。它负责三件事：按 B22 的占用闸与
 //! 身份等级拒绝不合格的目标；按 B9 的次序产出一条外部状态或写目标计划；
 //! 按 B7 / B8 / B23 的口径把记录分成"可回滚""只能回放表区""只能放弃"
 //! 三类，其余一律拒绝并保留原记录。真正的锁内复核与写入由执行层完成。
+//! `replay` 复用这里的回滚通路（形态只放宽数据区步骤的拒绝），`release`
+//! 复用这里的闸门。
 
-use diskedit_core::fingerprint::Strength;
+use diskedit_core::fingerprint::{Fingerprint, Strength};
 use diskedit_core::record::{Frame, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
@@ -15,24 +17,29 @@ use crate::platform::Occupancy;
 use super::step::{Step, StepKind};
 use super::{Decision, Plan, Refusal};
 
-/// 判定 `recover` 的一次调用。
+/// 判定 `undo` 的一次调用。
 pub fn decide(snapshot: &RecoverSnapshot, request: &Request) -> Decision {
-    let Command::Recover(mode) = request.command() else {
+    let Command::Undo = request.command() else {
         return Decision::Refuse(Refusal::RecoveryRefused {
-            why: "recover reached with a different command".to_owned(),
+            why: "undo reached with a different command".to_owned(),
         });
     };
-    let mode = *mode;
+    rollback_entry(snapshot, RecoverMode::Undo, "undo")
+}
+
+/// 三个恢复入口共用的闸门：分区节点、身份等级与占用（B22）。
+/// 成功时返回可用于计划绑定的 Strong 身份。
+pub(crate) fn gates(snapshot: &RecoverSnapshot, command: &str) -> Result<Fingerprint, Refusal> {
     if snapshot.is_partition_node {
-        return Decision::Refuse(Refusal::PartitionNodeTarget {
-            command: "recover".to_owned(),
+        return Err(Refusal::PartitionNodeTarget {
+            command: command.to_owned(),
             target: snapshot.target.display.clone(),
         });
     }
     let identity = match snapshot.target.identity {
         Some(identity) if identity.strength() == Strength::Strong => identity,
         _ => {
-            return Decision::Refuse(Refusal::IdentityUnprovable {
+            return Err(Refusal::IdentityUnprovable {
                 why: "the target gives no comparable identity".to_owned(),
             });
         }
@@ -41,60 +48,63 @@ pub fn decide(snapshot: &RecoverSnapshot, request: &Request) -> Decision {
     match &snapshot.occupancy {
         Occupancy::Idle => {}
         Occupancy::Used { evidence } => {
-            return Decision::Refuse(Refusal::Occupied {
+            return Err(Refusal::Occupied {
                 evidence: evidence.clone(),
             });
         }
         Occupancy::Unknown { why } => {
-            return Decision::Refuse(Refusal::OccupancyUnknown { why: why.clone() });
+            return Err(Refusal::OccupancyUnknown { why: why.clone() });
         }
     }
-    let path = snapshot
+    Ok(identity)
+}
+
+/// 读记录字节并走回滚分类；缺记录按拒绝报告（与基线一致）。
+/// `replay` 与 `undo` 共用这条通路：形态只放宽数据区步骤的拒绝、并改变缺记录文案。
+pub(crate) fn rollback_entry(
+    snapshot: &RecoverSnapshot,
+    mode: RecoverMode,
+    command: &'static str,
+) -> Decision {
+    let identity = match gates(snapshot, command) {
+        Ok(identity) => identity,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
+    let path = record_path(snapshot);
+    let Some(bytes) = snapshot.record.bytes.as_deref() else {
+        return Decision::Refuse(Refusal::RecoveryRefused {
+            why: format!(
+                "no recovery record on {} — nothing to {command}",
+                snapshot.target.display
+            ),
+        });
+    };
+    let plan = recover(bytes, identity);
+    rollback(plan, mode, identity, &path, snapshot.target.bytes, command)
+}
+
+/// 记录文件路径的展示值；缺文件时退回目标名。
+pub(crate) fn record_path(snapshot: &RecoverSnapshot) -> String {
+    snapshot
         .record
         .file
         .as_ref()
         .map(|file| file.display().to_string())
-        .unwrap_or_else(|| snapshot.target.display.clone());
-    let Some(bytes) = snapshot.record.bytes.as_deref() else {
-        return match mode {
-            // 放弃对没有记录的目标是成功空操作。
-            RecoverMode::Release { .. } => Decision::Unchanged {
-                note: format!(
-                    "no recovery record on {} — nothing to release",
-                    snapshot.target.display
-                ),
-            },
-            // 与基线一致：默认与表区回放缺记录时按拒绝报告。
-            RecoverMode::Default | RecoverMode::ReplayTableOnly => {
-                Decision::Refuse(Refusal::RecoveryRefused {
-                    why: format!(
-                        "no recovery record on {} — nothing to recover",
-                        snapshot.target.display
-                    ),
-                })
-            }
-        };
-    };
-    let plan = recover(bytes, identity);
-    match mode {
-        RecoverMode::Release { discard_replay } => release(plan, discard_replay, identity, &path),
-        mode @ (RecoverMode::Default | RecoverMode::ReplayTableOnly) => {
-            rollback(plan, mode, identity, &path, snapshot.target.bytes)
-        }
-    }
+        .unwrap_or_else(|| snapshot.target.display.clone())
 }
 
 /// 已经提交或没有可回写区间的记录只清理；有原像的按记录回写。
 fn rollback(
     plan: RecoveryPlan,
     mode: RecoverMode,
-    identity: diskedit_core::fingerprint::Fingerprint,
+    identity: Fingerprint,
     path: &str,
     target_bytes: u64,
+    command: &str,
 ) -> Decision {
     match plan {
         RecoveryPlan::Absent => Decision::Refuse(Refusal::RecoveryRefused {
-            why: format!("no recovery record at {path} — nothing to recover"),
+            why: format!("no recovery record at {path} — nothing to {command}"),
         }),
         RecoveryPlan::Committed => external_cleanup(
             mode,
@@ -103,7 +113,7 @@ fn rollback(
         ),
         RecoveryPlan::Foreign { magic } => Decision::Refuse(Refusal::RecoveryRefused {
             why: format!(
-                "the record at {path} was not written by this implementation (magic {:?}); only `recover --release` may abandon it",
+                "the record at {path} was not written by this implementation (magic {:?}); only `diskedit release` may abandon it",
                 String::from_utf8_lossy(&magic)
             ),
         }),
@@ -111,10 +121,10 @@ fn rollback(
             why: format!("the record at {path} is not replayable: {why}"),
         }),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
-            if mode == RecoverMode::Default && data_may_have_moved(&frames) {
+            if mode == RecoverMode::Undo && data_may_have_moved(&frames) {
                 return Decision::Refuse(Refusal::RecoveryRefused {
                     why: "the record holds data-region steps that may already have moved; \
-                          use `recover --replay-table-only` to restore only the partition table"
+                          use `diskedit replay` to restore only the partition table"
                         .to_owned(),
                 });
             }
@@ -157,50 +167,7 @@ fn rollback(
     }
 }
 
-/// 放弃回滚：只建外部状态计划，目标字节不变。
-fn release(
-    plan: RecoveryPlan,
-    discard_replay: bool,
-    identity: diskedit_core::fingerprint::Fingerprint,
-    path: &str,
-) -> Decision {
-    match &plan {
-        RecoveryPlan::Absent => Decision::Unchanged {
-            note: "no recovery record on the target — nothing to release".to_owned(),
-        },
-        RecoveryPlan::NeedsManual { why } if why.contains("different device") => {
-            Decision::Refuse(Refusal::RecoveryRefused {
-                why: format!("the record at {path} belongs to a different target: {why}"),
-            })
-        }
-        // 外来格式或损坏载荷仍可放弃：B8 只看对象与归属，不看载荷完好；
-        // D2 把旧版在途记录的处理权交给人的显式放弃。
-        RecoveryPlan::Foreign { .. } | RecoveryPlan::NeedsManual { .. } => {
-            external_release(identity, RecoverMode::Release { discard_replay })
-        }
-        RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
-            let replayable = replayable_ranges(frames);
-            if replayable > 0 && !discard_replay {
-                return Decision::Refuse(Refusal::RecoveryRefused {
-                    why: format!(
-                        "the record still holds {replayable} replayable range(s); pass \
-                         --discard-replay to give them up"
-                    ),
-                });
-            }
-            external_release(identity, RecoverMode::Release { discard_replay })
-        }
-        RecoveryPlan::Committed => {
-            external_release(identity, RecoverMode::Release { discard_replay })
-        }
-    }
-}
-
-fn external_cleanup(
-    mode: RecoverMode,
-    identity: diskedit_core::fingerprint::Fingerprint,
-    note: &str,
-) -> Decision {
+fn external_cleanup(mode: RecoverMode, identity: Fingerprint, note: &str) -> Decision {
     let step = Step::new(StepKind::RecoverRecords { mode }, Vec::new());
     match Plan::external(vec![step], identity) {
         Ok(plan) => Decision::Execute {
@@ -211,34 +178,11 @@ fn external_cleanup(
     }
 }
 
-fn external_release(
-    identity: diskedit_core::fingerprint::Fingerprint,
-    mode: RecoverMode,
-) -> Decision {
-    let step = Step::new(StepKind::RecoverRecords { mode }, Vec::new());
-    match Plan::external(vec![step], identity) {
-        Ok(plan) => Decision::Execute {
-            plan,
-            note: "released the recovery record without touching the target".to_owned(),
-        },
-        Err(refusal) => Decision::Refuse(refusal),
-    }
-}
-
 /// 记录里是否已有完成落盘、不可回滚的数据区步骤。
 fn data_may_have_moved(frames: &[Frame]) -> bool {
     frames
         .iter()
         .any(|frame| frame.completed && frame.irreversible)
-}
-
-/// 记录里携带原像的区间数；只统计放弃会真丢掉的可回放区间。
-fn replayable_ranges(frames: &[Frame]) -> usize {
-    frames
-        .iter()
-        .flat_map(|frame| &frame.regions)
-        .filter(|preimage| !preimage.data.is_empty())
-        .count()
 }
 
 /// 从记录帧里取出可回写的表区区间。
@@ -299,10 +243,10 @@ mod tests {
         }
     }
 
-    fn request(mode: RecoverMode) -> Request {
+    fn request(command: Command) -> Request {
         Request::new(
             crate::app::observe::TargetSpec::new("disk.img", None),
-            Command::Recover(mode),
+            command,
         )
         .with_confirmation(true)
     }
@@ -346,7 +290,7 @@ mod tests {
                     evidence: "mounted at /mnt".to_owned(),
                 },
             ),
-            &request(RecoverMode::Default),
+            &request(Command::Undo),
         );
         assert!(matches!(plan, Decision::Refuse(Refusal::Occupied { .. })));
     }
@@ -361,7 +305,7 @@ mod tests {
                     why: "holders unreadable".to_owned(),
                 },
             ),
-            &request(RecoverMode::Default),
+            &request(Command::Undo),
         );
         assert!(matches!(
             plan,
@@ -376,7 +320,7 @@ mod tests {
         bytes[0] = b'Z';
         let plan = decide(
             &snapshot(Some(bytes), Occupancy::Idle),
-            &request(RecoverMode::Default),
+            &request(Command::Undo),
         );
         assert!(matches!(
             plan,
@@ -395,16 +339,16 @@ mod tests {
         let bytes = encode(&body(), &frames).unwrap();
         let blocked = decide(
             &snapshot(Some(bytes.clone()), Occupancy::Idle),
-            &request(RecoverMode::Default),
+            &request(Command::Undo),
         );
         assert!(matches!(
             blocked,
             Decision::Refuse(Refusal::RecoveryRefused { .. })
         ));
 
-        let table_only = decide(
+        let table_only = super::super::replay::decide(
             &snapshot(Some(bytes), Occupancy::Idle),
-            &request(RecoverMode::ReplayTableOnly),
+            &request(Command::Replay),
         );
         match table_only {
             Decision::Execute { plan, .. } => {
@@ -421,40 +365,6 @@ mod tests {
         }
     }
 
-    // covers: B8
-    #[test]
-    fn releasing_a_replayable_record_needs_discard() {
-        let frames = [
-            frame(0, FrameKind::Intent, false, false, &[]),
-            frame(1, FrameKind::Preimage, true, false, &[0xAA; 4]),
-        ];
-        let bytes = encode(&body(), &frames).unwrap();
-        let refused = decide(
-            &snapshot(Some(bytes.clone()), Occupancy::Idle),
-            &request(RecoverMode::Release {
-                discard_replay: false,
-            }),
-        );
-        assert!(matches!(
-            refused,
-            Decision::Refuse(Refusal::RecoveryRefused { .. })
-        ));
-
-        let allowed = decide(
-            &snapshot(Some(bytes), Occupancy::Idle),
-            &request(RecoverMode::Release {
-                discard_replay: true,
-            }),
-        );
-        match allowed {
-            Decision::Execute { .. } => {}
-            other
-            @ (Decision::Report { .. } | Decision::Unchanged { .. } | Decision::Refuse(_)) => {
-                panic!("expected a release plan, got {other:?}")
-            }
-        }
-    }
-
     // covers: B24
     #[test]
     fn a_recorded_range_past_the_target_is_refused() {
@@ -465,7 +375,7 @@ mod tests {
         let bytes = encode(&body(), &frames).unwrap();
         let mut snapshot = snapshot(Some(bytes), Occupancy::Idle);
         snapshot.target.bytes = 512; // the recorded range [512, 516) is now past the end
-        let decision = decide(&snapshot, &request(RecoverMode::Default));
+        let decision = decide(&snapshot, &request(Command::Undo));
         assert!(matches!(
             decision,
             Decision::Refuse(Refusal::RecoveryRefused { .. })

@@ -154,7 +154,7 @@ impl Memory {
         }
     }
 
-    /// 以"块设备但无自身稳定身份"的形态回报：`--identity` 在这里才适用。
+    /// 以"块设备但无自身稳定身份"的形态回报：`--alias` 在这里才适用。
     fn weak_block_device(bytes: Vec<u8>) -> Self {
         Self {
             target: Arc::new(Mutex::new(bytes)),
@@ -542,9 +542,9 @@ fn weak_block_bytes() -> Vec<u8> {
 // covers: I2, I5
 #[test]
 fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed() {
-    // 块设备没有 WWN/EUI/可重复序列号时，`--identity NAME` 就是它的身份。确认阶段
+    // 块设备没有 WWN/EUI/可重复序列号时，`--alias NAME` 就是它的身份。确认阶段
     // 必须用这个声明名做比较，而不是只在自动身份为 Strong 时才算数——否则所有带
-    // `--identity` 的块设备写入都会被误判成"身份不可证明"。
+    // `--alias` 的块设备写入都会被误判成"身份不可证明"。
     let memory = Memory::weak_block_device(weak_block_bytes());
     let code = dispatch(
         &memory,
@@ -554,7 +554,7 @@ fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed(
             "memory:1",
             "--grow-to-end",
             "--no-fs",
-            "--identity",
+            "--alias",
             "lab-disk",
             "--yes",
         ],
@@ -578,7 +578,7 @@ fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
 #[test]
 fn a_host_without_a_backend_refuses_with_the_unsupported_code() {
     // 未接入的宿主端口对每个能力都返回不支持；上层必须落 6，而不是当作目标拒绝。
-    let args: Vec<std::ffi::OsString> = ["diskedit", "inspect", "x.img"]
+    let args: Vec<std::ffi::OsString> = ["diskedit", "records", "show", "x.img"]
         .iter()
         .map(std::ffi::OsString::from)
         .collect();

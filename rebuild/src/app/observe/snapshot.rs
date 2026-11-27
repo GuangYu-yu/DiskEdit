@@ -2,7 +2,7 @@
 //!
 //! 判定层只消费快照；快照之后目标如何变化与判定无关。读失败如实向上报，不折叠
 //! 成"没有表"或"没有记录"。不同命令只采集自己需要的事实：`records *` 不读分区表，
-//! `inspect` 不读分区表，只有 `info`/`check` 需要完整视图。
+//! 只有 `layout`/`check` 需要完整视图。
 
 use std::path::PathBuf;
 
@@ -60,7 +60,7 @@ impl std::fmt::Display for CaptureError {
                 "the target's sector size {bytes} is outside the supported set (512..=65536, powers of two)"
             ),
             Self::DeclaredIdentityNotApplicable => f.write_str(
-                "--identity applies only to block devices with no readable WWN, EUI or repeatable \
+                "--alias applies only to block devices with no readable WWN, EUI or repeatable \
                  serial; images and identified devices are addressed by their own identity",
             ),
             Self::SectorSizeOnBlockDevice => f.write_str(
@@ -85,7 +85,7 @@ pub struct TargetFacts {
     pub identity: Option<Fingerprint>,
 }
 
-/// 一次完整观察的结果：`info` 与 `check` 消费。
+/// 一次完整观察的结果：`layout` 与 `check` 消费。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub target: TargetFacts,
@@ -101,9 +101,9 @@ impl Snapshot {
     }
 }
 
-/// `inspect` 消费的现场：目标、记录与占用，不含分区表。
+/// `records show` 消费的现场：目标、记录与占用，不含分区表。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InspectSnapshot {
+pub struct RecordSiteSnapshot {
     pub target: TargetFacts,
     pub record: RecordState,
     pub occupancy: Occupancy,
@@ -116,7 +116,7 @@ pub struct RecordSnapshot {
     pub record: RecordState,
 }
 
-/// `recover` 消费的现场：目标、记录、占用，以及目标是否为分区节点。
+/// `undo`/`replay`/`release` 消费的现场：目标、记录、占用，以及目标是否为分区节点。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoverSnapshot {
     pub target: TargetFacts,
@@ -126,7 +126,7 @@ pub struct RecoverSnapshot {
     pub is_partition_node: bool,
 }
 
-/// 采集完整快照（`info`、`check`）。
+/// 采集完整快照（`layout`、`check`）。
 pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, CaptureError> {
     let target = open_target(platform, request)?;
     let handle = platform.open_target_read_only(&target.path)?;
@@ -155,15 +155,15 @@ pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, C
     })
 }
 
-/// 采集 `inspect` 的现场：目标、记录与占用。
-pub fn capture_inspect(
+/// 采集 `records show` 的现场：目标、记录与占用。
+pub fn capture_record_site(
     platform: &dyn Platform,
     request: &Request,
-) -> Result<InspectSnapshot, CaptureError> {
+) -> Result<RecordSiteSnapshot, CaptureError> {
     let target = open_target(platform, request)?;
     let record = record_state(platform, &target)?;
     let occupancy = platform.occupancy(&target.path)?;
-    Ok(InspectSnapshot {
+    Ok(RecordSiteSnapshot {
         target,
         record,
         occupancy,
@@ -180,7 +180,7 @@ pub fn capture_records(
     Ok(RecordSnapshot { target, record })
 }
 
-/// 采集 `recover` 的现场：按 B9 的次序先定位记录，再探测占用。
+/// 采集恢复命令的现场：按 B9 的次序先定位记录，再探测占用。
 pub fn capture_recover(
     platform: &dyn Platform,
     request: &Request,
@@ -197,7 +197,7 @@ pub fn capture_recover(
     })
 }
 
-/// 打开目标并解析身份；`--identity` 的适用性在这里判定一次。
+/// 打开目标并解析身份；`--alias` 的适用性在这里判定一次。
 pub(crate) fn open_target(
     platform: &dyn Platform,
     request: &Request,
@@ -208,19 +208,19 @@ pub(crate) fn open_target(
     if overrides_block_sector(platform.path_kind(path), request.sector_size()) {
         return Err(CaptureError::SectorSizeOnBlockDevice);
     }
-    let declared = request.identity();
+    let declared = request.alias();
     // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
     let strong = platform
         .identity(path)
         .ok()
         .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    // `--identity` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
+    // `--alias` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
     // 在打开目标之前先判这一条，因此目标不存在时也报用法错误而不是拒绝。
     let declares =
         |kind: TargetKind| declared.is_some() && !(kind.is_block_device() && strong.is_none());
     let early = matches!(
         request.command(),
-        Command::RecordsList | Command::RecordsVerify { .. }
+        Command::RecordsList { .. } | Command::RecordsVerify { .. }
     );
     if early && declares(platform.path_kind(path)) {
         return Err(CaptureError::DeclaredIdentityNotApplicable);

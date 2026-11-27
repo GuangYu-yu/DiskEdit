@@ -45,11 +45,13 @@ root for table writes; block devices do.
 
 | command | image file | block device | other platforms |
 |---|---|---|---|
-| `info` | yes | yes | yes |
-| `inspect` | yes | yes | yes |
+| `layout` | yes | yes | yes |
 | `records list` | yes | yes | yes |
 | `records verify` | yes | yes | yes |
-| `records scan` | yes | yes | yes |
+| `records show` | yes | yes | yes |
+| `undo` | yes | yes (root) | refused (6) |
+| `replay` | yes | yes (root) | refused (6) |
+| `release` | yes | yes (root) | refused (6) |
 | `resize` | yes | yes (root) | refused (6) |
 | `move` | yes | yes (root) | refused (6) |
 | `copy` | yes | yes (root) | refused (6) |
@@ -57,7 +59,5 @@ root for table writes; block devices do.
 | `set` | yes | yes (root) | refused (6) |
 | `check` | yes | yes | yes |
 | `mkfs` | yes | yes (root) | refused (6) |
-| `resizefs` | yes | yes (root) | refused (6) |
-| `recover` | yes | yes (root) | refused (6) |
 | `new` | yes | yes (root) | refused (6) |
 | `add` | yes | yes (root) | refused (6) |

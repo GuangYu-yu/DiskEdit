@@ -20,7 +20,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 占用边界
 
-对块设备的写入依赖以 `O_EXCL` 打开整块磁盘：只要有分区处于挂载状态或用作 swap，内核就以 EBUSY 拒绝打开；写入前还有第二道占用闸门再检查一次（在块设备上逐个探测分区——纵深防御）。镜像文件没有这种内核语义，因此闸门反向枚举 loop 设备：把已打开的镜像句柄的 `(st_dev, st_ino)` 与 `LOOP_GET_STATUS64` 返回的 `(lo_device, lo_inode)` 比较；匹配时检查该 loop 及其分区是否已挂载（遍历每个可读的挂载命名空间）、是否为活动 swap、是否被块设备栈持有。判定不依赖 `loop/backing_file` 路径，因此硬链接别名、已删除的 backing 路径以及其他挂载命名空间中的挂载都能被发现。本进程登记的 loop 排他性是进程级名字表；每个条目被消费时都对照当前活动的映射重新检查（名字只用于定位登记项）。占用判定匹配每个 backing 具有该文件 `(st_dev, st_ino)` 的 loop，因此它回答的是"该文件已被映射或被持有"，而不是同一文件系统上多个叠加映射中哪一个是它。**直接写表的命令**（`new`/`add`/`delete`/`set name|type|flag`/`recover`）要求目标完全空闲：任何分区在使用都会使新表与内核视图分叉，因此该命令不关心它编辑的是哪个分区。`copy` 是例外——它只在重叠检查之后向空闲区域添加一个条目，不改动任何既有区间，也不移动任何分区的区间。移动类命令（`resize` 的每种形式——`--end`、`--grow-to-end` 或给定尺寸——以及 `move`）与 `mkfs` 按写入的形态区分：保持起点、只延长末端的写入在仅被 dm 持有的目标上允许（LVM PV 与 dm-crypt 的增长语义）；移动、收缩与整段重写一律拒绝。若任何被枚举的 loop 节点无法打开、ioctl 返回 ENXIO 以外的错误、sysfs 无法读取，或因权限原因无法读取 `/proc/<pid>/mountinfo`（例如 `hidepid`），工具拒绝写入（退出码 4），按"无法确认"处理——即使该 loop 与目标无关；这是安全优先的环境限制，不是目标正在被使用的证据。
+对块设备的写入依赖以 `O_EXCL` 打开整块磁盘：只要有分区处于挂载状态或用作 swap，内核就以 EBUSY 拒绝打开；写入前还有第二道占用闸门再检查一次（在块设备上逐个探测分区——纵深防御）。镜像文件没有这种内核语义，因此闸门反向枚举 loop 设备：把已打开的镜像句柄的 `(st_dev, st_ino)` 与 `LOOP_GET_STATUS64` 返回的 `(lo_device, lo_inode)` 比较；匹配时检查该 loop 及其分区是否已挂载（遍历每个可读的挂载命名空间）、是否为活动 swap、是否被块设备栈持有。判定不依赖 `loop/backing_file` 路径，因此硬链接别名、已删除的 backing 路径以及其他挂载命名空间中的挂载都能被发现。本进程登记的 loop 排他性是进程级名字表；每个条目被消费时都对照当前活动的映射重新检查（名字只用于定位登记项）。占用判定匹配每个 backing 具有该文件 `(st_dev, st_ino)` 的 loop，因此它回答的是"该文件已被映射或被持有"，而不是同一文件系统上多个叠加映射中哪一个是它。**直接写表的命令**（`new`/`add`/`delete`/`set name|type|flag`/`undo`/`replay`/`release`）要求目标完全空闲：任何分区在使用都会使新表与内核视图分叉，因此该命令不关心它编辑的是哪个分区。`copy` 是例外——它只在重叠检查之后向空闲区域添加一个条目，不改动任何既有区间，也不移动任何分区的区间。移动类命令（`resize` 的每种形式——`--end`、`--grow-to-end` 或给定尺寸——以及 `move`）与 `mkfs` 按写入的形态区分：保持起点、只延长末端的写入在仅被 dm 持有的目标上允许（LVM PV 与 dm-crypt 的增长语义）；移动、收缩与整段重写一律拒绝。若任何被枚举的 loop 节点无法打开、ioctl 返回 ENXIO 以外的错误、sysfs 无法读取，或因权限原因无法读取 `/proc/<pid>/mountinfo`（例如 `hidepid`），工具拒绝写入（退出码 4），按"无法确认"处理——即使该 loop 与目标无关；这是安全优先的环境限制，不是目标正在被使用的证据。
 
 ## LVM 收尾边界
 
@@ -34,7 +34,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 设备身份边界
 
-块设备的恢复记录位于 `<state_root>/recovery/<identity-hash>/record.bin`——目录名是按顺序拼接身份字段（设备类别、稳定身份字符串、载体 `file_id`）后取 sha256 的前 16 字节，小写十六进制；分区目标的稳定身份字符串是载体的稳定字符串加上分区号，因此分区节点与整盘节点各有自己的记录目录。锁不按目标派生：整盘的锁位于 `<state_root>/<disk key>.lock`，两者共用一个锁。状态根默认为 `/var/lib/diskedit`；在 Linux 上，当 euid 不为 0 时忽略 `DISKEDIT_STATE_DIR`；其他平台没有块设备目标，使用镜像侧状态目录。稳定身份取 `wwid` → `device/wwid` → `device/serial` 中第一个非空的原始文本（最后一项仅在两次读取一致时采用）。`dm/uuid` 与 `md/uuid` 不参与记录身份：两者描述的都是用户态创建后才存在的映射或已组装阵列，重启之后、记录正待续跑之时无从重读。dm、md 目标的记录身份因此来自 `--identity NAME`（记录键 `declared:<NAME>`）；只有 major:minor 的目标、不可读的目标、两次读取不一致的目标，以及未给名字的 dm/md 目标为 `Unusable`——没有记录目录，写命令以退出码 6 拒绝。当 sysfs 拓扑（节点、`partition` 属性、父设备）无法读取时，工具同样拒绝，不会退回到由调用方路径构造的 `{devname}-{capacity}`。容量不参与分区身份。镜像身份由路径派生：它标识"该路径"，而不是"该文件"。在 Linux 上，realpath 只合并符号链接与路径写法，**不合并硬链接**：同一 inode 的两个硬链接名派生出两个记录目录（`<image_state_root>/images` 下两个不同的 `<key-hash>` 目录），经名字 A 中断的任务经名字 B 不可见，也无法从 B 续跑或撤销——此类任务必须在同一名字下完成。锁有两层：**锁文件**（块设备：整盘为 `<state_root>/<disk key>.lock`，与其分区共享；镜像：`<image_state_root>/images/<key-hash>/record.lock`，当不存在按用户的状态根时为 `<image>.diskedit/record.lock`；loop：backing 文件旁的兄弟锁文件；disk key 在存在 device-id 时为该值，否则为 sysfs 父节点名加上以扇区计的容量）与 **inode 级第二凭据**（仅 Unix：对 `data_path` 新打开的句柄加锁——镜像为数据文件，块设备为设备节点）。后者把同一 inode 的别名路径收敛到一把锁；整盘与其分区由共享的锁文件收敛。非 Unix 平台只承诺锁文件；硬链接、符号链接与 junction 别名各自获取自己的锁、各有各的场景，经别名并发使用不在支持边界内（`std::fs::File::try_lock` 在 Windows 上是强制性的整文件锁，不能代替）。
+块设备的恢复记录位于 `<state_root>/recovery/<identity-hash>/record.bin`——目录名是按顺序拼接身份字段（设备类别、稳定身份字符串、载体 `file_id`）后取 sha256 的前 16 字节，小写十六进制；分区目标的稳定身份字符串是载体的稳定字符串加上分区号，因此分区节点与整盘节点各有自己的记录目录。锁不按目标派生：整盘的锁位于 `<state_root>/<disk key>.lock`，两者共用一个锁。状态根默认为 `/var/lib/diskedit`；在 Linux 上，当 euid 不为 0 时忽略 `DISKEDIT_STATE_DIR`；其他平台没有块设备目标，使用镜像侧状态目录。稳定身份取 `wwid` → `device/wwid` → `device/serial` 中第一个非空的原始文本（最后一项仅在两次读取一致时采用）。`dm/uuid` 与 `md/uuid` 不参与记录身份：两者描述的都是用户态创建后才存在的映射或已组装阵列，重启之后、记录正待续跑之时无从重读。dm、md 目标的记录身份因此来自 `--alias NAME`（记录键 `declared:<NAME>`）；只有 major:minor 的目标、不可读的目标、两次读取不一致的目标，以及未给名字的 dm/md 目标为 `Unusable`——没有记录目录，写命令以退出码 6 拒绝。当 sysfs 拓扑（节点、`partition` 属性、父设备）无法读取时，工具同样拒绝，不会退回到由调用方路径构造的 `{devname}-{capacity}`。容量不参与分区身份。镜像身份由路径派生：它标识"该路径"，而不是"该文件"。在 Linux 上，realpath 只合并符号链接与路径写法，**不合并硬链接**：同一 inode 的两个硬链接名派生出两个记录目录（`<image_state_root>/images` 下两个不同的 `<key-hash>` 目录），经名字 A 中断的任务经名字 B 不可见，也无法从 B 续跑或撤销——此类任务必须在同一名字下完成。锁有两层：**锁文件**（块设备：整盘为 `<state_root>/<disk key>.lock`，与其分区共享；镜像：`<image_state_root>/images/<key-hash>/record.lock`，当不存在按用户的状态根时为 `<image>.diskedit/record.lock`；loop：backing 文件旁的兄弟锁文件；disk key 在存在 device-id 时为该值，否则为 sysfs 父节点名加上以扇区计的容量）与 **inode 级第二凭据**（仅 Unix：对 `data_path` 新打开的句柄加锁——镜像为数据文件，块设备为设备节点）。后者把同一 inode 的别名路径收敛到一把锁；整盘与其分区由共享的锁文件收敛。非 Unix 平台只承诺锁文件；硬链接、符号链接与 junction 别名各自获取自己的锁、各有各的场景，经别名并发使用不在支持边界内（`std::fs::File::try_lock` 在 Windows 上是强制性的整文件锁，不能代替）。
 
 ## 恢复场景的身份检查
 
@@ -42,7 +42,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 记录中的磁盘 GUID 凭据
 
-除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `recover --release` 清除。`recover --release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
+除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `diskedit release` 放弃。`release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
 
 ## 恢复记录的位置
 
@@ -54,7 +54,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 续跑边界
 
-重新运行原命令会从其恢复记录续跑，适用于 `new`、`move`、`resize`（每种形式：`--end`、`--grow-to-end` 或给定尺寸）、`mkfs`、`resizefs` 与 `set`；GPT 与 MBR 共享同一记录族，因此中断的 MBR 扩容以同样方式续跑，`recover` 会把记录中的表写入回滚。在线 resize（块设备且分区已挂载）改为经由工具写入：没有可续跑的内容，`recover` 也无法回滚。`add`、`delete` 与 `copy` 没有续跑路径（`help copy` 注明 `No resume`），因此重新运行前先用 `recover` 回滚，或用 `recover --release` 释放场景。收缩步骤记录三种状态（未收缩 / 已验证 / 未验证）：当文件系统大小无法读回时，任务在收缩步骤停下，并以退出码 5 报告未完成的事务，重新运行时先读取实际大小，确认收缩从未发生后才再次执行。ext2/3/4、ntfs 与 btrfs 的扩容会读回；f2fs、xfs 与 vfat 没有读回，因此成功的扩容仍为未验证：该次运行打印一条点名尺寸检查的待办项并以 5 退出。结束时只有在六个条件全部成立才删除恢复记录：记录可识别、其提交状态为已提交、身份匹配、持久性已确认、后置条件读回通过，且表写入步骤已完成。否则保留记录，并打印 `the recovery record was not cleaned up (<reason>) — release it with diskedit recover --release`。删除本身失败时，事务以退出码 5 报告，而不是成功。搬移的数据按批次同步并推进持久游标（同步先于记录推进，游标永不超前于实际落盘的字节）；批次大小随提交延迟自适应，因此崩溃后最多重做 256 MiB 的已复制数据，大于该窗口的块尺寸退化为逐块提交。自我重叠的搬移（位移小于源区间）在所有路径上都逐块提交——按批次缓冲的块会伸入重做区间，而重做会读到被同一批次覆盖的源数据。
+重新运行原命令会从其恢复记录续跑，适用于 `new`、`move`、`resize`（每种形式：`--end`、`--grow-to-end` 或给定尺寸）、`mkfs`、`resize --fs-only` 与 `set`；GPT 与 MBR 共享同一记录族，因此中断的 MBR 扩容以同样方式续跑，`undo` 会把记录中的表写入回滚。在线 resize（块设备且分区已挂载）改为经由工具写入：没有可续跑的内容，`undo` 也无法回滚。`add`、`delete` 与 `copy` 没有续跑路径（`help copy` 注明 `No resume`），因此重新运行前先用 `undo` 回滚，或用 `diskedit release` 释放场景。收缩步骤记录三种状态（未收缩 / 已验证 / 未验证）：当文件系统大小无法读回时，任务在收缩步骤停下，并以退出码 5 报告未完成的事务，重新运行时先读取实际大小，确认收缩从未发生后才再次执行。ext2/3/4、ntfs 与 btrfs 的扩容会读回；f2fs、xfs 与 vfat 没有读回，因此成功的扩容仍为未验证：该次运行打印一条点名尺寸检查的待办项并以 5 退出。结束时只有在六个条件全部成立才删除恢复记录：记录可识别、其提交状态为已提交、身份匹配、持久性已确认、后置条件读回通过，且表写入步骤已完成。否则保留记录，并打印 `the recovery record was not cleaned up (<reason>) — release it with diskedit release`。删除本身失败时，事务以退出码 5 报告，而不是成功。搬移的数据按批次同步并推进持久游标（同步先于记录推进，游标永不超前于实际落盘的字节）；批次大小随提交延迟自适应，因此崩溃后最多重做 256 MiB 的已复制数据，大于该窗口的块尺寸退化为逐块提交。自我重叠的搬移（位移小于源区间）在所有路径上都逐块提交——按批次缓冲的块会伸入重做区间，而重做会读到被同一批次覆盖的源数据。
 
 ## 外部工具
 
@@ -96,7 +96,7 @@ loop 节点可能陈旧：占用与挂载判定不信任 `/dev/loopN` 的名字�
 
 | 证据等级 | 内容 |
 |---|---|
-| 已运行并验证 | loop 身份编码（`st_dev`/`st_ino` 对照 `lo_device`/`lo_inode`）、未绑定 loop 的 `ENXIO`、硬链接别名与已删除的 backing 路径、其他挂载命名空间中的挂载、loop 与分区挂载、活动 swap、sysfs holders、已退出进程的 mountinfo（`EINVAL`）、失败即拒绝的探测（退出码 4）、在没有持有者的 LVM PV 上完整的 `--grow-lv` 链、活动 LV 持有分区时 `AllowDm` 不被通用规则拒绝（链到达 LVM 步骤）而整段 `mkfs` 重写仍被拒绝、在已挂载镜像上 `new`/`add`/`delete`/`set name\|type\|flag`/`recover` 全部被拒绝且磁盘字节不变、多个 loop 匹配时点明实际持有者的拒绝、非 root 用户可用的镜像操作（该用户无法打开 `root:disk` loop 节点） |
+| 已运行并验证 | loop 身份编码（`st_dev`/`st_ino` 对照 `lo_device`/`lo_inode`）、未绑定 loop 的 `ENXIO`、硬链接别名与已删除的 backing 路径、其他挂载命名空间中的挂载、loop 与分区挂载、活动 swap、sysfs holders、已退出进程的 mountinfo（`EINVAL`）、失败即拒绝的探测（退出码 4）、在没有持有者的 LVM PV 上完整的 `--grow-lv` 链、活动 LV 持有分区时 `AllowDm` 不被通用规则拒绝（链到达 LVM 步骤）而整段 `mkfs` 重写仍被拒绝、在已挂载镜像上 `new`/`add`/`delete`/`set name\|type\|flag`/`undo`/`replay`/`release` 全部被拒绝且磁盘字节不变、多个 loop 匹配时点明实际持有者的拒绝、非 root 用户可用的镜像操作（该用户无法打开 `root:disk` loop 节点） |
 | 未验证 | 容器内独立 PID 命名空间下 loop 枚举的完整性；因 `hidepid` 等权限限制导致 mountinfo 不可读的部署（代码按探测失败拒绝，但未在真实 `hidepid` 环境中运行过）；上表以外的发行版与内核版本；**镜像内 PV 被另一个 loop 映射且 VG 有活动 LV 时完整的 `--grow-lv` 收尾链**（见上一节：LVM 的重复 PV 规则使针对临时映射的 `pvresize` 成为空操作，工具报告退出码 5 而不宣称成功） |
 | 设计限制 | 占用闸门是写入前的时点判定，不阻止检查之后创建的外部 loop / swap / 挂载；镜像侧枚举只覆盖本进程可见的 loop 节点，因缺少权限（`root:disk`）而无法打开的节点按未绑定跳过——创建绑定与访问节点需要同一权限类别，因此这类用户无法为该镜像创建绑定；不存在的节点、`ENODEV` 以及其他无法确认身份的情形按探测失败拒绝，该边界随内核/udev 的权限模型移动；失败即拒绝同样适用于无关 loop 的探测失败；缺失的记录项（`None`）不参与比较 |
 
@@ -109,13 +109,14 @@ loop 节点可能陈旧：占用与挂载判定不信任 `/dev/loopN` 的名字�
 | `--align` | A | 放置对齐：`mib` 或 `none`（默认为 `none`，即给定时所用的 LBA；由 `add`、`move`、`copy`、`resize --end` 与 `resize --grow-to-end` 接受；对 `resize` 作用于计算出的末端） |
 | `--allow-move` | — | `resize` 在 GPT 上可以搬移阻碍操作的分区 |
 | `--chunk` | MiB | `move`、`copy` 与 `resize` 的恢复粒度（MiB，1..=64）。续跑的任务省略该选项时沿用记录中的值，新任务使用 4；显式值与记录不同则拒绝。路径无法搬移时拒绝：MBR 的 `resize`、在线 `resize` 与 superfloppy 的 `resize` |
-| `--discard-replay` | — | 当记录仍含有可回放区间（或载荷已损坏，或条目数未知）时，`recover --release` 必须给出该选项；仅 `recover --release` 接受 |
-| `--dry-run` | — | `resize` 打印算出的范围、文件系统步骤与任何搬移计划，然后在第一次写入之前停下；不建记录，也不需要 `--yes` |
+| `--discard-replay` | — | 当记录仍含有可回放区间（或载荷已损坏，或条目数未知）时，`release` 必须给出该选项；仅 `release` 接受 |
+| `--dry-run` | — | `resize` 打印算出的范围、文件系统步骤与任何搬移计划；`add` 打印新分区的落位。两者都在第一次写入之前停下，不建记录，也不需要 `--yes` |
 | `--end` | LBA | `resize --end` 的结束 LBA |
+| `--fs-only` | — | 仅 `resize`：不改分区表，只动文件系统——离线 `<TARGET>:N` 把文件系统长满所在分区；`<MOUNTPOINT> [BYTES]` 经挂载卷在线扩容 |
+| `--json` | — | 仅 `layout`：输出结构化逐分区明细，替代文本布局 |
 | `--grow-lv` | — | `resize` 在 LVM PV 上继续进入 LV 及其文件系统 |
-| `--grow` | — | `info --grow` 在同一份 JSON 报告中增加 `preview` 键：`:N` 的搬移预览（不写入任何内容，也不产生可复用的计划） |
 | `--grow-to-end` | — | `resize --grow-to-end` 把末端固定在可用空间的末尾 |
-| `--identity` | NAME | 为不带 WWN、EUI 或可重复序列号的目标（`nbd`、`rbd`、`dm`、`md`）命名；所有写命令、`recover --release` 以及 `inspect` / `records list` / `records verify` 接受，只读命令用它定位与核对记录。续跑该记录、释放它或核对它都需要同一个名字；镜像与自带身份的设备拒绝该选项（退出码 2） |
+| `--alias` | NAME | 为不带 WWN、EUI 或可重复序列号的目标（`nbd`、`rbd`、`dm`、`md`）命名；所有写命令、`release` 以及 `records show` / `records list` / `records verify` 接受，只读命令用它定位与核对记录。回滚、回放、放弃或核对该记录都需要同一个名字；镜像与自带身份的设备拒绝该选项（退出码 2） |
 | `--keep-partuuid` | — | `copy` 复用源 PARTUUID |
 | `--label` | S | `mkfs` 写入的文件系统标签（省略时为空标签；不虚构默认值） |
 | `--lv` | NAME | 配合 `--grow-lv` 要扩容的 LV（省略时为该 PV 上唯一的 LV） |
@@ -124,10 +125,9 @@ loop 节点可能陈旧：占用与挂载判定不信任 `/dev/loopN` 的名字�
 | `--overwrite-data` | — | `new` 授权覆盖落在新表元数据区域内的旧分区的字节 |
 | `--part-number` | N | `add` 的条目槽位（从 1 起，必须空闲；省略时为第一个未使用的槽位） |
 | `--random` | — | `set uuid` 要求目标生成新值：ext 用 `tune2fs -U random`，xfs 用 `xfs_admin -U generate`，btrfs 用 `btrfstune -u`；swap 没有生成形式，NTFS 序列号不是 Windows 卷 UUID |
-| `--release` | — | `recover --release` 丢弃恢复文件并保留它们描述的写入；不给该选项时 `recover` 会继续或回放记录 |
-| `--replay-table-only` | — | `recover` 回放记录中的表区域，这些区域来自一次目标与旧表所指区间重叠的 `move`；这些区间中的数据不会被恢复 |
+| `--root` | ROOT | 仅 `records list`：扫描一个记录容器目录，而不是列目标自己的记录 |
 | `--sector-size` | N | 镜像逻辑扇区大小（2 的幂，至少 512 字节；65536 字节上限是实现限制，不是格式要求）；对 `copy` 作用于一个目标 |
 | `--start` | LBA\|end\|align | 起始 LBA；仅 `add`、`move` 与 `copy` 接受。对 `add` 可省略（能容纳 SIZE 的第一个空洞）；`move` 与 `copy` 必须给出，也接受 `end`；`align` 只有 `move` 接受（从当前起点向上取整到下一个 1 MiB 边界）。`resize` 只改变末端——搬移是 `move` |
 | `--table` | gpt\|mbr | `new` 创建的分区表类型 |
 | `--type-guid` | GUID\|0xNN | `add` 的分区类型：GPT 取标准 GUID 文本（省略时为 Linux filesystem data）；MBR 取两位十六进制类型字节（省略时为 0x83） |
-| `--yes` | — | 写入前的确认闸门：`new`、`add`、`delete`、`move`、`copy`、`resize`、`mkfs`、`resizefs`、`set` 与 `recover` 要求给出，缺失时在解析阶段以退出码 2 退出；其他命令（`info`、`inspect`、`records list/verify/scan`、`check`）不接受 |
+| `--yes` | — | 写入前的确认闸门：`new`、`add`、`delete`、`move`、`copy`、`resize`、`mkfs`、`set`、`undo`、`replay` 与 `release` 要求给出，缺失时在解析阶段以退出码 2 退出；其他命令（`layout`、`records list/verify/show`、`check`）不接受 |

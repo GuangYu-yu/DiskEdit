@@ -27,7 +27,7 @@ fn help_version_and_usage_are_ascii_only() {
     for argv in [
         vec!["--help"],
         vec!["--version"],
-        vec!["info"],
+        vec!["layout"],
         vec!["resize", "--unknown-flag"],
         vec!["no-such-command"],
     ] {
@@ -54,10 +54,10 @@ fn every_command_help_is_ascii_only() {
 
 // covers: T14
 #[test]
-fn info_json_is_ascii_only() {
+fn layout_json_is_ascii_only() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let image = root.join("target/fixtures/s1/gpt.img");
-    let argv = vec!["info", image.to_str().expect("路径应为 UTF-8")];
+    let argv = vec!["layout", image.to_str().expect("路径应为 UTF-8"), "--json"];
     let output = run(&argv);
     assert_ascii(&argv, &output);
 }
