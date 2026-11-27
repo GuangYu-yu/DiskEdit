@@ -1,0 +1,9 @@
+{
+ "tool": "e2fsprogs",
+ "version": "1.47.0",
+ "probe": "resize2fs -V",
+ "status": "ok",
+ "output": "resize2fs 1.47.0 (5-Feb-2023)\nresize2fs: invalid option -- 'V'\nUsage: resize2fs [-d debug_flags] [-f] [-F] [-M] [-P] [-p] device [-b|-s|new_size] [-S RAID-stride] [-z undo_file]",
+ "sha256": "a8939bda538d872fa8223b79be14ab16372af54d0d13536c0ddd18723528f1c8",
+ "at": "2026-11-27T05:47:23+00:00"
+}

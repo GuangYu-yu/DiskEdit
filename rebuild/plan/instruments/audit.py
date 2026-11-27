@@ -26,8 +26,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import pathlib
 import re
+import subprocess
 import sys
 
 COLUMNS = [
@@ -349,6 +352,202 @@ def check_disposition(args: argparse.Namespace) -> int:
     return 0
 
 
+SITE_KINDS = ("assert", "exception", "goto")
+SITE_RES = {
+    "assert": re.compile(r"\b(?:PED_ASSERT|assert|ASSERT)\s*\("),
+    "exception": re.compile(r"\b(?:ped_exception_throw|throw)\b"),
+    "goto": re.compile(r"\bgoto\s+(?:fail|error|err|out|done|cleanup)\w*\s*;"),
+}
+
+
+def enumerate_sites(root: pathlib.Path) -> list[tuple[str, int, str]]:
+    """与 count_defenses 同口径逐站点枚举：(相对路径, 行号, 类别)，按序稳定。"""
+    sites: list[tuple[str, int, str]] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in {".c", ".h", ".cc", ".cpp"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        rel = str(path.relative_to(root))
+        for kind, regex in SITE_RES.items():
+            for match in regex.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                sites.append((rel, line, kind))
+    sites.sort()
+    return sites
+
+
+def census_per_site(args: argparse.Namespace) -> int:
+    """逐站点 census：枚举防御站点 → 映射类 ID → 要求 100% 覆盖。
+
+    口径与 count_defenses 完全一致，因此本命令同时是三重红灯：
+    1. 源码树与 defense-census.tsv 计数不符（census 过期）；
+    2. 枚举出的站点在 site-map.tsv 缺行（漏一个站点即红）；
+    3. site-map 引用了不存在的类 ID 或已失效站点行（映射过期）。
+    """
+    errors: list[str] = []
+    census = load_census(args.census)
+    if not census:
+        errors.append(f"{args.census}: 无法读取 census")
+    sources_ok = True
+    enumerated: dict[str, tuple[str, str, int, str]] = {}
+    per_tool: dict[str, dict[str, int]] = {}
+    for tool, row in sorted(census.items()):
+        root = pathlib.Path(row["source"])
+        if not root.is_dir():
+            errors.append(f"{tool}: 源码树缺失 {root}（按 sources.tsv 取回后重跑）")
+            sources_ok = False
+            continue
+        sites = enumerate_sites(root)
+        counts = {
+            "assert": sum(1 for s in sites if s[2] == "assert"),
+            "exception": sum(1 for s in sites if s[2] == "exception"),
+            "goto": sum(1 for s in sites if s[2] == "goto"),
+        }
+        expected = {
+            "assert": int(row["asserts"]),
+            "exception": int(row["exceptions"]),
+            "goto": int(row["goto_fail"]),
+        }
+        for kind in SITE_RES:
+            if counts[kind] != expected[kind]:
+                errors.append(
+                    f"{tool}: {kind} 站点数 {counts[kind]} ≠ census {expected[kind]}（census 过期或源不符）"
+                )
+        per_tool[tool] = counts | {"files": int(row["files"])}
+        for rel, line, kind in sites:
+            enumerated[f"{tool}|{rel}|{line}|{kind}"] = (tool, rel, line, kind)
+    if args.out:
+        out = pathlib.Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("w", encoding="utf-8", newline="") as f:
+            f.write("site_key\ttool\tfile\tline\tkind\n")
+            for key in sorted(enumerated):
+                tool, rel, line, kind = enumerated[key]
+                f.write(f"{key}\t{tool}\t{rel}\t{line}\t{kind}\n")
+    # site-map
+    mapping: dict[str, str] = {}
+    map_path = pathlib.Path(args.map)
+    if map_path.exists():
+        with map_path.open(encoding="utf-8") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for n, row in enumerate(reader, start=2):
+                key = row.get("site_key", "")
+                cls = row.get("class_id", "")
+                if key in mapping:
+                    errors.append(f"{map_path}:{n}: site_key 重复 {key}")
+                mapping[key] = cls
+    known_classes = {
+        row["class_id"]
+        for row in csv.DictReader(args.ledger.open(encoding="utf-8"), delimiter="\t")
+        if row.get("class_id")
+    } if args.ledger.exists() else set()
+    if not args.ledger.exists():
+        errors.append(f"{args.ledger}: 无法读取 SA 账本")
+    defaults = dict(part.split("=", 1) for part in args.default_class.split(",") if part)
+    missing = sorted(set(enumerated) - set(mapping))
+    if missing and args.init_map and sources_ok:
+        with map_path.open("a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+            if not map_path.exists():
+                f.write("site_key\tclass_id\tnote\n")
+            for key in missing:
+                tool = key.split("|", 1)[0]
+                cls = defaults.get(tool, "")
+                writer.writerow([key, cls, "默认归属工具 census 类；细化映射在此行改写"])
+        mapping.update({k: defaults.get(k.split("|", 1)[0], "") for k in missing})
+        missing = []
+    for key in missing:
+        errors.append(f"站点未映射: {key}")
+    stale = sorted(set(mapping) - set(enumerated))
+    for key in stale[:20]:
+        errors.append(f"映射失效（站点已不存在）: {key}")
+    if stale:
+        errors.append(f"共 {len(stale)} 条失效映射")
+    bad_class = sorted({k for k, v in mapping.items() if v and v not in known_classes})
+    for key in bad_class[:20]:
+        errors.append(f"{key}: 类 ID {mapping[key]} 不在 SA 账本")
+    if errors:
+        for error in errors:
+            print(f"audit: {error}", file=sys.stderr)
+        return 1
+    total = len(enumerated)
+    print(f"census-per-site: {len(census)} 工具 {total} 站点 100% 映射，census 计数一致")
+    return 0
+
+
+def drift_record(args: argparse.Namespace) -> int:
+    """跨版本漂移检测仪·记录端：钉死版本的探针输出摘要入库。"""
+    out_dir = pathlib.Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    recorded = skipped = 0
+    for row in csv.DictReader(args.defs.open(encoding="utf-8"), delimiter="\t"):
+        tool, probe = row["tool"], row["probe"]
+        try:
+            proc = subprocess.run(["sh", "-c", probe], capture_output=True, text=True,
+                                  errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"drift: {tool} 探针无法执行 {exc}", file=sys.stderr)
+            return 1
+        if proc.returncode == 127 or "not found" in proc.stderr:
+            payload = {"tool": tool, "version": row["version"], "probe": probe,
+                       "status": "missing", "at": datetime_now()}
+            skipped += 1
+        else:
+            output = (proc.stdout + proc.stderr).strip()
+            payload = {"tool": tool, "version": row["version"], "probe": probe,
+                       "status": "ok", "output": output,
+                       "sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+                       "at": datetime_now()}
+            recorded += 1
+        (out_dir / f"{tool}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"drift-record: 记录 {recorded}，缺二进制记 missing {skipped}（升级后 drift-check 对照）")
+    return 0
+
+
+def drift_check(args: argparse.Namespace) -> int:
+    """跨版本漂移检测仪·对照端：探针输出与入库摘要不符即红。"""
+    errors: list[str] = []
+    checked = missing = 0
+    for row in csv.DictReader(args.defs.open(encoding="utf-8"), delimiter="\t"):
+        tool, probe = row["tool"], row["probe"]
+        baseline_path = pathlib.Path(args.out) / f"{tool}.json"
+        if not baseline_path.exists():
+            errors.append(f"{tool}: 无入库摘要，先跑 drift-record")
+            continue
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        if baseline.get("status") == "missing":
+            missing += 1
+            continue
+        try:
+            proc = subprocess.run(["sh", "-c", probe], capture_output=True, text=True,
+                                  errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(f"{tool}: 探针无法执行 {exc}")
+            continue
+        output = (proc.stdout + proc.stderr).strip()
+        sha = hashlib.sha256(output.encode("utf-8")).hexdigest()
+        if sha != baseline.get("sha256"):
+            errors.append(
+                f"{tool}: 探针输出漂移（pinned {baseline.get('version')}，"
+                f"旧 sha {str(baseline.get('sha256'))[:12]}，新 sha {sha[:12]}）——"
+                f"先人工确认行为再 drift-record 重新入库"
+            )
+        else:
+            checked += 1
+    if errors:
+        for error in errors:
+            print(f"drift: {error}", file=sys.stderr)
+        return 1
+    print(f"drift-check: {checked} 一致，missing 跳过 {missing}（升级时必红必查）")
+    return 0
+
+
+def datetime_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 def selftest() -> int:
     good = {
         "class_id": "SA1-001",
@@ -438,6 +637,19 @@ def main() -> int:
     disp = sub.add_parser("check-disposition")
     disp.add_argument("--ref", type=pathlib.Path, required=True)
     disp.add_argument("--disp", type=pathlib.Path, required=True)
+    per = sub.add_parser("census-per-site")
+    per.add_argument("--census", type=pathlib.Path, required=True)
+    per.add_argument("--ledger", type=pathlib.Path, required=True)
+    per.add_argument("--map", type=pathlib.Path, required=True)
+    per.add_argument("--out", type=pathlib.Path)
+    per.add_argument("--init-map", action="store_true")
+    per.add_argument("--default-class", default="parted=SA1-021,libfdisk=SA1-022,gdisk=SA1-023")
+    drec = sub.add_parser("drift-record")
+    drec.add_argument("--defs", type=pathlib.Path, required=True)
+    drec.add_argument("--out", type=pathlib.Path, required=True)
+    dchk = sub.add_parser("drift-check")
+    dchk.add_argument("--defs", type=pathlib.Path, required=True)
+    dchk.add_argument("--out", type=pathlib.Path, required=True)
     args = parser.parse_args()
     if args.command == "selftest":
         return selftest()
@@ -461,6 +673,12 @@ def main() -> int:
         return 0
     if args.command == "check-disposition":
         return check_disposition(args)
+    if args.command == "census-per-site":
+        return census_per_site(args)
+    if args.command == "drift-record":
+        return drift_record(args)
+    if args.command == "drift-check":
+        return drift_check(args)
     return check(args)
 
 

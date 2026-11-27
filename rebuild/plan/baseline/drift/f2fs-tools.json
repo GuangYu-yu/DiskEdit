@@ -1,0 +1,7 @@
+{
+ "tool": "f2fs-tools",
+ "version": "1.16.0",
+ "probe": "mkfs.f2fs -V",
+ "status": "missing",
+ "at": "2026-11-27T05:47:23+00:00"
+}

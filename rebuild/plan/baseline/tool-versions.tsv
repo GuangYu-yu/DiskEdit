@@ -1,0 +1,11 @@
+tool	version	probe
+parted	3.6	parted --version
+libfdisk	2.39.3	sfdisk --version
+gdisk	1.0.10	gdisk --version
+e2fsprogs	1.47.0	resize2fs -V
+xfsprogs	6.6.0	xfs_growfs -V
+btrfs-progs	6.6.3	btrfs --version
+ntfs-3g	2022.10.3	mkfs.ntfs --version
+f2fs-tools	1.16.0	mkfs.f2fs -V
+dosfstools	4.2	fatlabel --version
+lvm2	2.03.16	lvm version

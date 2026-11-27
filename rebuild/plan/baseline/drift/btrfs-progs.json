@@ -1,0 +1,7 @@
+{
+ "tool": "btrfs-progs",
+ "version": "6.6.3",
+ "probe": "btrfs --version",
+ "status": "missing",
+ "at": "2026-11-27T05:47:23+00:00"
+}
