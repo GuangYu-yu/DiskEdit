@@ -27,13 +27,6 @@ pub struct RecordState {
     pub unavailable: Option<String>,
 }
 
-impl RecordState {
-    /// 没有记录或无法定位记录。
-    pub fn absent(&self) -> bool {
-        self.bytes.is_none()
-    }
-}
-
 /// 按目标身份定位记录目录。
 pub fn locate(
     platform: &dyn Platform,
