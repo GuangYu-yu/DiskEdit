@@ -31,7 +31,8 @@ pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
         }
     }
     let mut out = [0u8; 32];
-    for (slot, lane) in out.chunks_exact_mut(8).zip(lanes) {
+    let (chunks, _) = out.as_chunks_mut::<8>();
+    for (slot, lane) in chunks.iter_mut().zip(lanes) {
         slot.copy_from_slice(&lane.finish().to_le_bytes());
     }
     out
@@ -60,7 +61,8 @@ pub fn request_digest(
     push_bytes(&mut lanes, &[format_tag(format), u8::from(overwrite)]);
     push_bytes(&mut lanes, &sector_size.to_le_bytes());
     let mut out = [0u8; 32];
-    for (slot, lane) in out.chunks_exact_mut(8).zip(lanes) {
+    let (chunks, _) = out.as_chunks_mut::<8>();
+    for (slot, lane) in chunks.iter_mut().zip(lanes) {
         slot.copy_from_slice(&lane.finish().to_le_bytes());
     }
     out

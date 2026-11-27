@@ -205,7 +205,14 @@ fn swap_hit(reader: &Reader<'_>) -> PlatformResult<bool> {
 }
 
 fn host_page() -> u64 {
-    // SAFETY: sysconf 只读进程/系统常量，无失败写回。
-    let value = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if value > 0 { value as u64 } else { 4096 }
+    #[cfg(unix)]
+    {
+        // SAFETY: sysconf 只读进程/系统常量，无失败写回。
+        let value = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if value > 0 { value as u64 } else { 4096 }
+    }
+    #[cfg(not(unix))]
+    {
+        4096
+    }
 }

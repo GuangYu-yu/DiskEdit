@@ -53,10 +53,10 @@ impl PartitionName {
 
     /// 按 UTF-16LE 解码并去掉尾部空码元；孤立代理项由替换字符表示。
     pub fn to_string_lossy(&self) -> String {
-        let units: Vec<u16> = self
-            .raw
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        let (chunks, _) = self.raw.as_chunks::<2>();
+        let units: Vec<u16> = chunks
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         String::from_utf16_lossy(&units)
             .trim_end_matches('\0')
@@ -66,8 +66,9 @@ impl PartitionName {
     /// 由字符串编码，超出 36 码元的部分截断。
     pub fn from_str_lossy(name: &str) -> Self {
         let mut raw = [0u8; ENTRY_NAME_BYTES];
-        for (slot, unit) in raw.chunks_exact_mut(2).zip(name.encode_utf16()) {
-            slot.copy_from_slice(&unit.to_le_bytes());
+        let (chunks, _) = raw.as_chunks_mut::<2>();
+        for (slot, unit) in chunks.iter_mut().zip(name.encode_utf16()) {
+            *slot = unit.to_le_bytes();
         }
         Self { raw }
     }

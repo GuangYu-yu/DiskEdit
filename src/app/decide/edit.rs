@@ -786,8 +786,7 @@ fn set_gpt(
         Err(error) => return refuse_edit(&error.to_string()),
     };
     let mut entries = table.entries.clone();
-    let note;
-    match set.key {
+    let note = match set.key {
         SetKey::Name => {
             if set.value.is_empty() {
                 return refuse_edit("`set name` needs a name");
@@ -797,7 +796,7 @@ fn set_gpt(
             }
             entries[index].name =
                 diskedit_core::table::gpt::entries::PartitionName::from_str_lossy(&set.value);
-            note = format!("renamed partition #{number} to {:?}", set.value);
+            format!("renamed partition #{number} to {:?}", set.value)
         }
         SetKey::Type => {
             if set.value.is_empty() {
@@ -813,10 +812,10 @@ fn set_gpt(
                 return refuse_edit(&EditError::ZeroTypeGuid.to_string());
             }
             entries[index].partition_type_guid = guid;
-            note = format!(
+            format!(
                 "type set on partition #{number} (verify with: diskedit layout {})",
                 snapshot.target.display
-            );
+            )
         }
         SetKey::Flag => {
             let (Some(flag), Some(on)) = (GptFlag::parse(&set.value), parse_state(&set.state))
@@ -835,10 +834,10 @@ fn set_gpt(
             if let Err(error) = edit::apply_gpt_flag(&mut entries[index], flag, on, fallback) {
                 return refuse_edit(&error.to_string());
             }
-            note = format!("flag {}={} on partition #{number}", set.value, set.state);
+            format!("flag {}={} on partition #{number}", set.value, set.state)
         }
         SetKey::Label | SetKey::Uuid => return content_property(snapshot, number, set),
-    }
+    };
     let mut segments = match table.segments(&entries) {
         Ok(segments) => segments,
         Err(error) => {

@@ -128,9 +128,7 @@ impl<T> Observation<T> {
     /// 把早于 `floor` 的已观测事实降级为不可判定，其余原样返回。
     pub fn require_generation(self, floor: Generation) -> Self {
         match self {
-            Self::Known {
-                generation, value, ..
-            } if generation < floor => Self::unknown(format!(
+            Self::Known { generation, .. } if generation < floor => Self::unknown(format!(
                 "observation generation {} predates the required generation {}",
                 generation.get(),
                 floor.get()

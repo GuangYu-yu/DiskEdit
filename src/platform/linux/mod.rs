@@ -493,7 +493,7 @@ impl TargetHandle for LinuxHandle {
             return Ok(());
         }
         // BLKRRPART：让内核丢弃并重读该设备的分区表。
-        const BLKRRPART: libc::c_ulong = 0x125f;
+        const BLKRRPART: libc::Ioctl = 0x125f;
         // SAFETY: fd 由打开的设备句柄保证有效，ioctl 不读取用户缓冲。
         let result = unsafe { libc::ioctl(self.file.as_raw_fd(), BLKRRPART) };
         if result == 0 {
@@ -760,7 +760,7 @@ fn resize_partition_live(
     start_bytes: u64,
     len_bytes: u64,
 ) -> PlatformResult<()> {
-    const BLKPG: libc::c_ulong = 0x1269;
+    const BLKPG: libc::Ioctl = 0x1269;
     const BLKPG_RESIZE_PARTITION: i32 = 3;
     let start = i64::try_from(start_bytes).map_err(|_| {
         PlatformError::not_applicable("the partition start exceeds the ioctl range")
@@ -811,7 +811,7 @@ fn block_view_writable(path: &Path) -> bool {
         return false;
     };
     // BLKRRPART：让内核丢弃并重读分区表。
-    const BLKRRPART: libc::c_ulong = 0x125f;
+    const BLKRRPART: libc::Ioctl = 0x125f;
     // SAFETY: fd 来自刚打开的设备；BLKRRPART 不读取用户缓冲。
     if unsafe { libc::ioctl(file.as_raw_fd(), BLKRRPART) } == 0 {
         return true;
@@ -890,11 +890,10 @@ fn hardware_identity(topology: &Topology, metadata: &std::fs::Metadata) -> Optio
     } else if let Some(uuid) = sysfs_text(&base.join("dm/uuid")) {
         hasher.update(b"dm\0");
         hasher.update(uuid.as_bytes());
-    } else if let Some(uuid) = sysfs_text(&base.join("md/uuid")) {
+    } else {
+        let uuid = sysfs_text(&base.join("md/uuid"))?;
         hasher.update(b"md\0");
         hasher.update(uuid.as_bytes());
-    } else {
-        return None;
     }
     hasher.update(
         topology

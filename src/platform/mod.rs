@@ -385,6 +385,7 @@ impl LoopBinding {
         &self.device
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn new(device: PathBuf) -> Self {
         Self { device }
     }
