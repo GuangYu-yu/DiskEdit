@@ -102,8 +102,12 @@ pub fn parse_backup(
         GptCopyKind::Backup,
     ) {
         ParsedCopy::Usable(mut copy) => {
+            // 副本自述的位置与本实现读到它的位置矛盾：这是可辨认的损坏，
+            // 不是"没有 GPT"。折成 Absent 会让调用方把一块受损盘当作空盘重建。
             if copy.header.primary_lba != last_lba || copy.header.backup_lba != PRIMARY_HEADER_LBA {
-                return ParsedCopy::Absent;
+                return ParsedCopy::Damaged(TableError::InvalidGeometry(
+                    "backup header reverse pointers contradict its position",
+                ));
             }
             copy.header.primary_lba = PRIMARY_HEADER_LBA;
             copy.header.backup_lba = last_lba;
@@ -526,6 +530,40 @@ mod tests {
             GptState::NeedsRepair {
                 cause: HeaderIssue::CopiesDiverge
             }
+        );
+    }
+
+    #[test]
+    fn a_backup_with_a_contradictory_reverse_pointer_is_damaged_not_absent() {
+        let last = 2047;
+        let (_, array, _, backup_array) = pair(last);
+        let crc = array_crc(&array[..128 * 128]);
+        let mut header = backup_header(last, crc);
+        // 备份头自称对端在别处，而不是 LBA1：副本自相矛盾。
+        header.backup_lba = 999;
+        let sector = header.serialize(SECTOR).expect("序列化应成功");
+        assert_eq!(
+            parse_backup(&sector, &backup_array, last, SS),
+            ParsedCopy::Damaged(TableError::InvalidGeometry(
+                "backup header reverse pointers contradict its position"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_contradictory_backup_does_not_fold_to_absent() {
+        let last = 2047;
+        let (_, array, _, backup_array) = pair(last);
+        let crc = array_crc(&array[..128 * 128]);
+        let mut header = backup_header(last, crc);
+        header.backup_lba = 999;
+        let backup = header.serialize(SECTOR).expect("序列化应成功");
+        let zeros = vec![0u8; SECTOR];
+        assert_eq!(
+            classify(&zeros, &zeros, &backup, &backup_array, last, SS),
+            GptEvidence::Damaged(TableError::InvalidGeometry(
+                "backup header reverse pointers contradict its position"
+            ))
         );
     }
 
