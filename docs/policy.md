@@ -2,6 +2,52 @@
 
 A fallback is not a way to make a command succeed. It is a decision about whether to continue when a fact is missing. This tool is responsible for the records it creates, the changes it starts, and the recovery of its own interrupted work. It is not responsible for repairing disks, reconstructing foreign metadata, or rescuing data. When the facts are not available, the safe default is to refuse.
 
+## Scope
+
+This document answers one narrow question: when a fact is missing or an observation failed, does the tool continue, refuse, or recover? It does not define the product's command set. A capability counts as promised when it appears in the current command surface, in the README, in the generated reference or capability matrix, or in the observable behaviour of the previous release. This policy cannot be used on its own to remove a promised capability. Removing one is a separate scope decision with its own review, tests, and recorded rationale.
+
+## What this tool does not do
+
+It does not repair a partition table it did not write. A corrupt primary or backup header, a wrong CRC, overlapping existing entries, a missing protective MBR, or a table of unknown origin is reported and left alone. Reading such a table to decide whether it is safe to proceed is allowed; writing, adopting, or "fixing" it is not.
+
+It does not reconstruct or adopt records from another tool, another product, or an unknown schema. A record whose ownership cannot be established is preserved and refused. Recovery is limited to state this tool created, including records written by earlier released versions when their schema is known.
+
+It does not rescue data. Bad sectors, deleted partitions, overwritten filesystems, failing drives, and forensic recovery are outside the command set. A read-only report is allowed; recovery of user data is not promised.
+
+It does not implement filesystem internals. mkfs, check, resize, label, and UUID changes go through the official filesystem tools. If a tool is missing, fails, or cannot report a fact, the step fails; it is not emulated by writing filesystem metadata directly.
+
+It does not guess facts. Sector size, partition geometry, device identity, probe results, mount state, and whether an external step completed are either known or the operation stops. A guessed value is not a degraded success.
+
+It does not emulate an unsupported platform or capability, and it does not add a shell fallback that performs the same operation by other means. An unsupported platform is refused with an error.
+
+It does not silently change semantics. A path that produces a different result from the promised one is a behavior change and must be visible to the user, not hidden inside a fallback.
+
+It does not grow a repair mode under the name of recovery. Recovery resumes or rolls back this tool's own operation; it does not become a general disk repair or data-rescue feature.
+
+## Exceptions
+
+An operation can look like one of the exclusions above and still be allowed in these cases.
+
+Recovering our own state is in scope. A record left by this tool, a table this tool wrote halfway, or an external step this tool started can be resumed, rolled back, quarantined, or released. The same applies to records from earlier released versions when their schema is known and tested; an unknown schema is refused.
+
+Read-only inspection is allowed. Reading a foreign record, an unknown table, or a damaged header to decide whether proceeding is safe does not violate the boundary, as long as nothing is written, adopted, deleted, or repaired.
+
+Documented compatibility is allowed. Old record formats, CLI aliases, and behaviours that appear in the README, reference, capability matrix, or previous release are product promises. They may be kept, but each needs tests and an owner. This policy does not authorize dropping them.
+
+Documented features that touch these areas remain product scope. Online resize, LVM handling, the VM carrier, and image formats are features when they appear in the command surface or capability matrix. They are not fallbacks, and this policy is not a reason to remove them.
+
+A partial failure of our own operation may be finished, rolled back, or cleaned up. Only artifacts created by this tool are touched; foreign artifacts are preserved.
+
+A retry after the kernel view lags is allowed once the write fact is recorded, the retry is bounded, and repeating it cannot duplicate a side effect.
+
+A branch that only refuses is not an empty branch. It produces an observable error and needs a test that fails when the refusal is removed.
+
+## Removing a fallback
+
+Removing a fallback requires a test that proves the current behavior, a recorded decision that the case is outside the promised scope, and a check that normal paths are unchanged. The change is made one item at a time, with the behavior change recorded. A branch that looks unused is not enough reason to delete it; a refusal that looks like it does nothing is not an empty branch.
+
+## Deciding
+
 The first question is whether the fact can be known. Sector size, partition geometry, device identity, probe results, and whether an external step completed are not values to guess. A wrong guess in a write, shrink, delete, or rebuild is not a failed command; it is damaged data.
 
 The second question is whether a failure is visible. A record that cannot be read, a parse error, a permission problem, or an I/O error must travel upward as an error. It must not become "no record", an empty set, or a default value. The only exception is a failure that is explicitly modelled as unknown, with every later branch treating unknown as a reason not to continue.
