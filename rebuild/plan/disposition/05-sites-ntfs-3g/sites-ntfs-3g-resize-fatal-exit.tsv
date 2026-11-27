@@ -1,21 +1,31 @@
 row_id	ledger	state	note
+ntfs-3g-00001	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00002	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00003	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00004	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00005	sites	裁剪	裁剪：交互确认面——本实现非交互固定 -f 调用（SA2-009，交互面裁剪）
 ntfs-3g-00007	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00008	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00010	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00011	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00012	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住
+ntfs-3g-00013	sites	裁剪	裁剪：--no-action 干跑/建议路径不在消费链——固定参数不含（SA2-009）
 ntfs-3g-00014	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00015	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00019	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00021	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00022	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00024	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00026	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00027	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00032	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00028	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00029	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00034	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00035	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00036	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00037	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00038	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00039	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00040	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00041	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00043	sites	认领	认领：SA2-009——挂载卷拒绝由占用闸在写前等价前置（src/app/decide 占用闸 B4/B17），链内检查随消费工具自带
-ntfs-3g-00044	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00045	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00043	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00045	sites	认领	认领：SA2-009——挂载卷拒绝由占用闸在写前等价前置（src/app/decide 占用闸 B4/B17），链内检查随消费工具自带
+ntfs-3g-00046	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00047	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00068	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住

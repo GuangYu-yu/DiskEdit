@@ -1,42 +1,33 @@
 row_id	ledger	state	note
-parted-01044	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
-parted-01049	sites	裁剪	同上
-parted-01052	sites	裁剪	同上
-parted-01055	sites	裁剪	同上
-parted-01056	sites	裁剪	同上
-parted-01059	sites	裁剪	同上
+parted-01053	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01058	sites	裁剪	同上
 parted-01061	sites	裁剪	同上
-parted-01062	sites	裁剪	同上
-parted-01063	sites	裁剪	同上
 parted-01064	sites	裁剪	同上
 parted-01065	sites	裁剪	同上
-parted-01066	sites	裁剪	同上
-parted-01069	sites	裁剪	同上
+parted-01068	sites	裁剪	同上
 parted-01070	sites	裁剪	同上
 parted-01071	sites	裁剪	同上
+parted-01072	sites	裁剪	同上
+parted-01073	sites	裁剪	同上
+parted-01074	sites	裁剪	同上
+parted-01075	sites	裁剪	同上
 parted-01078	sites	裁剪	同上
 parted-01079	sites	裁剪	同上
 parted-01080	sites	裁剪	同上
-parted-01081	sites	裁剪	同上
-parted-01086	sites	裁剪	同上
 parted-01087	sites	裁剪	同上
-parted-01091	sites	裁剪	同上
-parted-01092	sites	裁剪	同上
-parted-01093	sites	裁剪	同上
-parted-01094	sites	裁剪	同上
+parted-01088	sites	裁剪	同上
+parted-01089	sites	裁剪	同上
+parted-01090	sites	裁剪	同上
 parted-01095	sites	裁剪	同上
 parted-01096	sites	裁剪	同上
 parted-01100	sites	裁剪	同上
-parted-01116	sites	裁剪	同上
-parted-01120	sites	裁剪	同上
-parted-01121	sites	裁剪	同上
-parted-01122	sites	裁剪	同上
-parted-01123	sites	裁剪	同上
-parted-01124	sites	裁剪	同上
+parted-01101	sites	裁剪	同上
+parted-01102	sites	裁剪	同上
+parted-01103	sites	裁剪	同上
+parted-01104	sites	裁剪	同上
+parted-01105	sites	裁剪	同上
+parted-01109	sites	裁剪	同上
 parted-01125	sites	裁剪	同上
-parted-01126	sites	裁剪	同上
-parted-01127	sites	裁剪	同上
-parted-01128	sites	裁剪	同上
 parted-01129	sites	裁剪	同上
 parted-01130	sites	裁剪	同上
 parted-01131	sites	裁剪	同上
@@ -49,207 +40,207 @@ parted-01137	sites	裁剪	同上
 parted-01138	sites	裁剪	同上
 parted-01139	sites	裁剪	同上
 parted-01140	sites	裁剪	同上
+parted-01141	sites	裁剪	同上
 parted-01142	sites	裁剪	同上
 parted-01143	sites	裁剪	同上
 parted-01144	sites	裁剪	同上
 parted-01145	sites	裁剪	同上
 parted-01146	sites	裁剪	同上
 parted-01147	sites	裁剪	同上
+parted-01148	sites	裁剪	同上
 parted-01149	sites	裁剪	同上
+parted-01151	sites	裁剪	同上
+parted-01152	sites	裁剪	同上
+parted-01153	sites	裁剪	同上
 parted-01154	sites	裁剪	同上
 parted-01155	sites	裁剪	同上
 parted-01156	sites	裁剪	同上
-parted-01157	sites	裁剪	同上
 parted-01158	sites	裁剪	同上
-parted-01159	sites	裁剪	同上
-parted-01160	sites	裁剪	同上
-parted-01161	sites	裁剪	同上
-parted-01162	sites	裁剪	同上
 parted-01163	sites	裁剪	同上
 parted-01164	sites	裁剪	同上
 parted-01165	sites	裁剪	同上
-parted-01171	sites	裁剪	同上
-parted-01172	sites	裁剪	同上
-parted-01176	sites	裁剪	同上
-parted-01177	sites	裁剪	同上
-parted-01178	sites	裁剪	同上
-parted-01179	sites	裁剪	同上
+parted-01166	sites	裁剪	同上
+parted-01167	sites	裁剪	同上
+parted-01168	sites	裁剪	同上
+parted-01169	sites	裁剪	同上
+parted-01170	sites	裁剪	同上
+parted-01171	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01172	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01173	sites	裁剪	同上
+parted-01174	sites	裁剪	同上
 parted-01180	sites	裁剪	同上
 parted-01181	sites	裁剪	同上
-parted-01184	sites	裁剪	同上
 parted-01185	sites	裁剪	同上
+parted-01186	sites	裁剪	同上
+parted-01187	sites	裁剪	同上
 parted-01188	sites	裁剪	同上
 parted-01189	sites	裁剪	同上
 parted-01190	sites	裁剪	同上
-parted-01191	sites	裁剪	同上
-parted-01192	sites	裁剪	同上
-parted-01196	sites	裁剪	同上
+parted-01193	sites	裁剪	同上
+parted-01194	sites	裁剪	同上
 parted-01197	sites	裁剪	同上
-parted-01210	sites	裁剪	同上
-parted-01211	sites	裁剪	同上
+parted-01198	sites	裁剪	同上
+parted-01199	sites	裁剪	同上
+parted-01200	sites	裁剪	同上
+parted-01201	sites	裁剪	同上
+parted-01205	sites	裁剪	同上
+parted-01206	sites	裁剪	同上
 parted-01219	sites	裁剪	同上
 parted-01220	sites	裁剪	同上
-parted-01221	sites	裁剪	同上
-parted-01222	sites	裁剪	同上
-parted-01223	sites	裁剪	同上
-parted-01224	sites	裁剪	同上
-parted-01225	sites	裁剪	同上
-parted-01226	sites	裁剪	同上
-parted-01227	sites	裁剪	同上
+parted-01228	sites	裁剪	同上
+parted-01229	sites	裁剪	同上
 parted-01230	sites	裁剪	同上
 parted-01231	sites	裁剪	同上
-parted-01236	sites	认领	认领|R0120（MBR hidden 旗标校验已有）
-parted-01237	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
-parted-01238	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01239	sites	拒绝	同上
-parted-01240	sites	拒绝	同上
-parted-01241	sites	拒绝	同上
-parted-01242	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
-parted-01243	sites	裁剪	同上
-parted-01244	sites	裁剪	同上
-parted-01245	sites	裁剪	同上
-parted-01246	sites	裁剪	同上
-parted-01247	sites	裁剪	同上
-parted-01248	sites	裁剪	同上
-parted-01249	sites	裁剪	同上
-parted-01250	sites	裁剪	同上
-parted-01251	sites	认领	认领|LBA 字段为唯一事实源：crates/core/src/table/mbr（SA1-027）
-parted-01252	sites	认领	同上
-parted-01253	sites	认领	同上
-parted-01254	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01255	sites	拒绝	同上
-parted-01256	sites	拒绝	同上
-parted-01257	sites	拒绝	同上
-parted-01258	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01232	sites	裁剪	同上
+parted-01233	sites	裁剪	同上
+parted-01234	sites	裁剪	同上
+parted-01235	sites	裁剪	同上
+parted-01236	sites	裁剪	同上
+parted-01239	sites	裁剪	同上
+parted-01240	sites	裁剪	同上
+parted-01245	sites	认领	认领|R0120（MBR hidden 旗标校验已有）
+parted-01246	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01247	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01248	sites	拒绝	同上
+parted-01249	sites	拒绝	同上
+parted-01250	sites	拒绝	同上
+parted-01251	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01252	sites	裁剪	同上
+parted-01253	sites	裁剪	同上
+parted-01254	sites	裁剪	同上
+parted-01255	sites	裁剪	同上
+parted-01256	sites	裁剪	同上
+parted-01257	sites	裁剪	同上
+parted-01258	sites	裁剪	同上
 parted-01259	sites	裁剪	同上
-parted-01260	sites	裁剪	同上
-parted-01261	sites	裁剪	同上
-parted-01262	sites	裁剪	同上
-parted-01263	sites	裁剪	同上
-parted-01264	sites	裁剪	同上
-parted-01265	sites	裁剪	同上
-parted-01266	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01267	sites	拒绝	同上
-parted-01268	sites	拒绝	同上
-parted-01269	sites	拒绝	同上
-parted-01270	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
-parted-01271	sites	认领	认领|R0115（MBR type 0xNN 解析校验已有）
-parted-01272	sites	认领	同上
-parted-01273	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01274	sites	拒绝	同上
-parted-01275	sites	拒绝	同上
-parted-01287	sites	拒绝	同上
-parted-01288	sites	拒绝	同上
-parted-01289	sites	拒绝	同上
-parted-01290	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
-parted-01291	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01292	sites	拒绝	同上
-parted-01293	sites	拒绝	同上
-parted-01294	sites	认领	认领|扩展链遍历与偏移换算已有：crates/core/src/table/mbr/extended.rs
-parted-01295	sites	认领	同上
-parted-01296	sites	认领	同上
+parted-01260	sites	认领	认领|LBA 字段为唯一事实源：crates/core/src/table/mbr（SA1-027）
+parted-01261	sites	认领	同上
+parted-01262	sites	认领	同上
+parted-01263	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01264	sites	拒绝	同上
+parted-01265	sites	拒绝	同上
+parted-01266	sites	拒绝	同上
+parted-01267	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01268	sites	裁剪	同上
+parted-01269	sites	裁剪	同上
+parted-01270	sites	裁剪	同上
+parted-01271	sites	裁剪	同上
+parted-01272	sites	裁剪	同上
+parted-01273	sites	裁剪	同上
+parted-01274	sites	裁剪	同上
+parted-01275	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01276	sites	拒绝	同上
+parted-01277	sites	拒绝	同上
+parted-01278	sites	拒绝	同上
+parted-01279	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01280	sites	认领	认领|R0115（MBR type 0xNN 解析校验已有）
+parted-01281	sites	认领	同上
+parted-01282	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01283	sites	拒绝	同上
+parted-01284	sites	拒绝	同上
+parted-01296	sites	拒绝	同上
+parted-01297	sites	拒绝	同上
+parted-01298	sites	拒绝	同上
+parted-01299	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
 parted-01300	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
 parted-01301	sites	拒绝	同上
 parted-01302	sites	拒绝	同上
-parted-01303	sites	拒绝	同上
-parted-01306	sites	拒绝	同上
-parted-01307	sites	拒绝	同上
-parted-01308	sites	拒绝	同上
-parted-01309	sites	拒绝	同上
+parted-01303	sites	认领	认领|扩展链遍历与偏移换算已有：crates/core/src/table/mbr/extended.rs
+parted-01304	sites	认领	同上
+parted-01305	sites	认领	同上
+parted-01309	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
 parted-01310	sites	拒绝	同上
 parted-01311	sites	拒绝	同上
-parted-01312	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
-parted-01313	sites	裁剪	同上
-parted-01314	sites	裁剪	同上
-parted-01315	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01312	sites	拒绝	同上
+parted-01315	sites	拒绝	同上
 parted-01316	sites	拒绝	同上
+parted-01317	sites	拒绝	同上
+parted-01318	sites	拒绝	同上
 parted-01319	sites	拒绝	同上
-parted-01322	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
-parted-01323	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01324	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
-parted-01327	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01320	sites	拒绝	同上
+parted-01321	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
+parted-01322	sites	裁剪	同上
+parted-01323	sites	裁剪	同上
+parted-01324	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01325	sites	拒绝	同上
 parted-01328	sites	拒绝	同上
-parted-01329	sites	拒绝	同上
-parted-01330	sites	拒绝	同上
-parted-01335	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
-parted-01343	sites	裁剪	同上
-parted-01346	sites	裁剪	同上
-parted-01351	sites	裁剪	同上
+parted-01331	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
+parted-01332	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01333	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
+parted-01336	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01337	sites	拒绝	同上
+parted-01338	sites	拒绝	同上
+parted-01339	sites	拒绝	同上
+parted-01344	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
 parted-01352	sites	裁剪	同上
-parted-01353	sites	裁剪	同上
-parted-01358	sites	裁剪	同上
-parted-01364	sites	裁剪	同上
-parted-01366	sites	裁剪	同上
-parted-01369	sites	裁剪	同上
-parted-01371	sites	裁剪	同上
-parted-01398	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01399	sites	拒绝	同上
-parted-01400	sites	拒绝	同上
-parted-01401	sites	拒绝	同上
-parted-01402	sites	拒绝	同上
-parted-01403	sites	拒绝	同上
-parted-01404	sites	拒绝	同上
-parted-01405	sites	认领	认领|PMBR 规范化已有：SA1-019（crates/core/src/table/create.rs）
-parted-01406	sites	认领	认领|R0182（地址空间越界/几何下界拒绝已有）
-parted-01414	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01415	sites	拒绝	同上
-parted-01433	sites	拒绝	同上
-parted-01434	sites	拒绝	同上
-parted-01435	sites	拒绝	同上
-parted-01436	sites	拒绝	同上
-parted-01447	sites	拒绝	同上
-parted-01454	sites	拒绝	同上
-parted-01455	sites	拒绝	同上
-parted-01456	sites	拒绝	同上
+parted-01355	sites	裁剪	同上
+parted-01360	sites	裁剪	同上
+parted-01361	sites	裁剪	同上
+parted-01362	sites	裁剪	同上
+parted-01367	sites	裁剪	同上
+parted-01373	sites	裁剪	同上
+parted-01375	sites	裁剪	同上
+parted-01378	sites	裁剪	同上
+parted-01380	sites	裁剪	同上
+parted-01398	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01408	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01409	sites	拒绝	同上
+parted-01410	sites	拒绝	同上
+parted-01411	sites	拒绝	同上
+parted-01412	sites	拒绝	同上
+parted-01413	sites	拒绝	同上
+parted-01414	sites	拒绝	同上
+parted-01415	sites	认领	认领|PMBR 规范化已有：SA1-019（crates/core/src/table/create.rs）
+parted-01416	sites	认领	认领|R0182（地址空间越界/几何下界拒绝已有）
+parted-01424	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01425	sites	拒绝	同上
+parted-01443	sites	拒绝	同上
+parted-01444	sites	拒绝	同上
+parted-01445	sites	拒绝	同上
+parted-01446	sites	拒绝	同上
 parted-01457	sites	拒绝	同上
-parted-01458	sites	拒绝	同上
-parted-01459	sites	拒绝	同上
-parted-01460	sites	拒绝	同上
-parted-01461	sites	拒绝	同上
-parted-01462	sites	拒绝	同上
+parted-01464	sites	拒绝	同上
+parted-01465	sites	拒绝	同上
+parted-01466	sites	拒绝	同上
+parted-01467	sites	拒绝	同上
+parted-01468	sites	拒绝	同上
+parted-01469	sites	拒绝	同上
+parted-01470	sites	拒绝	同上
 parted-01471	sites	拒绝	同上
-parted-01476	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（loop 伪盘标）
-parted-01477	sites	裁剪	同上
-parted-01478	sites	裁剪	同上
-parted-01479	sites	裁剪	同上
-parted-01481	sites	裁剪	同上
-parted-01482	sites	裁剪	同上
-parted-01491	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
-parted-01497	sites	裁剪	同上
-parted-01504	sites	裁剪	同上
-parted-01505	sites	裁剪	同上
-parted-01524	sites	裁剪	同上
-parted-01540	sites	裁剪	同上
-parted-01542	sites	裁剪	同上
-parted-01544	sites	裁剪	同上
-parted-01545	sites	裁剪	同上
-parted-01546	sites	裁剪	同上
-parted-01547	sites	裁剪	同上
-parted-01548	sites	裁剪	同上
+parted-01472	sites	拒绝	同上
+parted-01481	sites	拒绝	同上
+parted-01486	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（loop 伪盘标）
+parted-01487	sites	裁剪	同上
+parted-01488	sites	裁剪	同上
+parted-01489	sites	裁剪	同上
+parted-01491	sites	裁剪	同上
+parted-01492	sites	裁剪	同上
+parted-01501	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01507	sites	裁剪	同上
+parted-01514	sites	裁剪	同上
+parted-01515	sites	裁剪	同上
+parted-01534	sites	裁剪	同上
+parted-01550	sites	裁剪	同上
+parted-01552	sites	裁剪	同上
+parted-01554	sites	裁剪	同上
+parted-01555	sites	裁剪	同上
+parted-01556	sites	裁剪	同上
 parted-01557	sites	裁剪	同上
 parted-01558	sites	裁剪	同上
-parted-01559	sites	裁剪	同上
-parted-01560	sites	裁剪	同上
-parted-01561	sites	裁剪	同上
-parted-01562	sites	裁剪	同上
-parted-01563	sites	裁剪	同上
-parted-01565	sites	裁剪	同上
-parted-01566	sites	裁剪	同上
 parted-01567	sites	裁剪	同上
+parted-01568	sites	裁剪	同上
 parted-01569	sites	裁剪	同上
 parted-01570	sites	裁剪	同上
+parted-01571	sites	裁剪	同上
 parted-01572	sites	裁剪	同上
 parted-01573	sites	裁剪	同上
+parted-01575	sites	裁剪	同上
 parted-01576	sites	裁剪	同上
 parted-01577	sites	裁剪	同上
-parted-01578	sites	裁剪	同上
 parted-01579	sites	裁剪	同上
 parted-01580	sites	裁剪	同上
-parted-01581	sites	裁剪	同上
 parted-01582	sites	裁剪	同上
 parted-01583	sites	裁剪	同上
-parted-01584	sites	裁剪	同上
-parted-01585	sites	裁剪	同上
 parted-01586	sites	裁剪	同上
 parted-01587	sites	裁剪	同上
 parted-01588	sites	裁剪	同上
@@ -259,65 +250,65 @@ parted-01591	sites	裁剪	同上
 parted-01592	sites	裁剪	同上
 parted-01593	sites	裁剪	同上
 parted-01594	sites	裁剪	同上
+parted-01595	sites	裁剪	同上
+parted-01596	sites	裁剪	同上
+parted-01597	sites	裁剪	同上
+parted-01598	sites	裁剪	同上
+parted-01599	sites	裁剪	同上
 parted-01600	sites	裁剪	同上
-parted-01605	sites	裁剪	同上
-parted-01606	sites	裁剪	同上
-parted-01607	sites	裁剪	同上
-parted-01608	sites	裁剪	同上
-parted-01609	sites	裁剪	同上
+parted-01601	sites	裁剪	同上
+parted-01602	sites	裁剪	同上
+parted-01603	sites	裁剪	同上
+parted-01604	sites	裁剪	同上
 parted-01610	sites	裁剪	同上
-parted-01611	sites	裁剪	同上
-parted-01614	sites	裁剪	同上
 parted-01615	sites	裁剪	同上
+parted-01616	sites	裁剪	同上
+parted-01617	sites	裁剪	同上
 parted-01618	sites	裁剪	同上
 parted-01619	sites	裁剪	同上
 parted-01620	sites	裁剪	同上
 parted-01621	sites	裁剪	同上
-parted-01622	sites	裁剪	同上
-parted-01623	sites	裁剪	同上
 parted-01624	sites	裁剪	同上
 parted-01625	sites	裁剪	同上
-parted-01626	sites	裁剪	同上
-parted-01627	sites	裁剪	同上
+parted-01628	sites	裁剪	同上
 parted-01629	sites	裁剪	同上
 parted-01630	sites	裁剪	同上
 parted-01631	sites	裁剪	同上
+parted-01632	sites	裁剪	同上
 parted-01633	sites	裁剪	同上
 parted-01634	sites	裁剪	同上
+parted-01635	sites	裁剪	同上
+parted-01636	sites	裁剪	同上
 parted-01637	sites	裁剪	同上
-parted-01638	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01639	sites	拒绝	同上
-parted-01640	sites	拒绝	同上
-parted-01647	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
-parted-01648	sites	裁剪	同上
-parted-01649	sites	裁剪	同上
-parted-01650	sites	裁剪	同上
-parted-01651	sites	裁剪	同上
-parted-01652	sites	裁剪	同上
-parted-01653	sites	裁剪	同上
-parted-01654	sites	裁剪	同上
-parted-01655	sites	裁剪	同上
-parted-01656	sites	裁剪	同上
-parted-01657	sites	裁剪	同上
+parted-01639	sites	裁剪	同上
+parted-01640	sites	裁剪	同上
+parted-01641	sites	裁剪	同上
+parted-01643	sites	裁剪	同上
+parted-01644	sites	裁剪	同上
+parted-01647	sites	裁剪	同上
+parted-01648	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01649	sites	拒绝	同上
+parted-01650	sites	拒绝	同上
+parted-01657	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
 parted-01658	sites	裁剪	同上
+parted-01659	sites	裁剪	同上
 parted-01660	sites	裁剪	同上
 parted-01661	sites	裁剪	同上
+parted-01662	sites	裁剪	同上
+parted-01663	sites	裁剪	同上
+parted-01664	sites	裁剪	同上
 parted-01665	sites	裁剪	同上
 parted-01666	sites	裁剪	同上
 parted-01667	sites	裁剪	同上
-parted-01680	sites	裁剪	同上
-parted-01681	sites	裁剪	同上
-parted-01682	sites	裁剪	同上
-parted-01687	sites	裁剪	同上
-parted-01688	sites	裁剪	同上
-parted-01689	sites	裁剪	同上
+parted-01668	sites	裁剪	同上
+parted-01670	sites	裁剪	同上
+parted-01671	sites	裁剪	同上
+parted-01675	sites	裁剪	同上
+parted-01676	sites	裁剪	同上
+parted-01677	sites	裁剪	同上
 parted-01690	sites	裁剪	同上
 parted-01691	sites	裁剪	同上
 parted-01692	sites	裁剪	同上
-parted-01693	sites	裁剪	同上
-parted-01694	sites	裁剪	同上
-parted-01695	sites	裁剪	同上
-parted-01696	sites	裁剪	同上
 parted-01697	sites	裁剪	同上
 parted-01698	sites	裁剪	同上
 parted-01699	sites	裁剪	同上
@@ -328,33 +319,43 @@ parted-01703	sites	裁剪	同上
 parted-01704	sites	裁剪	同上
 parted-01705	sites	裁剪	同上
 parted-01706	sites	裁剪	同上
+parted-01707	sites	裁剪	同上
 parted-01708	sites	裁剪	同上
 parted-01709	sites	裁剪	同上
+parted-01710	sites	裁剪	同上
 parted-01711	sites	裁剪	同上
 parted-01712	sites	裁剪	同上
+parted-01713	sites	裁剪	同上
+parted-01714	sites	裁剪	同上
 parted-01715	sites	裁剪	同上
 parted-01716	sites	裁剪	同上
-parted-01717	sites	裁剪	同上
 parted-01718	sites	裁剪	同上
 parted-01719	sites	裁剪	同上
-parted-01720	sites	裁剪	同上
-parted-01723	sites	裁剪	同上
+parted-01721	sites	裁剪	同上
+parted-01722	sites	裁剪	同上
+parted-01725	sites	裁剪	同上
 parted-01726	sites	裁剪	同上
+parted-01727	sites	裁剪	同上
+parted-01728	sites	裁剪	同上
 parted-01729	sites	裁剪	同上
 parted-01730	sites	裁剪	同上
-parted-01731	sites	裁剪	同上
-parted-01737	sites	裁剪	同上
-parted-01738	sites	裁剪	同上
-parted-01742	sites	裁剪	同上
-parted-01743	sites	裁剪	同上
-parted-01744	sites	裁剪	同上
-parted-01745	sites	裁剪	同上
-parted-01746	sites	裁剪	同上
+parted-01733	sites	裁剪	同上
+parted-01736	sites	裁剪	同上
+parted-01739	sites	裁剪	同上
+parted-01740	sites	裁剪	同上
+parted-01741	sites	裁剪	同上
 parted-01747	sites	裁剪	同上
 parted-01748	sites	裁剪	同上
+parted-01752	sites	裁剪	同上
 parted-01753	sites	裁剪	同上
 parted-01754	sites	裁剪	同上
 parted-01755	sites	裁剪	同上
-parted-01759	sites	裁剪	同上
-parted-01815	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01816	sites	拒绝	同上
+parted-01756	sites	裁剪	同上
+parted-01757	sites	裁剪	同上
+parted-01758	sites	裁剪	同上
+parted-01763	sites	裁剪	同上
+parted-01764	sites	裁剪	同上
+parted-01765	sites	裁剪	同上
+parted-01769	sites	裁剪	同上
+parted-01826	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01827	sites	拒绝	同上

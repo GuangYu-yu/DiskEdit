@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-probe-refusal（22 行）
+# 批次：sites-ntfs-3g-probe-refusal（30 行）
 
 ## 判断
 ntfsinfo 拒绝面：裁剪。

@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-e2fsprogs-00723	sites	裁剪	裁剪：e2fsck DEBUG/#ifdef 编译期打印与工具内部 puts——非可观察契约；本实现不实现 e2fsck，只消费退出码（SA2-001/002）
-e2fsprogs-00728	sites	裁剪	同上
-e2fsprogs-00729	sites	裁剪	同上
-e2fsprogs-00731	sites	裁剪	同上
-e2fsprogs-01042	sites	裁剪	同上
-e2fsprogs-01225	sites	裁剪	同上
-e2fsprogs-01973	sites	裁剪	同上
+e2fsprogs-00747	sites	裁剪	裁剪：e2fsck DEBUG/#ifdef 编译期打印与工具内部 puts——非可观察契约；本实现不实现 e2fsck，只消费退出码（SA2-001/002）
+e2fsprogs-00752	sites	裁剪	同上
+e2fsprogs-00753	sites	裁剪	同上
+e2fsprogs-00755	sites	裁剪	同上
+e2fsprogs-01071	sites	裁剪	同上
+e2fsprogs-01255	sites	裁剪	同上
+e2fsprogs-02008	sites	裁剪	同上

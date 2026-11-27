@@ -1,4 +1,4 @@
-# 03-docs/docs-lvm2（33 行）
+# 03-docs/docs-lvm2（34 行）
 
 ## 判断
 - 认领 1（00001）：pvresize 在依赖链（SA2-017/B28）；"已分配 extent 越过新尾拒绝收缩"由上游自保，PV 链只扩不缩。

@@ -1,7 +1,7 @@
 # sites-e2fsprogs-label-uuid-refusal
 
 ## 判断
-tune2fs 参数面与内部拒绝（103 行）：5 行认领（00324/00307/00308/00325/00326——挂载拒绝同向、UUID 形状前置校验）、6 行拒绝（00288-00293 在线改标路径不采纳）、1 行差异（00317 截断 vs 拒绝）、91 行裁剪。全批 103 行已逐行翻态，note 见同名 tsv。
+tune2fs 参数面与内部拒绝（102 行）：5 行认领（00324/00307/00308/00325/00326——挂载拒绝同向、UUID 形状前置校验）、6 行拒绝（00288-00293 在线改标路径不采纳）、1 行差异（00317 截断 vs 拒绝）、91 行裁剪。全批 103 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 SA2-001 同族占用闸（B4/B17）；src/app/decide/edit.rs::precheck 与 ::is_uuid；crates/core/src/fs/attrs.rs::label_problem；tests/cases/mod.rs::set_label_on_ext_refuses_an_over-long_label

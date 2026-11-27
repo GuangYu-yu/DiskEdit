@@ -1,6 +1,8 @@
 row_id	ledger	state	note
-xfsprogs-imp-00001	implicit	裁剪	mkfs.xfs 内部常数（最小日志块/选项冲突表/ini 名长）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs；xfs 扩容经 xfs_growfs 回读 data 几何（SA2-004/SA2-005）
-xfsprogs-imp-00002	implicit	裁剪	同上
+xfsprogs-imp-00001	implicit	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-imp-00002	implicit	待判	换版重放：本行在上游新版本新增或改写
 xfsprogs-imp-00003	implicit	裁剪	同上
 xfsprogs-imp-00004	implicit	裁剪	同上
 xfsprogs-imp-00005	implicit	裁剪	同上
+xfsprogs-imp-00006	implicit	裁剪	同上
+xfsprogs-imp-00012	implicit	待判	换版重放：本行在上游新版本新增或改写

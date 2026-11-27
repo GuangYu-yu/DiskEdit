@@ -2,4 +2,4 @@ row_id	ledger	state	note
 lvm2-00003	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00005	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00007	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
-lvm2-00019	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
+lvm2-00018	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链

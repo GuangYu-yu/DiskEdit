@@ -1,22 +1,25 @@
 row_id	ledger	state	note
-parted-inc-00001	incidents	拒绝	C set/disk_set 空旗标崩溃修复属纯实现细节，防御由 Rust 所有权/类型承担；set 无旗标在本实现为正常拒绝路径（tests/case_runner.rs::add_delete_and_set_rewrite_both_copies）
-parted-inc-00002	incidents	裁剪	 gettext 本地化面不实现；本实现提示面为自身文案无 i18n（提示面缺失不适用——无翻译管线可裁剪）
-parted-inc-00003	incidents	裁剪	libparted-fs-resize 内嵌 FAT 调整库不在依赖面；vfat 扩容按不支持拒绝（SA2-014）
-parted-inc-00004	incidents	认领	SA1-024：无盘标目标不崩溃——info 返回空表 JSON 不进写路径，set 同面在判定层拒绝
-parted-inc-00005	incidents	裁剪	同 parted-inc-00003（FAT16 内嵌调整库）
-parted-inc-00006	incidents	裁剪	同 parted-inc-00003
-parted-inc-00007	incidents	认领	SA1-009：已诊断错误一律非零退出码（src/app/report/exit.rs 七值单源映射，逐格核对）
-parted-inc-00008	incidents	认领	SA1-001：备份头重定位+规范化并入同一表写并回读（R0602/R0607；tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write）
-parted-inc-00009	incidents	认领	SA3-003：截断/撕裂盘按分类回退可读副本，读路径不崩溃不猜（crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup）
-parted-inc-00010	incidents	拒绝	ped_device 缓存生命周期是 C 设备缓存实现细节；Rust 无全局设备缓存，防御由所有权承担
-parted-inc-00012	incidents	认领	SA1-002/SA1-003：只读命令零写入，PMBR 只在表写中重写（tests/case_runner.rs::read_only_commands_leave_the_target_bytes_unchanged、new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one）
-parted-inc-00013	incidents	认领	SA1-013：写表后按分区 BLKPG 同步内核视图（tests/online.rs::online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem）
-parted-inc-00014	incidents	认领	GPT-004/GPT-016：条目数组 CRC 两侧逐侧校验、不再只信主头（gpt/header.rs+gpt/parse.rs；SA3-003 分类不猜）
-parted-inc-00015	incidents	认领	SA1-026：输出为结构化 JSON 不截断字段（tests/equivalence.rs::both_binaries_agree_on_info_json_fields）
-parted-inc-00016	incidents	拒绝	reiserfs 支持的 C double-free；reiserfs 探测未登记族按未知拒绝（SA1-017），内存面由 Rust 所有权承担
-parted-inc-00017	incidents	拒绝	ped_assert/回溯处理器是 C 诊断设施；Rust panic 机制承担
-parted-inc-00018	incidents	拒绝	mklabel 的 C NULL 解引用修复；本实现判定层无该空指针形态（防御由类型承担）
-parted-inc-00019	incidents	拒绝	SIGSEGV 回溯属 C 崩溃诊断；Rust panic 承担
-parted-inc-00020	incidents	拒绝	--list 的 C 对象销毁生命周期；RAII 承担
-parted-inc-00021	incidents	拒绝	同 parted-inc-00019（backtrace 重构）
-parted-inc-00022	incidents	认领	类型按数据写入并经写前校验，不存在旗标触发的表破坏路径（edit.rs 校验+唯一写点 I3）；dm/RAID 占用面由 SA1-025 承接
+parted-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
+parted-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
+parted-inc-00003	incidents	拒绝	C set/disk_set 空旗标崩溃修复属纯实现细节，防御由 Rust 所有权/类型承担；set 无旗标在本实现为正常拒绝路径（tests/case_runner.rs::add_delete_and_set_rewrite_both_copies）
+parted-inc-00004	incidents	裁剪	 gettext 本地化面不实现；本实现提示面为自身文案无 i18n（提示面缺失不适用——无翻译管线可裁剪）
+parted-inc-00005	incidents	裁剪	libparted-fs-resize 内嵌 FAT 调整库不在依赖面；vfat 扩容按不支持拒绝（SA2-014）
+parted-inc-00006	incidents	认领	SA1-024：无盘标目标不崩溃——info 返回空表 JSON 不进写路径，set 同面在判定层拒绝
+parted-inc-00007	incidents	裁剪	同 parted-inc-00003（FAT16 内嵌调整库）
+parted-inc-00008	incidents	裁剪	同 parted-inc-00003
+parted-inc-00009	incidents	认领	SA1-009：已诊断错误一律非零退出码（src/app/report/exit.rs 七值单源映射，逐格核对）
+parted-inc-00010	incidents	认领	SA1-001：备份头重定位+规范化并入同一表写并回读（R0602/R0607；tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write）
+parted-inc-00011	incidents	认领	SA3-003：截断/撕裂盘按分类回退可读副本，读路径不崩溃不猜（crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup）
+parted-inc-00012	incidents	拒绝	ped_device 缓存生命周期是 C 设备缓存实现细节；Rust 无全局设备缓存，防御由所有权承担
+parted-inc-00013	incidents	裁剪	mkpart 按文件系统名自动映射类型码的特性不存在；类型须显式给出（observe/mod.rs TypeSelector Guid/0xNN）
+parted-inc-00014	incidents	认领	SA1-002/SA1-003：只读命令零写入，PMBR 只在表写中重写（tests/case_runner.rs::read_only_commands_leave_the_target_bytes_unchanged、new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one）
+parted-inc-00015	incidents	认领	SA1-013：写表后按分区 BLKPG 同步内核视图（tests/online.rs::online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem）
+parted-inc-00016	incidents	认领	GPT-004/GPT-016：条目数组 CRC 两侧逐侧校验、不再只信主头（gpt/header.rs+gpt/parse.rs；SA3-003 分类不猜）
+parted-inc-00017	incidents	认领	SA1-026：输出为结构化 JSON 不截断字段（tests/equivalence.rs::both_binaries_agree_on_info_json_fields）
+parted-inc-00018	incidents	拒绝	reiserfs 支持的 C double-free；reiserfs 探测未登记族按未知拒绝（SA1-017），内存面由 Rust 所有权承担
+parted-inc-00019	incidents	拒绝	ped_assert/回溯处理器是 C 诊断设施；Rust panic 机制承担
+parted-inc-00020	incidents	拒绝	mklabel 的 C NULL 解引用修复；本实现判定层无该空指针形态（防御由类型承担）
+parted-inc-00021	incidents	拒绝	SIGSEGV 回溯属 C 崩溃诊断；Rust panic 承担
+parted-inc-00022	incidents	拒绝	--list 的 C 对象销毁生命周期；RAII 承担
+parted-inc-00023	incidents	拒绝	同 parted-inc-00019（backtrace 重构）
+parted-inc-00024	incidents	认领	类型按数据写入并经写前校验，不存在旗标触发的表破坏路径（edit.rs 校验+唯一写点 I3）；dm/RAID 占用面由 SA1-025 承接

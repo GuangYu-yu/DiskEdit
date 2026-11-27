@@ -19,69 +19,69 @@ parted-00163	sites	认领	认领|R0143（目标打不开→拒绝；只读命令
 parted-00187	sites	认领	认领|内核视图同步失败已有：SA1-013（BLKPG 失败落 5 且不动文件系统；tests/online.rs）
 parted-00273	sites	裁剪	裁剪|坏块扫描面（ped_geometry_check/timer）不入范围：本实现无该特性
 parted-00287	sites	拒绝	拒绝|断言告示面；断言面整体按 SA1-021 拒绝，Rust panic 承担
-parted-00551	sites	拒绝	拒绝|架构差异-多虑：异常分级文案表（Information/Warning/Error/Fatal/Bug）；错误分级由 Rust 错误枚举+退出码承担（SA1-009）
-parted-00552	sites	拒绝	同上
-parted-00553	sites	拒绝	同上
-parted-00582	sites	裁剪	裁剪|Amiga 盘标/文件系统按 SA1-016/SA1-017 定案：统一按不识别拒绝
-parted-00585	sites	裁剪	同上
-parted-00588	sites	裁剪	同上
-parted-00592	sites	裁剪	同上
-parted-00595	sites	裁剪	同上
-parted-00598	sites	裁剪	同上
-parted-00603	sites	裁剪	同上
-parted-00606	sites	裁剪	同上
-parted-00610	sites	裁剪	同上
-parted-00613	sites	裁剪	同上
-parted-00616	sites	裁剪	同上
-parted-00620	sites	裁剪	同上
-parted-00625	sites	裁剪	同上
-parted-00628	sites	裁剪	同上
-parted-00631	sites	裁剪	同上
-parted-00635	sites	裁剪	同上
-parted-00640	sites	认领	认领|FAT 签名识别由内容识别承担：R0134（blkid；crates/core/src/fs）
-parted-00642	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
-parted-00644	sites	裁剪	同上
+parted-00553	sites	拒绝	拒绝|架构差异-多虑：异常分级文案表（Information/Warning/Error/Fatal/Bug）；错误分级由 Rust 错误枚举+退出码承担（SA1-009）
+parted-00554	sites	拒绝	同上
+parted-00555	sites	拒绝	同上
+parted-00584	sites	裁剪	裁剪|Amiga 盘标/文件系统按 SA1-016/SA1-017 定案：统一按不识别拒绝
+parted-00587	sites	裁剪	同上
+parted-00590	sites	裁剪	同上
+parted-00594	sites	裁剪	同上
+parted-00597	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00600	sites	裁剪	同上
+parted-00605	sites	裁剪	同上
+parted-00608	sites	裁剪	同上
+parted-00612	sites	裁剪	同上
+parted-00615	sites	裁剪	同上
+parted-00618	sites	裁剪	同上
+parted-00622	sites	裁剪	同上
+parted-00627	sites	裁剪	同上
+parted-00630	sites	裁剪	同上
+parted-00633	sites	裁剪	同上
+parted-00637	sites	裁剪	同上
+parted-00642	sites	认领	认领|FAT 签名识别由内容识别承担：R0134（blkid；crates/core/src/fs）
+parted-00644	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
 parted-00646	sites	裁剪	同上
 parted-00648	sites	裁剪	同上
-parted-00651	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
-parted-00656	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
-parted-00695	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
-parted-00697	sites	裁剪	同上
+parted-00650	sites	裁剪	同上
+parted-00653	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-00658	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
+parted-00697	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
 parted-00699	sites	裁剪	同上
 parted-00701	sites	裁剪	同上
 parted-00703	sites	裁剪	同上
-parted-00706	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）；且属 FAT 扩容路径（SA2-014）
-parted-00711	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
-parted-00764	sites	裁剪	同上
-parted-00766	sites	裁剪	同上
+parted-00705	sites	裁剪	同上
+parted-00708	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）；且属 FAT 扩容路径（SA2-014）
+parted-00713	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
 parted-00768	sites	裁剪	同上
 parted-00770	sites	裁剪	同上
-parted-00880	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
-parted-00884	sites	认领	认领|文件系统须填满目标的回读证实已有：SA2-003（src/app/execute/filesystem.rs::the_size_readback_accepts_only_a_filled_filesystem）
-parted-00893	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
-parted-00902	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝
-parted-00927	sites	裁剪	同上
-parted-00929	sites	裁剪	同上
-parted-00935	sites	裁剪	同上
+parted-00772	sites	裁剪	同上
+parted-00774	sites	裁剪	同上
+parted-00887	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
+parted-00891	sites	认领	认领|文件系统须填满目标的回读证实已有：SA2-003（src/app/execute/filesystem.rs::the_size_readback_accepts_only_a_filled_filesystem）
+parted-00900	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
+parted-00909	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝
+parted-00936	sites	裁剪	同上
 parted-00938	sites	裁剪	同上
-parted-00940	sites	裁剪	同上
-parted-00942	sites	裁剪	同上
 parted-00944	sites	裁剪	同上
+parted-00947	sites	裁剪	同上
+parted-00949	sites	裁剪	同上
 parted-00951	sites	裁剪	同上
 parted-00953	sites	裁剪	同上
-parted-00955	sites	裁剪	同上
-parted-00970	sites	裁剪	同上
-parted-00973	sites	裁剪	同上
+parted-00960	sites	裁剪	同上
+parted-00962	sites	裁剪	同上
+parted-00964	sites	裁剪	同上
 parted-00979	sites	裁剪	同上
-parted-00986	sites	裁剪	同上
-parted-01003	sites	裁剪	同上
-parted-01006	sites	裁剪	同上
-parted-01011	sites	裁剪	同上
-parted-01014	sites	裁剪	同上
-parted-01026	sites	裁剪	同上
-parted-01030	sites	裁剪	同上
-parted-01037	sites	裁剪	同上
-parted-01040	sites	裁剪	同上
-parted-01791	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
-parted-01798	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-01808	sites	拒绝	同上
+parted-00982	sites	裁剪	同上
+parted-00988	sites	裁剪	同上
+parted-00995	sites	裁剪	同上
+parted-01012	sites	裁剪	同上
+parted-01015	sites	裁剪	同上
+parted-01020	sites	裁剪	同上
+parted-01023	sites	裁剪	同上
+parted-01035	sites	裁剪	同上
+parted-01039	sites	裁剪	同上
+parted-01046	sites	裁剪	同上
+parted-01049	sites	裁剪	同上
+parted-01802	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
+parted-01809	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01819	sites	拒绝	同上

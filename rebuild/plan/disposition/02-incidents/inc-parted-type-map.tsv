@@ -1,2 +1,0 @@
-row_id	ledger	state	note
-parted-inc-00011	incidents	裁剪	mkpart 按文件系统名自动映射类型码的特性不存在；类型须显式给出（observe/mod.rs TypeSelector Guid/0xNN）

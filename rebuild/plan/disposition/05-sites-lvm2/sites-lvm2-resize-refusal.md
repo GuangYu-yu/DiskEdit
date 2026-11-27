@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-resize-refusal（7 行）
+# 批次：sites-lvm2-resize-refusal（14 行）
 
 ## 判断
 pvresize/lvresize CLI 拒绝面：固定参数下不可达裁剪；内部断言（INTERNAL_ERROR）拒绝；LV 未找到等价拒绝在判定层（select_lv/R0386/R0387）认领引 SA2-017。

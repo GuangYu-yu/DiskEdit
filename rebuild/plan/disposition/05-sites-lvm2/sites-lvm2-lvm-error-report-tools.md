@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-lvm-error-report-tools（52 行）
+# 批次：sites-lvm2-lvm-error-report-tools（47 行）
 
 ## 判断
 lvm 通用 CLI 前端（lvmcmdline.c）错误面：其余子命令面裁剪。

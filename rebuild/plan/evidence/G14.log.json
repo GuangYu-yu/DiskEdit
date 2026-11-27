@@ -1,0 +1,27 @@
+{
+ "gate": "G14",
+ "kind": "lint",
+ "command": [
+  "python",
+  "plan/instruments/audit.py",
+  "check-disposition",
+  "--ref",
+  "plan/baseline/reference",
+  "--disp",
+  "plan/disposition"
+ ],
+ "exit_code": 0,
+ "commit": "396b745",
+ "tree": "2246e3d2152cf300",
+ "at": "2026-11-27T06:16:20+00:00",
+ "counts": {
+  "result_lines": 0,
+  "passed": 0,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G14.log"
+}

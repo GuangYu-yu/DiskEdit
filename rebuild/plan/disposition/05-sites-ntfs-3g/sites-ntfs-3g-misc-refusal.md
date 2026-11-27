@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-misc-refusal（234 行）
+# 批次：sites-ntfs-3g-misc-refusal（235 行）
 
 ## 判断
 libntfs-3g 内部拒绝面：按架构差异拒绝（SA1-021 同族）。

@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-lvm-error-report-lib（269 行）
+# 批次：sites-lvm2-lvm-error-report-lib（289 行）
 
 ## 判断
 lvm 库（lib/metadata/lv_manip.c、metadata.c）错误通道：库内部路径裁剪；其中尺寸校验/pvresize 边界/metadata 一致性/活动性行认领引 SA2-017（判定层等价 + 链内交付）；INTERNAL_ERROR 行拒绝。

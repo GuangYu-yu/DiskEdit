@@ -1,7 +1,7 @@
 # sites-e2fsprogs-check-error-report
 
 ## 判断
-e2fsck 全部 com_err/printf 文案站点（486 行）。全批 486 行已逐行翻态，note 见同名 tsv。
+e2fsck 全部 com_err/printf 文案站点（491 行）。全批 486 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 SA2-001/002；D3/D9；src/app/execute/diagnose.rs::run

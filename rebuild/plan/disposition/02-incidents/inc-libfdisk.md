@@ -1,4 +1,4 @@
-# 02-incidents/inc-libfdisk（41 行）
+# 02-incidents/inc-libfdisk（17 行）
 
 ## 判断
 - 裁剪 40：util-linux 全家桶公告（cfdisk/mkfs 包装器/agetty/hwclock/mount 等）与 blkid 探测面；本实现不实现交互 TUI、mkfs 包装器、blkid 探测（识别以档案表为唯一事实源，SA1-017）。

@@ -3,5 +3,5 @@ MBR-001	specs	认领	MBR 布局按 UEFI/Windows 一致偏移处理：签名按�
 MBR-002	specs	认领	少于四条时其余记录为全零=空闲槽（edit.rs 取首个空槽；create.rs::new_mbr_lba0 清空 446..510）；全零即空闲与 GPT-019 同源
 MBR-003	specs	认领	0x05/0x0F（另含 0x85）识别为扩展分区并作 EBR 链入口（primary.rs TYPE_EXTENDED/TYPE_EXTENDED_LBA/TYPE_EXTENDED_LINUX、is_extended、Mbr::extended()）
 EBR-001	specs	认领	EBR 链式结构逐级解析（mbr/extended.rs::walk_extended：链接记录+数据记录、环检测、链长上限 128）；观察层 observe/table.rs:284-300 接入
-EBR-002	specs	认领	"每逻辑盘一个 EBR"由链长承接；起始按相对 LBA 换算绝对地址（extended.rs:42-51），CHS 位置不参与（SA1-028 不实现几何换算）
+EBR-002	specs	认领	每逻辑盘一个 EBR由链长承接；起始按相对 LBA 换算绝对地址（extended.rs:42-51），CHS 位置不参与（SA1-028 不实现几何换算）
 EBR-003	specs	认领	LBA0 缺签名即非 MBR（primary.rs::parse → MbrSignatureMissing，observe/table.rs:266 归 None）；待实现：沿链逐级 EBR 的 0x55AA 签名校验当前只按链接记录推进未验证签名

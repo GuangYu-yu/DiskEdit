@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-parted-doc-00001	docs	认领	"把数据丢失风险降到最小"由架构承接：唯一写点+记录原像+回滚+回读证实（I1-I12；B7/B8；SA1-002/003 只读零写）
+parted-doc-00001	docs	认领	把数据丢失风险降到最小由架构承接：唯一写点+记录原像+回滚+回读证实（I1-I12；B7/B8；SA1-002/003 只读零写）
 parted-doc-00002	docs	裁剪	项目门户条目（首页地址），无行为面
 parted-doc-00003	docs	裁剪	同 parted-doc-00002
 parted-doc-00004	docs	裁剪	同 parted-doc-00002（bug 报告渠道）
@@ -9,7 +9,7 @@ parted-doc-00007	docs	裁剪	同 parted-doc-00002
 parted-doc-00008	docs	裁剪	同 parted-doc-00002（平台列表；非 Linux 后端 D10 拒绝）
 parted-doc-00009	docs	裁剪	同 parted-doc-00002
 parted-doc-00010	docs	裁剪	man 排版/命令名差异条目，无行为面
-parted-doc-00011	docs	裁剪	"Options:"节标题行，无行为面
+parted-doc-00011	docs	裁剪	Options:节标题行，无行为面
 parted-doc-00012	docs	认领	--help 帮助信息由 CLI 提供（命令面契约枚举 tests/contract_surface.rs）
 parted-doc-00013	docs	裁剪	-l 枚举宿主全部块设备的形态不提供；info 以显式目标为参数（单目标契约）
 parted-doc-00014	docs	认领	机器可读输出为 info 默认形态（D9 结构化 JSON；SA1-026 等价测试），无需 -m 开关
@@ -20,7 +20,7 @@ parted-doc-00018	docs	认领	SA1-008/SA1-014：--align mib|none 与 1 MiB 默认
 parted-doc-00019	docs	认领	版本信息由 CLI 提供（命令面契约枚举）
 parted-doc-00020	docs	认领	从尾计数能力由 grow/grow_to_end 表达（observe/mod.rs SizeSpec::Grow）；负数扇区写法不提供
 parted-doc-00021	docs	认领	SA1-014：MiB/GiB 按 2 的幂精确换算字节（src/app/cli/parse.rs::absolute_size/decimal）
-parted-doc-00022	docs	认领	仅提供二进制后缀与裸字节；SI 十进制后缀不提供，规避 parted"±500MB 就近解"的舍入歧义
+parted-doc-00022	docs	认领	"仅提供二进制后缀与裸字节；SI 十进制后缀不提供，规避 parted""±500MB 就近解""的舍入歧义"
 parted-doc-00023	docs	裁剪	man 示例行（unit compact 输出样例），无行为面
 parted-doc-00024	docs	认领	输出契约以 info JSON 为准（SA1-026）；unit 子命令形态不照搬（D9）
 parted-doc-00025	docs	裁剪	unit chs 示例绑定 CHS 显示面（SA1-028 不实现几何换算）

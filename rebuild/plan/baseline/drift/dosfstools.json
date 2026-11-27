@@ -3,5 +3,5 @@
  "version": "4.2",
  "probe": "fatlabel --version",
  "status": "missing",
- "at": "2026-11-27T05:47:23+00:00"
+ "at": "2026-11-27T06:14:54+00:00"
 }

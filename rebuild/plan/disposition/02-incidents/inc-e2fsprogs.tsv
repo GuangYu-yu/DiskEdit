@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-e2fsprogs-inc-00001	incidents	裁剪	依赖工具 e2fsprogs 的内部修复/特性（e2fsck/resize2fs/debugfs/blkid/tune2fs/badblocks/mke2fs 程序自身行为）；本实现仅按档案表以 e2fsck/resize2fs/dumpe2fs 承接扩缩与检查（SA2-001/002/003），工具内部随发行版交付版本固定（SA2-011/012），不属本实现行为面
-e2fsprogs-inc-00002	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00003	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00004	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00005	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00006	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00007	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00008	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00009	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00003	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00004	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00005	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00006	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00007	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00008	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00009	incidents	待判	换版重放：本行在上游新版本新增或改写
 e2fsprogs-inc-00010	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00011	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00012	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -114,7 +114,7 @@ e2fsprogs-inc-00112	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00113	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00114	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00115	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00116	incidents	裁剪	同 e2fsprogs-inc-00001（resize2fs 收缩正确性属上游内部；本实现防线是回读证实+失败落已写待恢复，SA2-002）
+e2fsprogs-inc-00116	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00117	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00118	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00119	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -122,7 +122,7 @@ e2fsprogs-inc-00120	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00121	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00122	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00123	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00124	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00124	incidents	裁剪	同 e2fsprogs-inc-00001（resize2fs 收缩正确性属上游内部；本实现防线是回读证实+失败落已写待恢复，SA2-002）
 e2fsprogs-inc-00125	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00126	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00127	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -222,7 +222,7 @@ e2fsprogs-inc-00220	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00221	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00222	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00223	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00224	incidents	认领	SA2-001：e2fsck"仅修复时返回 1、仅优化时返回 0"正是检查器把退出码 1/2 视为修复成功并复查确认的契约基础（依赖面交付版本固定 SA2-011）
+e2fsprogs-inc-00224	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00225	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00226	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00227	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -230,7 +230,7 @@ e2fsprogs-inc-00228	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00229	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00230	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00231	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00232	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00232	incidents	认领	"SA2-001：e2fsck""仅修复时返回 1、仅优化时返回 0""正是检查器把退出码 1/2 视为修复成功并复查确认的契约基础（依赖面交付版本固定 SA2-011）"
 e2fsprogs-inc-00233	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00234	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00235	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -250,7 +250,7 @@ e2fsprogs-inc-00248	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00249	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00250	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00251	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00252	incidents	裁剪	同 e2fsprogs-inc-00001（CVE 内存修复属上游内部；调用面回读证实由 SA2-002 承接）
+e2fsprogs-inc-00252	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00253	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00254	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00255	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -258,7 +258,7 @@ e2fsprogs-inc-00256	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00257	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00258	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00259	incidents	裁剪	同 e2fsprogs-inc-00001
-e2fsprogs-inc-00260	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00260	incidents	裁剪	同 e2fsprogs-inc-00001（CVE 内存修复属上游内部；调用面回读证实由 SA2-002 承接）
 e2fsprogs-inc-00261	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00262	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00263	incidents	裁剪	同 e2fsprogs-inc-00001
@@ -274,3 +274,40 @@ e2fsprogs-inc-00272	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00273	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00274	incidents	裁剪	同 e2fsprogs-inc-00001
 e2fsprogs-inc-00275	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00276	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00277	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00278	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00279	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00280	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00281	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00282	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00283	incidents	裁剪	同 e2fsprogs-inc-00001
+e2fsprogs-inc-00284	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00285	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00286	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00287	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00288	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00289	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00290	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00291	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00292	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00293	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00294	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00295	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00296	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00297	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00298	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00299	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00300	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00301	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00302	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00303	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00304	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00305	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00306	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00307	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00308	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00309	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00310	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00311	incidents	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-inc-00312	incidents	待判	换版重放：本行在上游新版本新增或改写

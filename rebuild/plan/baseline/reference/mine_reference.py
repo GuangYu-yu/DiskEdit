@@ -20,17 +20,17 @@ SITES = OUT / "sites"
 
 TOOLS = {
     "parted": {
-        "layer": "T1", "version": "3.6", "root": "parted-3.6",
+        "layer": "T1", "version": "3.8", "root": "parted-3.8",
         "code": ["libparted/**/*.c", "libparted/**/*.h", "parted/**/*.c", "parted/**/*.h"],
         "docs": ["doc/parted.texi", "doc/*.8", "doc/*.8.in"],
         "logs": ["NEWS"],
     },
     "libfdisk": {
-        "layer": "T1", "version": "2.39.3", "root": "util-linux-2.39.3",
+        "layer": "T1", "version": "2.42.4", "root": "util-linux-2.42.4",
         "code": ["libfdisk/**/*.c", "libfdisk/**/*.h", "disk-utils/sfdisk.c",
                  "disk-utils/fdisk.c", "disk-utils/cfdisk.c"],
         "docs": ["disk-utils/sfdisk.8", "disk-utils/fdisk.8", "disk-utils/cfdisk.8"],
-        "logs": ["NEWS", "Documentation/releases/v2.39-ReleaseNotes"],
+        "logs": ["NEWS", "Documentation/releases/v2.42.4-ReleaseNotes"],
     },
     "gdisk": {
         "layer": "T1", "version": "1.0.10", "root": "gptfdisk-1.0.10",
@@ -39,7 +39,7 @@ TOOLS = {
         "logs": ["NEWS"],
     },
     "e2fsprogs": {
-        "layer": "T2", "version": "1.47.0", "root": "e2fsprogs-1.47.0",
+        "layer": "T2", "version": "1.47.4", "root": "e2fsprogs-1.47.4",
         "code": ["resize/resize2fs.c", "misc/tune2fs.c", "misc/mke2fs.c",
                  "misc/dumpe2fs.c", "e2fsck/*.c", "lib/ext2fs/resize.c",
                  "lib/ext2fs/initialize.c", "lib/ext2fs/openfs.c",
@@ -51,7 +51,7 @@ TOOLS = {
         "logs": ["RELEASE-NOTES", "doc/RelNotes/*"],
     },
     "xfsprogs": {
-        "layer": "T2", "version": "6.6.0", "root": "xfsprogs-6.6.0",
+        "layer": "T2", "version": "7.3.0", "root": "xfsprogs-7.3.0",
         "code": ["growfs/*.c", "mkfs/*.c", "admin/*.sh", "db/sb.c", "db/init.c",
                  "db/command.c"],
         "docs": ["man/man8/xfs_growfs.8", "man/man8/xfs_admin.8",
@@ -59,7 +59,7 @@ TOOLS = {
         "logs": ["doc/CHANGES"],
     },
     "btrfs-progs": {
-        "layer": "T2", "version": "6.6.3", "root": "btrfs-progs-v6.6.3",
+        "layer": "T2", "version": "7.3", "root": "btrfs-progs-v7.3",
         "code": ["cmds/filesystem.c", "cmds/filesystem-usage.c", "cmds/property.c",
                  "cmds/device.c", "mkfs/*.c", "tune/*.c", "check/*.c"],
         "docs": ["Documentation/btrfs-filesystem.rst", "Documentation/btrfs-check.rst",
@@ -68,7 +68,7 @@ TOOLS = {
         "logs": ["CHANGES"],
     },
     "ntfs-3g": {
-        "layer": "T2", "version": "2022.10.3", "root": "ntfs-3g-2022.10.3",
+        "layer": "T2", "version": "2026.9.28", "root": "ntfs-3g-2026.9.28",
         "code": ["ntfsprogs/ntfsresize.c", "ntfsprogs/ntfslabel.c",
                  "ntfsprogs/ntfsinfo.c", "ntfsprogs/ntfsfix.c",
                  "ntfsprogs/ntfscluster.c", "libntfs-3g/volume.c",
@@ -91,7 +91,7 @@ TOOLS = {
         "logs": ["ChangeLog", "doc/ChangeLog.*"],
     },
     "lvm2": {
-        "layer": "T2", "version": "2.03.16", "root": "LVM2.2.03.16",
+        "layer": "T2", "version": "2.03.44", "root": "lvm2-2.03.44",
         "code": ["tools/pvresize.c", "tools/lvextend.c", "tools/lvresize.c",
                  "tools/pvchange.c", "tools/pvs.c", "tools/lvs.c", "tools/vgs.c",
                  "tools/vgchange.c", "tools/lvmcmdline.c", "tools/toollib.c",

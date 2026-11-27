@@ -1,7 +1,7 @@
 row_id	ledger	state	note
 libfdisk-inc-00001	incidents	裁剪	cfdisk 交互 TUI 不实现（交互面裁剪）；reiserfs 探测未登记族按未知拒绝（SA1-017）
 libfdisk-inc-00002	incidents	裁剪	util-linux mkfs 包装器不在本实现面（依赖工具面）
-libfdisk-inc-00003	incidents	裁剪	cfdisk 交互 TUI；等价行为"无表不崩溃"由 info 空表承接（SA1-024）
+libfdisk-inc-00003	incidents	裁剪	"cfdisk 交互 TUI；等价行为""无表不崩溃""由 info 空表承接（SA1-024）"
 libfdisk-inc-00004	incidents	裁剪	绑定 agetty 等其他组件的缓冲溢出公告，不属分区表面；同批 00005-00016 同结论（hwclock/namei/readprofile/simpleinit/vipw/login/cal/mount/umount）
 libfdisk-inc-00005	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00006	incidents	裁剪	同 libfdisk-inc-00004
@@ -15,28 +15,4 @@ libfdisk-inc-00013	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00014	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00015	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00016	incidents	裁剪	同 libfdisk-inc-00004
-libfdisk-inc-00017	incidents	裁剪	构建告警条目无行为面（shift-count-overflow）
-libfdisk-inc-00018	incidents	裁剪	util-linux 全家桶公告行未指明分区面工具；即便属内存修复也由依赖工具自身承担（SA2-011 版本面固定）
-libfdisk-inc-00019	incidents	裁剪	同 libfdisk-inc-00018（hwclock 非分区面）
-libfdisk-inc-00020	incidents	裁剪	同 libfdisk-inc-00018（构建告警）
-libfdisk-inc-00021	incidents	裁剪	同 libfdisk-inc-00018（last 非分区面）
-libfdisk-inc-00022	incidents	裁剪	同 libfdisk-inc-00018（构建告警）
-libfdisk-inc-00023	incidents	裁剪	同 libfdisk-inc-00018（lib/path 输出面）
-libfdisk-inc-00024	incidents	裁剪	同 libfdisk-inc-00018（PTY 死锁非分区面）
-libfdisk-inc-00025	incidents	裁剪	blkid 探测面不实现；识别以档案表为唯一事实源（SA1-017）
-libfdisk-inc-00026	incidents	裁剪	同 libfdisk-inc-00025（ocfs superblock 解析）
-libfdisk-inc-00027	incidents	裁剪	同 libfdisk-inc-00025（bcachefs probe）
-libfdisk-inc-00028	incidents	裁剪	同 libfdisk-inc-00025（erofs probe 对齐修复）
-libfdisk-inc-00029	incidents	裁剪	同 libfdisk-inc-00025（exfat probe 对齐修复）
-libfdisk-inc-00030	incidents	拒绝	gpt PMBR 读取越界是 C 缓冲缺陷，防御由 Rust 边界检查承担（GPT-007/010 解析带界：mbr/primary.rs、create.rs）
-libfdisk-inc-00031	incidents	裁剪	同 libfdisk-inc-00018（截一格输出条目非分区面）
-libfdisk-inc-00032	incidents	裁剪	同 libfdisk-inc-00018（filter 表达式崩溃非分区面）
-libfdisk-inc-00033	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00034	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00035	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00036	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00037	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00038	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00039	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00040	incidents	裁剪	同 libfdisk-inc-00018
-libfdisk-inc-00041	incidents	裁剪	同 libfdisk-inc-00018
+libfdisk-inc-00017	incidents	待判	换版重放：本行在上游新版本新增或改写

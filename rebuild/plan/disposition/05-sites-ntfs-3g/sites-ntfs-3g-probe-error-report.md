@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-probe-error-report（7 行）
+# 批次：sites-ntfs-3g-probe-error-report（8 行）
 
 ## 判断
 ntfsinfo 探针文案面：不消费，裁剪。

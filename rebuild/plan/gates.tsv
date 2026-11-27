@@ -38,3 +38,6 @@ G11	 model	lint	1	 	plan/baseline/incident-classes.tsv	python plan/instruments/a
 G7	 human	test	3	DISKEDIT_BASELINE	 	cargo test --test equivalence
 G8	 human	test	50	 	 	cargo test
 G8b	 human	build	1	 	 	cargo build --release
+G12	 model	lint	1	 	plan/baseline/sites-census.tsv	python plan/instruments/audit.py census-per-site --census plan/baseline/defense-census.tsv --ledger plan/baseline/incident-classes.tsv --map plan/disposition/site-map.tsv --out plan/baseline/sites-census.tsv
+G13	 model	lint	1	 	plan/baseline/tool-versions.tsv	python plan/instruments/audit.py drift-check --defs plan/baseline/tool-versions.tsv --out plan/baseline/drift
+G14	 model	lint	1	 	plan/baseline/reference/docs.tsv	python plan/instruments/audit.py check-disposition --ref plan/baseline/reference --disp plan/disposition

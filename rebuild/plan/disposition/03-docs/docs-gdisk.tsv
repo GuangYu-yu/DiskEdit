@@ -1,7 +1,7 @@
 row_id	ledger	state	note
 gdisk-doc-00001	docs	裁剪	man 页 BUGS 节标题行，无独立行为面（随同节各条处置）
 gdisk-doc-00002	docs	裁剪	平台面：仅编译于 Linux/FreeBSD/Mac/Windows；本实现仅 Linux 后端（D10 非 Linux 后端一律拒绝）
-gdisk-doc-00003	docs	裁剪	FreeBSD 挂载卷写入限制；Linux 侧"挂载即拒绝写"由占用闸承接（SA1-004）
+gdisk-doc-00003	docs	裁剪	"FreeBSD 挂载卷写入限制；Linux 侧""挂载即拒绝写""由占用闸承接（SA1-004）"
 gdisk-doc-00004	docs	裁剪	MBR→GPT 转换特性不实现；GPT 条目数下限 128 由 new 承接（GPT-020）
 gdisk-doc-00005	docs	裁剪	同 gdisk-doc-00004
 gdisk-doc-00006	docs	裁剪	同 gdisk-doc-00004

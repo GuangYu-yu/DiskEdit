@@ -1,4 +1,0 @@
-row_id	ledger	state	note
-xfsprogs-00009	sites	认领	认领：挂载点路径解析失败即退——调用时参数校验（SA2-004；xfs_growfs 只接受挂载点，src/app/execute/filesystem.rs::online_invocation）
-xfsprogs-00011	sites	认领	认领：目标校验失败的退出码产出端——非零退出按失败/已写待恢复消费（SA2-004；src/app/execute/filesystem.rs::run_online_native）
-xfsprogs-00007	sites	认领	认领：xfs_growfs 只接受挂载点且只增不减的调用时校验——SA2-004（非 btrfs 在线缩容一律拒绝；xfs 不收缩由档案表 Unsupported 承担）；在线扩容固定 `xfs_growfs <mount>`（src/app/execute/filesystem.rs::online_invocation），非零退出落已写待恢复

@@ -1,7 +1,7 @@
 # sites-e2fsprogs-mkfs-refusal
 
 ## 判断
-mke2fs CLI 参数与内部校验（124 行）：1 行差异（00481 mkfs 卷标超长前置拒绝 vs 截断）、3 行特殊裁剪（00606/00613 e2undo、00615 discard）、120 行默认裁剪。全批 124 行已逐行翻态，note 见同名 tsv。
+mke2fs CLI 参数与内部校验（126 行）：1 行差异（00481 mkfs 卷标超长前置拒绝 vs 截断）、3 行特殊裁剪（00606/00613 e2undo、00615 discard）、120 行默认裁剪。全批 124 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 src/app/decide/mkfs.rs 的 label_problem 前置闸；crates/core/src/fs/attrs.rs::label_problem；SA1-006（不发送 discard）；事务记录承担崩溃安全

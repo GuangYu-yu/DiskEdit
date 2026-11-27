@@ -1,2 +1,0 @@
-row_id	ledger	state	note
-lvm2-00018	sites	认领	认领：SA2-017——LV 存在性与活动性在判定层核验（src/app/lvm.rs::select_lv）；查询失败/请求不符分别归 LvmFailed/TableEdit（refusal-map R0386/R0387）

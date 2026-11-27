@@ -1,0 +1,33 @@
+row_id	ledger	state	note
+libfdisk-00067	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00105	sites	裁剪	同上
+libfdisk-00106	sites	裁剪	同上
+libfdisk-00113	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00121	sites	认领	同上
+libfdisk-00122	sites	认领	同上
+libfdisk-00126	sites	认领	同上
+libfdisk-00127	sites	认领	同上
+libfdisk-00129	sites	认领	同上
+libfdisk-00131	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00132	sites	认领	同上
+libfdisk-00133	sites	认领	同上
+libfdisk-00150	sites	拒绝	设备持有/去持有概念不存在：只读打开与单写事务由平台端口管理。依据：SA1-002（架构差异）
+libfdisk-00151	sites	拒绝	同上
+libfdisk-00156	sites	认领	写表后按分区 BLKPG 同步内核视图。依据：SA1-013
+libfdisk-00158	sites	认领	同上
+libfdisk-00159	sites	认领	同上
+libfdisk-00160	sites	认领	同上
+libfdisk-00572	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00583	sites	裁剪	同上
+libfdisk-00659	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00677	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
+libfdisk-00681	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
+libfdisk-00689	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00693	sites	认领	同上
+libfdisk-00694	sites	认领	同上
+libfdisk-00707	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
+libfdisk-00708	sites	认领	同上
+libfdisk-00722	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00723	sites	认领	同上
+libfdisk-00735	sites	差异	D16：verify 汇总报告未复刻：info/inspect 报损伤类别与退出码，不逐项列 N errors 清单。如需人工逐项诊断可在 info 损伤字段附明细列表
+libfdisk-00756	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027

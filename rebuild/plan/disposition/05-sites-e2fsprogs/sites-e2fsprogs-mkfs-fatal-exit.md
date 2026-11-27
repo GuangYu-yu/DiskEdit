@@ -1,7 +1,7 @@
 # sites-e2fsprogs-mkfs-fatal-exit
 
 ## 判断
-mke2fs usage/OOM 出口（116 行）。全批 116 行已逐行翻态，note 见同名 tsv。
+mke2fs usage/OOM 出口（128 行）。全批 116 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 mkfs_invocation 固定参数（-t extN [-L label]），usage 不可达

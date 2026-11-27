@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-xfsprogs-00446	sites	裁剪	裁剪：xfs_db usage/无效超块消息——db 工具不在消费面（本实现不消费 xfs_db）
-xfsprogs-00454	sites	裁剪	同上
-xfsprogs-00457	sites	裁剪	同上
+xfsprogs-00683	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00691	sites	裁剪	同上
+xfsprogs-00694	sites	裁剪	同上

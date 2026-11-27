@@ -1,4 +1,4 @@
-# 02-incidents/inc-lvm2（87 行）
+# 02-incidents/inc-lvm2（98 行）
 
 ## 判断
 - 裁剪 86：LVM2 WHATS_NEW 条目多为 cluster/lvmetad/dmeventd/thin/cache/raid/mirror/metadata 内部；本实现 LVM 链仅 pvresize→lvextend -r→pvs/vgs 证据（SA2-017），工具内部随发行版版本固定（SA2-011）。

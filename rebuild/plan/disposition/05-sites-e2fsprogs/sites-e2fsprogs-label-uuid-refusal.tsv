@@ -1,24 +1,23 @@
 row_id	ledger	state	note
-e2fsprogs-00104	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00109	sites	裁剪	同上
-e2fsprogs-00112	sites	裁剪	同上
+e2fsprogs-00105	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
+e2fsprogs-00110	sites	裁剪	同上
 e2fsprogs-00113	sites	裁剪	同上
-e2fsprogs-00115	sites	裁剪	同上
-e2fsprogs-00120	sites	裁剪	同上
-e2fsprogs-00136	sites	裁剪	同上
+e2fsprogs-00114	sites	裁剪	同上
+e2fsprogs-00116	sites	裁剪	同上
+e2fsprogs-00121	sites	裁剪	同上
 e2fsprogs-00137	sites	裁剪	同上
 e2fsprogs-00138	sites	裁剪	同上
 e2fsprogs-00139	sites	裁剪	同上
 e2fsprogs-00140	sites	裁剪	同上
 e2fsprogs-00141	sites	裁剪	同上
 e2fsprogs-00142	sites	裁剪	同上
-e2fsprogs-00145	sites	裁剪	同上
+e2fsprogs-00143	sites	裁剪	同上
 e2fsprogs-00146	sites	裁剪	同上
 e2fsprogs-00147	sites	裁剪	同上
 e2fsprogs-00148	sites	裁剪	同上
 e2fsprogs-00149	sites	裁剪	同上
 e2fsprogs-00150	sites	裁剪	同上
-e2fsprogs-00152	sites	裁剪	同上
+e2fsprogs-00151	sites	裁剪	同上
 e2fsprogs-00153	sites	裁剪	同上
 e2fsprogs-00154	sites	裁剪	同上
 e2fsprogs-00155	sites	裁剪	同上
@@ -32,68 +31,73 @@ e2fsprogs-00162	sites	裁剪	同上
 e2fsprogs-00163	sites	裁剪	同上
 e2fsprogs-00164	sites	裁剪	同上
 e2fsprogs-00165	sites	裁剪	同上
-e2fsprogs-00174	sites	裁剪	同上
-e2fsprogs-00185	sites	裁剪	同上
+e2fsprogs-00166	sites	裁剪	同上
+e2fsprogs-00175	sites	裁剪	同上
 e2fsprogs-00186	sites	裁剪	同上
-e2fsprogs-00188	sites	裁剪	同上
+e2fsprogs-00187	sites	裁剪	同上
 e2fsprogs-00189	sites	裁剪	同上
-e2fsprogs-00191	sites	裁剪	同上
+e2fsprogs-00190	sites	裁剪	同上
 e2fsprogs-00192	sites	裁剪	同上
-e2fsprogs-00194	sites	裁剪	同上
+e2fsprogs-00193	sites	裁剪	同上
 e2fsprogs-00195	sites	裁剪	同上
-e2fsprogs-00197	sites	裁剪	同上
+e2fsprogs-00196	sites	裁剪	同上
 e2fsprogs-00198	sites	裁剪	同上
-e2fsprogs-00200	sites	裁剪	同上
+e2fsprogs-00199	sites	裁剪	同上
 e2fsprogs-00201	sites	裁剪	同上
-e2fsprogs-00208	sites	裁剪	同上
+e2fsprogs-00202	sites	裁剪	同上
 e2fsprogs-00209	sites	裁剪	同上
-e2fsprogs-00211	sites	裁剪	同上
+e2fsprogs-00210	sites	裁剪	同上
 e2fsprogs-00212	sites	裁剪	同上
-e2fsprogs-00214	sites	裁剪	同上
+e2fsprogs-00213	sites	裁剪	同上
 e2fsprogs-00215	sites	裁剪	同上
-e2fsprogs-00217	sites	裁剪	同上
+e2fsprogs-00216	sites	裁剪	同上
 e2fsprogs-00218	sites	裁剪	同上
-e2fsprogs-00230	sites	裁剪	同上
+e2fsprogs-00219	sites	裁剪	同上
 e2fsprogs-00231	sites	裁剪	同上
-e2fsprogs-00233	sites	裁剪	同上
+e2fsprogs-00232	sites	裁剪	同上
 e2fsprogs-00234	sites	裁剪	同上
 e2fsprogs-00235	sites	裁剪	同上
 e2fsprogs-00236	sites	裁剪	同上
 e2fsprogs-00237	sites	裁剪	同上
 e2fsprogs-00238	sites	裁剪	同上
 e2fsprogs-00239	sites	裁剪	同上
-e2fsprogs-00241	sites	裁剪	同上
+e2fsprogs-00240	sites	裁剪	同上
 e2fsprogs-00242	sites	裁剪	同上
 e2fsprogs-00243	sites	裁剪	同上
 e2fsprogs-00244	sites	裁剪	同上
 e2fsprogs-00245	sites	裁剪	同上
 e2fsprogs-00246	sites	裁剪	同上
 e2fsprogs-00247	sites	裁剪	同上
-e2fsprogs-00261	sites	裁剪	同上
+e2fsprogs-00248	sites	裁剪	同上
 e2fsprogs-00262	sites	裁剪	同上
 e2fsprogs-00263	sites	裁剪	同上
 e2fsprogs-00264	sites	裁剪	同上
-e2fsprogs-00266	sites	裁剪	同上
-e2fsprogs-00271	sites	裁剪	同上
-e2fsprogs-00274	sites	裁剪	同上
-e2fsprogs-00281	sites	裁剪	同上
-e2fsprogs-00285	sites	裁剪	同上
+e2fsprogs-00265	sites	裁剪	同上
+e2fsprogs-00267	sites	裁剪	同上
+e2fsprogs-00272	sites	裁剪	同上
+e2fsprogs-00275	sites	裁剪	同上
+e2fsprogs-00282	sites	裁剪	同上
 e2fsprogs-00286	sites	裁剪	同上
-e2fsprogs-00292	sites	拒绝	同上
-e2fsprogs-00297	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00298	sites	裁剪	同上
-e2fsprogs-00301	sites	裁剪	同上
+e2fsprogs-00287	sites	裁剪	同上
+e2fsprogs-00290	sites	拒绝	同上
+e2fsprogs-00295	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
+e2fsprogs-00296	sites	裁剪	同上
+e2fsprogs-00299	sites	裁剪	同上
+e2fsprogs-00302	sites	裁剪	同上
+e2fsprogs-00303	sites	裁剪	同上
 e2fsprogs-00304	sites	裁剪	同上
-e2fsprogs-00305	sites	裁剪	同上
-e2fsprogs-00306	sites	裁剪	同上
-e2fsprogs-00308	sites	认领	同上
-e2fsprogs-00310	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00313	sites	裁剪	同上
-e2fsprogs-00316	sites	裁剪	同上
-e2fsprogs-00318	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00321	sites	裁剪	同上
-e2fsprogs-00322	sites	裁剪	同上
-e2fsprogs-00326	sites	认领	同上
-e2fsprogs-00327	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00328	sites	裁剪	同上
-e2fsprogs-00329	sites	裁剪	同上
+e2fsprogs-00305	sites	认领	认领：同向拒绝——挂载状态无法确定时 tune2fs 拒绝改写；本实现占用探测 Unknown 一律拒绝（Refusal::OccupancyUnknown），不猜事实。依据 src/app/decide/edit.rs::precheck、I5/B4。
+e2fsprogs-00306	sites	认领	同上
+e2fsprogs-00308	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
+e2fsprogs-00311	sites	裁剪	同上
+e2fsprogs-00314	sites	裁剪	同上
+e2fsprogs-00315	sites	差异	D15：set label/ext 卷标超长时前置拒绝（exit 3），不采纳 tune2fs 的“截断+警告”——依据 crates/core/src/fs/attrs.rs::label_problem、src/app/decide/edit.rs::content_property、tests/cases/mod.rs::set_label_on_ext_refuses_an_over-long_label。
+e2fsprogs-00316	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
+e2fsprogs-00319	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00320	sites	裁剪	同上
+e2fsprogs-00322	sites	认领	认领：同向拒绝——挂载中的 ext 本实现经占用闸在任何写之前拒绝 UUID 改写，不走 tune2fs 的挂载检查。依据 src/app/decide/edit.rs::precheck、src/platform/linux/mod.rs::block_occupancy、B4/B17 占用闸。
+e2fsprogs-00323	sites	认领	认领：UUID 形状前置校验已实现——非 UUID 文本在判定层拒绝，不落到工具。依据 src/app/decide/edit.rs::is_uuid（含单测）、tests/cases/mod.rs 的 set uuid 拒侧用例。
+e2fsprogs-00324	sites	认领	同上
+e2fsprogs-00325	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00326	sites	裁剪	同上
+e2fsprogs-00327	sites	裁剪	同上

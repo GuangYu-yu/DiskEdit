@@ -19,7 +19,7 @@ e2fsprogs-imp-00020	implicit	认领	journal 设备占用检查 ↔ 占用闸；�
 e2fsprogs-imp-00021	implicit	裁剪	dumpe2fs force；只读探针恒只读（crates/core/src/fs/program.rs::Access::ReadOnly），旁路不提供
 e2fsprogs-imp-00022	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00023	implicit	认领	同上（mke2fs force 装配行）
-e2fsprogs-imp-00024	implicit	裁剪	e2fsck 'Force rewrite' 交互应答；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00024	implicit	待判	换版重放：本行在上游新版本新增或改写
 e2fsprogs-imp-00025	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00026	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00027	implicit	认领	同上（mke2fs force 装配行）
@@ -30,11 +30,11 @@ e2fsprogs-imp-00032	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00033	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00034	implicit	认领	同上（mke2fs force 装配行）
 e2fsprogs-imp-00035	implicit	认领	同上（mke2fs force 装配行）
-e2fsprogs-imp-00298	implicit	裁剪	PR_FORCE_NO（-n 预答）分支；-y/-n 语义类由 -fp 预答+退出码承担；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
-e2fsprogs-imp-00304	implicit	认领	e2fsck -f 强制检查 ↔ 档案表固定 -fp（含 -f）；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
-e2fsprogs-imp-00305	implicit	裁剪	-B 备选块大小；工具参数面不复制
-e2fsprogs-imp-00306	implicit	认领	挂载/busy 检查 ↔ 占用闸拒绝；依据 SA1-004；锚 src/app/decide/refusal.rs::Occupied
-e2fsprogs-imp-00307	implicit	裁剪	'check forced' 提示面；提示由本实现报告层承担
-e2fsprogs-imp-00308	implicit	认领	interactive 判定 ↔ 本实现恒非交互 -fp；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
-e2fsprogs-imp-00309	implicit	裁剪	交互修复需终端；本实现非交互路径无终端要求（-fp），交互修复面裁剪
-e2fsprogs-imp-00310	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00299	implicit	裁剪	PR_FORCE_NO（-n 预答）分支；-y/-n 语义类由 -fp 预答+退出码承担；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00305	implicit	认领	e2fsck -f 强制检查 ↔ 档案表固定 -fp（含 -f）；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00306	implicit	裁剪	-B 备选块大小；工具参数面不复制
+e2fsprogs-imp-00307	implicit	认领	挂载/busy 检查 ↔ 占用闸拒绝；依据 SA1-004；锚 src/app/decide/refusal.rs::Occupied
+e2fsprogs-imp-00308	implicit	裁剪	'check forced' 提示面；提示由本实现报告层承担
+e2fsprogs-imp-00309	implicit	认领	interactive 判定 ↔ 本实现恒非交互 -fp；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00310	implicit	裁剪	交互修复需终端；本实现非交互路径无终端要求（-fp），交互修复面裁剪
+e2fsprogs-imp-00311	implicit	认领	同上（mke2fs force 装配行）

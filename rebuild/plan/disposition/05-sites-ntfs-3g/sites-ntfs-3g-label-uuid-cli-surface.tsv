@@ -1,3 +1,0 @@
-row_id	ledger	state	note
-ntfs-3g-00069	sites	裁剪	裁剪：显式 serial 十六进制解析面——本实现 NTFS serial 仅生成（--new-serial），显式指定值在判定层拒绝（crates/core/src/fs/attrs.rs UuidSupport::GeneratedOnly）
-ntfs-3g-00070	sites	裁剪	裁剪：显式 serial 十六进制解析面——本实现 NTFS serial 仅生成（--new-serial），显式指定值在判定层拒绝（crates/core/src/fs/attrs.rs UuidSupport::GeneratedOnly）

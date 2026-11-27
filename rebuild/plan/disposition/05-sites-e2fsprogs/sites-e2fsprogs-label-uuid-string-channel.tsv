@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-e2fsprogs-00330	sites	裁剪	裁剪：metadata_csum 校验重写失败打印——绑定特性改写面（不接线）；本实现只做卷标/UUID 属性步，结果经回读证实（src/app/execute/filesystem.rs::uuid_verdict）
+e2fsprogs-00328	sites	裁剪	裁剪：metadata_csum 校验重写失败打印——绑定特性改写面（不接线）；本实现只做卷标/UUID 属性步，结果经回读证实（src/app/execute/filesystem.rs::uuid_verdict）

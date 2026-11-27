@@ -13,48 +13,67 @@ libfdisk-00570	sites	认领	内容识别已有：档案表+只读探针为唯一
 libfdisk-00571	sites	认领	同上
 libfdisk-00573	sites	认领	set 已实现（type/flag/name/uuid/label 白名单）。依据：SA1-015、SA1-027
 libfdisk-00574	sites	认领	同上
-libfdisk-00587	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
-libfdisk-00588	sites	认领	同上
-libfdisk-00602	sites	认领	同上
-libfdisk-00610	sites	认领	同上
-libfdisk-00612	sites	认领	同上
-libfdisk-00613	sites	认领	同上
-libfdisk-00615	sites	认领	同上
-libfdisk-00640	sites	认领	同上
-libfdisk-00659	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
-libfdisk-00665	sites	裁剪	同上
-libfdisk-00666	sites	裁剪	同上
-libfdisk-00667	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
-libfdisk-00668	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
+libfdisk-00575	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00576	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00577	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00578	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00591	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
+libfdisk-00592	sites	认领	同上
+libfdisk-00606	sites	认领	同上
+libfdisk-00614	sites	认领	同上
+libfdisk-00616	sites	认领	同上
+libfdisk-00617	sites	认领	同上
+libfdisk-00619	sites	认领	同上
+libfdisk-00644	sites	认领	同上
+libfdisk-00663	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
 libfdisk-00669	sites	裁剪	同上
-libfdisk-00771	sites	认领	空闲空间/自动放置已实现：gaps/first_fit/fixed_start 按 1MiB 对齐（crates/core/src/table/edit.rs）。依据：SA1-008
-libfdisk-00772	sites	认领	同上
-libfdisk-00787	sites	拒绝	C 字符串工具函数，无行为合同。依据：SA1-022 同口径
-libfdisk-00788	sites	拒绝	同上
-libfdisk-00803	sites	裁剪	sfdisk --backup 备份文件不提供，记录只服务崩溃回滚。依据：SA1-020
-libfdisk-00805	sites	裁剪	同上
-libfdisk-00807	sites	裁剪	同上
+libfdisk-00670	sites	裁剪	同上
+libfdisk-00671	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
+libfdisk-00672	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
+libfdisk-00673	sites	裁剪	同上
+libfdisk-00775	sites	认领	空闲空间/自动放置已实现：gaps/first_fit/fixed_start 按 1MiB 对齐（crates/core/src/table/edit.rs）。依据：SA1-008
+libfdisk-00776	sites	认领	同上
+libfdisk-00791	sites	拒绝	C 字符串工具函数，无行为合同。依据：SA1-022 同口径
+libfdisk-00792	sites	拒绝	同上
+libfdisk-00807	sites	裁剪	sfdisk --backup 备份文件不提供，记录只服务崩溃回滚。依据：SA1-020
 libfdisk-00809	sites	裁剪	同上
-libfdisk-00824	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
-libfdisk-00906	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
-libfdisk-00907	sites	认领	同上
-libfdisk-00941	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
-libfdisk-00942	sites	裁剪	同上
-libfdisk-00943	sites	裁剪	同上
-libfdisk-01007	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
-libfdisk-01008	sites	差异	同上（D18）
-libfdisk-01009	sites	差异	同上（D18）
-libfdisk-01010	sites	差异	同上（D18）
-libfdisk-01011	sites	差异	同上（D18）
-libfdisk-01012	sites	差异	同上（D18）
-libfdisk-01049	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
-libfdisk-01051	sites	裁剪	同上
-libfdisk-01052	sites	裁剪	同上
-libfdisk-01054	sites	裁剪	同上
-libfdisk-01055	sites	裁剪	同上
-libfdisk-01060	sites	裁剪	同上
-libfdisk-01062	sites	裁剪	同上
-libfdisk-01064	sites	裁剪	同上
-libfdisk-01067	sites	裁剪	同上
-libfdisk-01068	sites	裁剪	同上
-libfdisk-01069	sites	裁剪	同上
+libfdisk-00811	sites	裁剪	同上
+libfdisk-00813	sites	裁剪	同上
+libfdisk-00828	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
+libfdisk-00903	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00922	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
+libfdisk-00923	sites	认领	同上
+libfdisk-00958	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00959	sites	裁剪	同上
+libfdisk-00960	sites	裁剪	同上
+libfdisk-00977	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00978	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00979	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00981	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00982	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00983	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00985	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00992	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00994	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00996	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00998	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00999	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01000	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01002	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01048	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
+libfdisk-01049	sites	差异	同上（D18）
+libfdisk-01050	sites	差异	同上（D18）
+libfdisk-01051	sites	差异	同上（D18）
+libfdisk-01052	sites	差异	同上（D18）
+libfdisk-01053	sites	差异	同上（D18）
+libfdisk-01090	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk ui_*）
+libfdisk-01092	sites	裁剪	同上
+libfdisk-01093	sites	裁剪	同上
+libfdisk-01095	sites	裁剪	同上
+libfdisk-01096	sites	裁剪	同上
+libfdisk-01101	sites	裁剪	同上
+libfdisk-01103	sites	裁剪	同上
+libfdisk-01105	sites	裁剪	同上
+libfdisk-01108	sites	裁剪	同上
+libfdisk-01109	sites	裁剪	同上
+libfdisk-01110	sites	裁剪	同上

@@ -16,14 +16,15 @@ libfdisk-imp-00037	implicit	拒绝	同上（--force 用法行）；SA1-005
 libfdisk-imp-00038	implicit	裁剪	同上
 libfdisk-imp-00039	implicit	裁剪	同上
 libfdisk-imp-00040	implicit	裁剪	同上
-libfdisk-imp-00041	implicit	裁剪	同上
+libfdisk-imp-00041	implicit	待判	换版重放：本行在上游新版本新增或改写
 libfdisk-imp-00042	implicit	裁剪	同上
 libfdisk-imp-00043	implicit	裁剪	同上
 libfdisk-imp-00044	implicit	裁剪	同上
-libfdisk-imp-00045	implicit	拒绝	同上（-f, --force disable all consistency checking 帮助行）；SA1-005
-libfdisk-imp-00046	implicit	裁剪	同上
+libfdisk-imp-00045	implicit	裁剪	同上
+libfdisk-imp-00046	implicit	拒绝	同上（-f, --force disable all consistency checking 帮助行）；SA1-005
 libfdisk-imp-00047	implicit	裁剪	同上
 libfdisk-imp-00048	implicit	裁剪	同上
 libfdisk-imp-00049	implicit	裁剪	同上
-libfdisk-imp-00050	implicit	裁剪	cfdisk 写确认 yes/no 交互；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
-libfdisk-imp-00051	implicit	裁剪	cfdisk -r 交互只读模式；只读语义已由只读命令承担（SA1-002），交互 UI 不纳入
+libfdisk-imp-00050	implicit	裁剪	同上
+libfdisk-imp-00051	implicit	裁剪	cfdisk 写确认 yes/no 交互；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+libfdisk-imp-00052	implicit	裁剪	cfdisk -r 交互只读模式；只读语义已由只读命令承担（SA1-002），交互 UI 不纳入

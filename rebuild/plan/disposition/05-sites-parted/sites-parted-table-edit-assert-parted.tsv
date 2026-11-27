@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-parted-01970	sites	拒绝	拒绝|架构差异-多虑：表格渲染脚手架断言；输出由结构化 JSON/文本报告层承担（src/app/report；SA1-026）；SA1-021
-parted-01971	sites	拒绝	同上
-parted-01972	sites	拒绝	同上
-parted-01973	sites	拒绝	同上
-parted-01974	sites	拒绝	同上
-parted-01975	sites	拒绝	同上
-parted-01976	sites	拒绝	同上
-parted-01977	sites	拒绝	同上
-parted-01978	sites	拒绝	同上
+parted-01981	sites	拒绝	拒绝|架构差异-多虑：表格渲染脚手架断言；输出由结构化 JSON/文本报告层承担（src/app/report；SA1-026）；SA1-021
+parted-01982	sites	拒绝	同上
+parted-01983	sites	拒绝	同上
+parted-01984	sites	拒绝	同上
+parted-01985	sites	拒绝	同上
+parted-01986	sites	拒绝	同上
+parted-01987	sites	拒绝	同上
+parted-01988	sites	拒绝	同上
+parted-01989	sites	拒绝	同上

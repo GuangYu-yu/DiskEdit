@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-resize-error-report（9 行）
+# 批次：sites-lvm2-resize-error-report（8 行）
 
 ## 判断
 lvresize CLI 参数面（尺寸符号/名称/stripes/mirrors 参数校验）：固定参数 lvextend -l +<N> -r 调用下不可达，全部裁剪。

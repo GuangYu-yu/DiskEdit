@@ -1,4 +1,4 @@
-# 02-incidents/inc-e2fsprogs（275 行）
+# 02-incidents/inc-e2fsprogs（312 行）
 
 ## 判断
 - 裁剪 274：全部为依赖工具 e2fsprogs（e2fsck/resize2fs/debugfs/blkid/tune2fs/badblocks/mke2fs/logsave）内部修复/特性；本实现只按档案表以 e2fsck/resize2fs/dumpe2fs 承接扩缩与检查（SA2-001/002/003），工具内部随发行版版本固定（SA2-011/012）。

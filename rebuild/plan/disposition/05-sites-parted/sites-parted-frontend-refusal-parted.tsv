@@ -1,45 +1,45 @@
 row_id	ledger	state	note
-parted-01821	sites	裁剪	裁剪|交互确认（毁盘告示）；非交互等价=--overwrite-data 拒绝（SA1-005）
-parted-01831	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01842	sites	裁剪	同上
-parted-01844	sites	裁剪	同上
-parted-01846	sites	裁剪	同上
-parted-01848	sites	裁剪	同上
-parted-01858	sites	拒绝	拒绝|对齐由构造保证（SA1-008/SA1-014）；未对齐输入在 decide 拒绝（R0173/R0174），不设告示牌
-parted-01859	sites	拒绝	同上
-parted-01866	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
-parted-01868	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01876	sites	认领	认领|R0114/R0115（type 按标签校验）
-parted-01878	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01880	sites	裁剪	同上
-parted-01883	sites	认领	认领|R0115
-parted-01886	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01889	sites	认领	认领|R0114
-parted-01899	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01901	sites	裁剪	同上
-parted-01907	sites	裁剪	同上
-parted-01910	sites	裁剪	同上
-parted-01914	sites	裁剪	裁剪|交互确认（收缩告示）；非交互等价=拒绝不安全收缩（SA1-014）
-parted-01917	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01925	sites	裁剪	同上
-parted-01927	sites	裁剪	同上
-parted-01929	sites	拒绝	拒绝|对齐检查输出面：对齐由构造保证（SA1-008/SA1-014），不提供事后 align-check 命令；需要时 inspect 几何可推
-parted-01930	sites	拒绝	同上
-parted-01932	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
-parted-01934	sites	裁剪	同上
-parted-01939	sites	裁剪	同上
-parted-01941	sites	裁剪	同上
-parted-01943	sites	裁剪	同上
-parted-01961	sites	拒绝	拒绝|架构差异-多虑：gettext/iconv i18n 面；Rust 无 i18n 面板，恒非交互
-parted-01967	sites	拒绝	同上
-parted-01983	sites	拒绝	拒绝|架构差异-多虑：信号崩溃码告示（SIGSEGV/FPE/ILL）；Rust panic 机制承担；SA1-021
-parted-01988	sites	拒绝	同上
-parted-01989	sites	拒绝	同上
-parted-01990	sites	拒绝	同上
-parted-01991	sites	拒绝	同上
-parted-01992	sites	拒绝	同上
-parted-01996	sites	拒绝	同上
-parted-01997	sites	拒绝	同上
-parted-02005	sites	认领	认领|R0089（未知选项/invalid token 报用法）
-parted-02013	sites	认领	认领|未登记族按未知拒绝已有：SA1-017（crates/core/src/fs/catalog.rs；R0134）
-parted-02022	sites	裁剪	裁剪|交互模式检查；本实现恒非交互
+parted-01832	sites	裁剪	裁剪|交互确认（毁盘告示）；非交互等价=--overwrite-data 拒绝（SA1-005）
+parted-01842	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01853	sites	裁剪	同上
+parted-01855	sites	裁剪	同上
+parted-01857	sites	裁剪	同上
+parted-01859	sites	裁剪	同上
+parted-01869	sites	拒绝	拒绝|对齐由构造保证（SA1-008/SA1-014）；未对齐输入在 decide 拒绝（R0173/R0174），不设告示牌
+parted-01870	sites	拒绝	同上
+parted-01877	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
+parted-01879	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01887	sites	认领	认领|R0114/R0115（type 按标签校验）
+parted-01889	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01891	sites	裁剪	同上
+parted-01894	sites	认领	认领|R0115
+parted-01897	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01900	sites	认领	认领|R0114
+parted-01910	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01912	sites	裁剪	同上
+parted-01918	sites	裁剪	同上
+parted-01921	sites	裁剪	同上
+parted-01925	sites	裁剪	裁剪|交互确认（收缩告示）；非交互等价=拒绝不安全收缩（SA1-014）
+parted-01928	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01936	sites	裁剪	同上
+parted-01938	sites	裁剪	同上
+parted-01940	sites	拒绝	拒绝|对齐检查输出面：对齐由构造保证（SA1-008/SA1-014），不提供事后 align-check 命令；需要时 inspect 几何可推
+parted-01941	sites	拒绝	同上
+parted-01943	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01945	sites	裁剪	同上
+parted-01950	sites	裁剪	同上
+parted-01952	sites	裁剪	同上
+parted-01954	sites	裁剪	同上
+parted-01972	sites	拒绝	拒绝|架构差异-多虑：gettext/iconv i18n 面；Rust 无 i18n 面板，恒非交互
+parted-01978	sites	拒绝	同上
+parted-01994	sites	拒绝	拒绝|架构差异-多虑：信号崩溃码告示（SIGSEGV/FPE/ILL）；Rust panic 机制承担；SA1-021
+parted-01999	sites	拒绝	同上
+parted-02000	sites	拒绝	同上
+parted-02001	sites	拒绝	同上
+parted-02002	sites	拒绝	同上
+parted-02003	sites	拒绝	同上
+parted-02007	sites	拒绝	同上
+parted-02008	sites	拒绝	同上
+parted-02017	sites	认领	认领|R0089（未知选项/invalid token 报用法）
+parted-02025	sites	认领	认领|未登记族按未知拒绝已有：SA1-017（crates/core/src/fs/catalog.rs；R0134）
+parted-02034	sites	裁剪	裁剪|交互模式检查；本实现恒非交互

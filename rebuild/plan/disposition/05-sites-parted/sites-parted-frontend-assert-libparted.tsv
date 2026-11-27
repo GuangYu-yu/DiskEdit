@@ -112,9 +112,7 @@ parted-00313	sites	拒绝	同上
 parted-00314	sites	拒绝	同上
 parted-00315	sites	拒绝	同上
 parted-00316	sites	拒绝	同上
-parted-00554	sites	拒绝	同上
-parted-00561	sites	拒绝	同上
-parted-00562	sites	拒绝	同上
+parted-00556	sites	拒绝	同上
 parted-00563	sites	拒绝	同上
 parted-00564	sites	拒绝	同上
 parted-00565	sites	拒绝	同上
@@ -131,33 +129,33 @@ parted-00575	sites	拒绝	同上
 parted-00576	sites	拒绝	同上
 parted-00577	sites	拒绝	同上
 parted-00578	sites	拒绝	同上
-parted-00579	sites	裁剪	裁剪|Amiga 盘标/文件系统按 SA1-016/SA1-017 定案：统一按不识别拒绝
-parted-00580	sites	裁剪	同上
-parted-00600	sites	裁剪	同上
-parted-00601	sites	裁剪	同上
-parted-00607	sites	裁剪	同上
-parted-00608	sites	裁剪	同上
-parted-00622	sites	裁剪	同上
-parted-00623	sites	裁剪	同上
-parted-00637	sites	拒绝	拒绝|架构差异-多虑：FAT 引导扇区读取 NULL 断言；签名识别由内容识别承担（R0134）；SA1-021
-parted-00638	sites	拒绝	同上
-parted-00649	sites	拒绝	同上
-parted-00692	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
-parted-00693	sites	裁剪	同上
-parted-00704	sites	裁剪	同上
-parted-00712	sites	裁剪	同上
-parted-00713	sites	裁剪	同上
+parted-00579	sites	拒绝	同上
+parted-00580	sites	拒绝	同上
+parted-00581	sites	裁剪	裁剪|Amiga 盘标/文件系统按 SA1-016/SA1-017 定案：统一按不识别拒绝
+parted-00582	sites	裁剪	同上
+parted-00602	sites	裁剪	同上
+parted-00603	sites	裁剪	同上
+parted-00609	sites	裁剪	同上
+parted-00610	sites	裁剪	同上
+parted-00624	sites	裁剪	同上
+parted-00625	sites	裁剪	同上
+parted-00639	sites	拒绝	拒绝|架构差异-多虑：FAT 引导扇区读取 NULL 断言；签名识别由内容识别承担（R0134）；SA1-021
+parted-00640	sites	拒绝	同上
+parted-00651	sites	拒绝	同上
+parted-00694	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
+parted-00695	sites	裁剪	同上
+parted-00706	sites	裁剪	同上
 parted-00714	sites	裁剪	同上
 parted-00715	sites	裁剪	同上
 parted-00716	sites	裁剪	同上
 parted-00717	sites	裁剪	同上
 parted-00718	sites	裁剪	同上
+parted-00719	sites	裁剪	同上
 parted-00720	sites	裁剪	同上
-parted-00721	sites	裁剪	同上
 parted-00722	sites	裁剪	同上
 parted-00723	sites	裁剪	同上
+parted-00724	sites	裁剪	同上
 parted-00725	sites	裁剪	同上
-parted-00726	sites	裁剪	同上
 parted-00727	sites	裁剪	同上
 parted-00728	sites	裁剪	同上
 parted-00729	sites	裁剪	同上
@@ -177,66 +175,74 @@ parted-00742	sites	裁剪	同上
 parted-00743	sites	裁剪	同上
 parted-00744	sites	裁剪	同上
 parted-00745	sites	裁剪	同上
-parted-00748	sites	裁剪	同上
-parted-00749	sites	裁剪	同上
+parted-00746	sites	裁剪	同上
+parted-00747	sites	裁剪	同上
 parted-00750	sites	裁剪	同上
 parted-00751	sites	裁剪	同上
 parted-00752	sites	裁剪	同上
 parted-00753	sites	裁剪	同上
-parted-00761	sites	裁剪	同上
-parted-00762	sites	裁剪	同上
-parted-00772	sites	裁剪	同上
-parted-00773	sites	裁剪	同上
-parted-00779	sites	裁剪	同上
-parted-00815	sites	裁剪	同上
-parted-00816	sites	裁剪	同上
-parted-00817	sites	裁剪	同上
-parted-00818	sites	裁剪	同上
-parted-00867	sites	裁剪	同上
+parted-00754	sites	裁剪	同上
+parted-00755	sites	裁剪	同上
+parted-00761	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00762	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00765	sites	裁剪	同上
+parted-00766	sites	裁剪	同上
+parted-00776	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00777	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00778	sites	裁剪	同上
+parted-00784	sites	裁剪	同上
+parted-00820	sites	裁剪	同上
+parted-00821	sites	裁剪	同上
+parted-00822	sites	裁剪	同上
+parted-00823	sites	裁剪	同上
 parted-00874	sites	裁剪	同上
-parted-00875	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
-parted-00887	sites	拒绝	同上
-parted-00889	sites	拒绝	同上
-parted-00890	sites	拒绝	同上
-parted-00891	sites	拒绝	同上
+parted-00881	sites	裁剪	同上
+parted-00882	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
 parted-00894	sites	拒绝	同上
-parted-00903	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝
-parted-00905	sites	裁剪	同上
-parted-00906	sites	裁剪	同上
-parted-00907	sites	裁剪	同上
-parted-00910	sites	裁剪	同上
+parted-00896	sites	拒绝	同上
+parted-00897	sites	拒绝	同上
+parted-00898	sites	拒绝	同上
+parted-00901	sites	拒绝	同上
+parted-00910	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00911	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00912	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝
+parted-00914	sites	裁剪	同上
+parted-00915	sites	裁剪	同上
 parted-00916	sites	裁剪	同上
-parted-00921	sites	裁剪	同上
-parted-00922	sites	裁剪	同上
-parted-00923	sites	裁剪	同上
-parted-00924	sites	裁剪	同上
+parted-00919	sites	裁剪	同上
 parted-00925	sites	裁剪	同上
-parted-00945	sites	裁剪	同上
-parted-00946	sites	裁剪	同上
-parted-00947	sites	裁剪	同上
-parted-00948	sites	裁剪	同上
-parted-00949	sites	裁剪	同上
-parted-00994	sites	裁剪	同上
-parted-00995	sites	裁剪	同上
-parted-00997	sites	裁剪	同上
-parted-00999	sites	裁剪	同上
+parted-00930	sites	裁剪	同上
+parted-00931	sites	裁剪	同上
+parted-00932	sites	裁剪	同上
+parted-00933	sites	裁剪	同上
+parted-00934	sites	裁剪	同上
+parted-00954	sites	裁剪	同上
+parted-00955	sites	裁剪	同上
+parted-00956	sites	裁剪	同上
+parted-00957	sites	裁剪	同上
+parted-00958	sites	裁剪	同上
+parted-01003	sites	裁剪	同上
+parted-01004	sites	裁剪	同上
+parted-01006	sites	裁剪	同上
 parted-01008	sites	裁剪	同上
-parted-01016	sites	裁剪	同上
 parted-01017	sites	裁剪	同上
-parted-01019	sites	裁剪	同上
-parted-01021	sites	裁剪	同上
-parted-01023	sites	裁剪	同上
-parted-01027	sites	裁剪	同上
-parted-01031	sites	裁剪	同上
-parted-01034	sites	裁剪	同上
-parted-01042	sites	裁剪	裁剪|未登记文件系统族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（reiserfs/ufs）
+parted-01025	sites	裁剪	同上
+parted-01026	sites	裁剪	同上
+parted-01028	sites	裁剪	同上
+parted-01030	sites	裁剪	同上
+parted-01032	sites	裁剪	同上
+parted-01036	sites	裁剪	同上
+parted-01040	sites	裁剪	同上
 parted-01043	sites	裁剪	同上
-parted-01787	sites	拒绝	拒绝|架构差异-多虑：进度计时器脚手架；本实现无进度交互面；SA1-021
-parted-01788	sites	拒绝	同上
-parted-01789	sites	拒绝	同上
-parted-01792	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
-parted-01793	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021；CHS 特殊格式引 SA1-028 裁剪
-parted-01794	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
-parted-01795	sites	拒绝	同上
-parted-01796	sites	拒绝	同上
-parted-01814	sites	拒绝	拒绝|架构差异-多虑：空宏定义（ASSERT=no-op），无运行时行为
+parted-01051	sites	裁剪	裁剪|未登记文件系统族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（reiserfs/ufs）
+parted-01052	sites	裁剪	同上
+parted-01792	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01798	sites	拒绝	拒绝|架构差异-多虑：进度计时器脚手架；本实现无进度交互面；SA1-021
+parted-01799	sites	拒绝	同上
+parted-01800	sites	拒绝	同上
+parted-01803	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
+parted-01804	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021；CHS 特殊格式引 SA1-028 裁剪
+parted-01805	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
+parted-01806	sites	拒绝	同上
+parted-01807	sites	拒绝	同上
+parted-01825	sites	拒绝	拒绝|架构差异-多虑：空宏定义（ASSERT=no-op），无运行时行为

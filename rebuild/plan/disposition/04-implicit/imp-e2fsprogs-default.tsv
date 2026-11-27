@@ -4,19 +4,18 @@ e2fsprogs-imp-00005	implicit	裁剪	mke2fs 32 位块数上限内部常数；ext 
 e2fsprogs-imp-00006	implicit	裁剪	DISCARD_STEP_MB：mkfs discard 步进；本实现从不发送 discard/TRIM；依据 SA1-006
 e2fsprogs-imp-00029	implicit	裁剪	进度提示 mbytes 宏；提示面由本实现报告层承担
 e2fsprogs-imp-00036	implicit	裁剪	e2fsck pass2 目录深度上限；工具内部
-e2fsprogs-imp-00302	implicit	裁剪	MIN/MAX_CHECK 挂载次数/时间调度内部；本实现按需显式调用（SA2-001）
-e2fsprogs-imp-00303	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
-e2fsprogs-imp-00311	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
-e2fsprogs-imp-00312	implicit	裁剪	ext2fs 内部布局常数（38 行）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs；尺寸回读只接受恰好填满目标（SA2-003）
-e2fsprogs-imp-00313	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00303	implicit	裁剪	MIN/MAX_CHECK 挂载次数/时间调度内部；本实现按需显式调用（SA2-001）
+e2fsprogs-imp-00304	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00312	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00313	implicit	裁剪	ext2fs 内部布局常数（38 行）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs；尺寸回读只接受恰好填满目标（SA2-003）
 e2fsprogs-imp-00314	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00315	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00316	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00317	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00318	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00319	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
-e2fsprogs-imp-00320	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
-e2fsprogs-imp-00321	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00320	implicit	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-imp-00321	implicit	待判	换版重放：本行在上游新版本新增或改写
 e2fsprogs-imp-00322	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00323	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00324	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
@@ -45,3 +44,6 @@ e2fsprogs-imp-00346	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局�
 e2fsprogs-imp-00347	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00348	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00349	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00350	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00351	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
+e2fsprogs-imp-00352	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs

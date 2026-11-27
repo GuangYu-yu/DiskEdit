@@ -1,7 +1,7 @@
 {
  "tool": "xfsprogs",
- "version": "6.6.0",
+ "version": "7.3.0",
  "probe": "xfs_growfs -V",
  "status": "missing",
- "at": "2026-11-27T05:47:23+00:00"
+ "at": "2026-11-27T06:14:54+00:00"
 }

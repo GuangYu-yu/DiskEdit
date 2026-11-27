@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-parted-01894	sites	认领	认领|退出码单源映射已有：SA1-009（src/app/report/exit.rs::every_unwritten_failure_has_one_code）
-parted-01948	sites	认领	同上
-parted-01949	sites	认领	同上
-parted-01950	sites	认领	同上
-parted-01962	sites	拒绝	拒绝|架构差异-多虑：gettext/iconv i18n 面；Rust 无 i18n 面板，恒非交互
-parted-01968	sites	拒绝	同上
-parted-01979	sites	裁剪	裁剪|readline Ctrl-C 中断处理；本实现恒非交互
-parted-02020	sites	认领	认领|退出码单源映射已有：SA1-009（src/app/report/exit.rs::every_unwritten_failure_has_one_code）
-parted-02023	sites	认领	同上
+parted-01905	sites	认领	认领|退出码单源映射已有：SA1-009（src/app/report/exit.rs::every_unwritten_failure_has_one_code）
+parted-01959	sites	认领	同上
+parted-01960	sites	认领	同上
+parted-01961	sites	认领	同上
+parted-01973	sites	拒绝	拒绝|架构差异-多虑：gettext/iconv i18n 面；Rust 无 i18n 面板，恒非交互
+parted-01979	sites	拒绝	同上
+parted-01990	sites	裁剪	裁剪|readline Ctrl-C 中断处理；本实现恒非交互
+parted-02032	sites	认领	认领|退出码单源映射已有：SA1-009（src/app/report/exit.rs::every_unwritten_failure_has_one_code）
+parted-02035	sites	认领	同上

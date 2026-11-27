@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-frontend-fail-goto（33 行）
+# 批次：sites-lvm2-frontend-fail-goto（36 行）
 
 ## 判断
 其余子命令内部失败清理：裁剪。

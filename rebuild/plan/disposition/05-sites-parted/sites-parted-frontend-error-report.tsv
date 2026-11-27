@@ -1,12 +1,13 @@
 row_id	ledger	state	note
 parted-00285	sites	拒绝	拒绝|架构差异-多虑：调试级 stderr 打印；非用户面；SA1-021
-parted-00555	sites	拒绝	拒绝|断言崩溃告示牌（A bug has been detected）；断言面按 SA1-021 拒绝，Rust panic 默认 stderr 输出承担
-parted-00556	sites	认领	认领|错误打印提示面已有：报告层单源（src/app/report/exit.rs；SA1-009）+ refusal-map 各 R 行
-parted-00557	sites	认领	同上
-parted-00559	sites	拒绝	拒绝|架构差异-多虑：异常处理器内部 OOM/vfprintf 细节；Rust 分配器承担
-parted-00560	sites	拒绝	同上
-parted-01947	sites	认领	认领|用法提示面已有：R0046/R0078（cli parse 用法错误）
-parted-01980	sites	拒绝	拒绝|崩溃诊断脚手架（bug_msg+history dump）；Rust panic 机制承担
-parted-01986	sites	拒绝	同上
-parted-01994	sites	拒绝	同上
-parted-01999	sites	拒绝	同上
+parted-00557	sites	拒绝	拒绝|断言崩溃告示牌（A bug has been detected）；断言面按 SA1-021 拒绝，Rust panic 默认 stderr 输出承担
+parted-00558	sites	认领	认领|错误打印提示面已有：报告层单源（src/app/report/exit.rs；SA1-009）+ refusal-map 各 R 行
+parted-00559	sites	认领	同上
+parted-00561	sites	拒绝	拒绝|架构差异-多虑：异常处理器内部 OOM/vfprintf 细节；Rust 分配器承担
+parted-00562	sites	拒绝	同上
+parted-01958	sites	认领	认领|用法提示面已有：R0046/R0078（cli parse 用法错误）
+parted-01991	sites	拒绝	拒绝|崩溃诊断脚手架（bug_msg+history dump）；Rust panic 机制承担
+parted-01997	sites	拒绝	同上
+parted-02005	sites	拒绝	同上
+parted-02010	sites	拒绝	同上
+parted-02011	sites	待判	换版重放：本行在上游新版本新增或改写

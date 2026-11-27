@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-frontend-refusal（192 行）
+# 批次：sites-lvm2-frontend-refusal（239 行）
 
 ## 判断
 其余子命令拒绝面（pvchange/vgchange 参数互斥、toollib 选择器、reporter 输出参数）：裁剪；INTERNAL_ERROR 行拒绝。

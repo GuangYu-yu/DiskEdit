@@ -1,7 +1,5 @@
 row_id	ledger	state	note
-parted-00672	sites	拒绝	拒绝|架构差异-多虑：swap 探测清理 goto；内容识别由 blkid 承担（R0134；crates/core/src/fs/profile.rs）；SA1-021
-parted-00673	sites	拒绝	同上
-parted-00674	sites	拒绝	同上
+parted-00674	sites	拒绝	拒绝|架构差异-多虑：swap 探测清理 goto；内容识别由 blkid 承担（R0134；crates/core/src/fs/profile.rs）；SA1-021
 parted-00675	sites	拒绝	同上
 parted-00676	sites	拒绝	同上
 parted-00677	sites	拒绝	同上
@@ -9,10 +7,12 @@ parted-00678	sites	拒绝	同上
 parted-00679	sites	拒绝	同上
 parted-00680	sites	拒绝	同上
 parted-00681	sites	拒绝	同上
+parted-00682	sites	拒绝	同上
 parted-00683	sites	拒绝	同上
-parted-00684	sites	拒绝	同上
 parted-00685	sites	拒绝	同上
+parted-00686	sites	拒绝	同上
 parted-00687	sites	拒绝	同上
-parted-00688	sites	拒绝	同上
 parted-00689	sites	拒绝	同上
+parted-00690	sites	拒绝	同上
 parted-00691	sites	拒绝	同上
+parted-00693	sites	拒绝	同上

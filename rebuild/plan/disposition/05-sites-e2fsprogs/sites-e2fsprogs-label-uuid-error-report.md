@@ -1,7 +1,7 @@
 # sites-e2fsprogs-label-uuid-error-report
 
 ## 判断
-tune2fs/e2label 内部 com_err/printf 文案（60 行）。全批 60 行已逐行翻态，note 见同名 tsv。
+tune2fs/e2label 内部 com_err/printf 文案（58 行）。全批 60 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 命令面冻结（set 只收 label/uuid）；src/app/execute/filesystem.rs 的 attrs 步

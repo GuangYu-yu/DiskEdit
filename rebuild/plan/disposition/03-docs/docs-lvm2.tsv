@@ -1,34 +1,35 @@
 row_id	ledger	state	note
-lvm2-doc-00001	docs	认领	SA2-017：pvresize 在依赖链；"已分配 extent 越过新尾则拒绝收缩"由上游自保，本实现 PV 链只扩不缩（B28 pv_online，收缩链另登记 Lvm2Pv）
+lvm2-doc-00001	docs	认领	"SA2-017：pvresize 在依赖链；""已分配 extent 越过新尾则拒绝收缩""由上游自保，本实现 PV 链只扩不缩（B28 pv_online，收缩链另登记 Lvm2Pv）"
 lvm2-doc-00002	docs	裁剪	pvs/lvs/vgs 属性位（attr 字符位）显示面；本实现只按 SA2-011 解析依赖工具文档化稳定字段（pvs/vgs 仅作 LVM 收缩链证据，SA2-017）
 lvm2-doc-00003	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00004	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00005	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00006	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00007	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00008	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00007	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00008	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00009	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00010	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00011	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00012	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00013	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00014	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00015	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00015	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00016	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00017	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00018	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00019	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00017	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00018	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00019	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00020	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00021	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00021	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00022	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00023	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00023	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00024	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00025	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00025	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00026	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00027	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00028	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00028	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00029	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00030	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00031	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00031	docs	待判	换版重放：本行在上游新版本新增或改写
 lvm2-doc-00032	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00033	docs	裁剪	同 lvm2-doc-00002
+lvm2-doc-00034	docs	待判	换版重放：本行在上游新版本新增或改写

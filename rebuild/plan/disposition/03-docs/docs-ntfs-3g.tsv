@@ -6,7 +6,7 @@ ntfs-3g-doc-00004	docs	裁剪	Windows 一致性检查/重启提示条目，非�
 ntfs-3g-doc-00005	docs	裁剪	同 ntfs-3g-doc-00004
 ntfs-3g-doc-00006	docs	裁剪	同 ntfs-3g-doc-00004
 ntfs-3g-doc-00007	docs	认领	SA1-028：不读 BIOS 几何（HDIO_GETGEO 面不实现）；表与卷分离——ntfsresize 只动卷，表写唯一且带占用闸（SA1-004/SA2-009）
-ntfs-3g-doc-00008	docs	认领	"ntfsresize 从不触分区表"与本实现唯一写点+占用闸一致（SA1-004/I3；上游缺陷历史佐证分层必要性）
+ntfs-3g-doc-00008	docs	认领	ntfsresize 从不触分区表与本实现唯一写点+占用闸一致（SA1-004/I3；上游缺陷历史佐证分层必要性）
 ntfs-3g-doc-00009	docs	裁剪	ntfslabel BUGS 元条目（无已知问题/联系渠道），无行为面（ntfslabel 在 attrs 面：catalog.rs Program::Ntfslabel）
 ntfs-3g-doc-00010	docs	裁剪	同 ntfs-3g-doc-00009
 ntfs-3g-doc-00011	docs	裁剪	同 ntfs-3g-doc-00009

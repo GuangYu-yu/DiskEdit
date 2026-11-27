@@ -1,7 +1,7 @@
 # sites-e2fsprogs-mkfs-error-report
 
 ## 判断
-mke2fs 建卷过程消息（85 行）。全批 85 行已逐行翻态，note 见同名 tsv。
+mke2fs 建卷过程消息（95 行）。全批 85 行已逐行翻态，note 见同名 tsv。
 
 ## 依据
 src/app/execute/filesystem.rs::run_checked；mkfs_invocation 固定参数

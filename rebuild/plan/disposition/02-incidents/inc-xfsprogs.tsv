@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-xfsprogs-inc-00001	incidents	裁剪	依赖工具 xfsprogs 的内部修复/特性（xfs_repair/mkfs.xfs/xfs_db/xfs_io/metadump/quota/logprint/libxfs 程序自身）；本实现仅按档案表以 xfs_growfs 承接在线扩容（SA2-004/005）及登记的 mkfs/attrs 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
-xfsprogs-inc-00002	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00003	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00004	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00005	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00006	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00007	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00008	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00009	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00010	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00003	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00004	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00005	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00006	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00007	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00008	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00009	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00010	incidents	裁剪	依赖工具 xfsprogs 的内部修复/特性（xfs_repair/mkfs.xfs/xfs_db/xfs_io/metadump/quota/logprint/libxfs 程序自身）；本实现仅按档案表以 xfs_growfs 承接在线扩容（SA2-004/005）及登记的 mkfs/attrs 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
 xfsprogs-inc-00011	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00012	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00013	incidents	裁剪	同 xfsprogs-inc-00001
@@ -53,7 +53,7 @@ xfsprogs-inc-00051	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00052	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00053	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00054	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00055	incidents	裁剪	同 xfsprogs-inc-00001（mkfs.xfs 对齐自检属上游内部；本实现 mkfs 以固定参数调用 SA2-012）
+xfsprogs-inc-00055	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00056	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00057	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00058	incidents	裁剪	同 xfsprogs-inc-00001
@@ -62,7 +62,7 @@ xfsprogs-inc-00060	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00061	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00062	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00063	incidents	裁剪	同 xfsprogs-inc-00001
-xfsprogs-inc-00064	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00064	incidents	裁剪	同 xfsprogs-inc-00001（mkfs.xfs 对齐自检属上游内部；本实现 mkfs 以固定参数调用 SA2-012）
 xfsprogs-inc-00065	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00066	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00067	incidents	裁剪	同 xfsprogs-inc-00001
@@ -92,3 +92,12 @@ xfsprogs-inc-00090	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00091	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00092	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00093	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00094	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00095	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00096	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00097	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00098	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00099	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00100	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00101	incidents	裁剪	同 xfsprogs-inc-00001
+xfsprogs-inc-00102	incidents	裁剪	同 xfsprogs-inc-00001

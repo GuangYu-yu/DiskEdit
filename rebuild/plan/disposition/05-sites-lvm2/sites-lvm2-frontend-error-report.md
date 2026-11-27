@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-frontend-error-report（100 行）
+# 批次：sites-lvm2-frontend-error-report（108 行）
 
 ## 判断
 pvchange/vgchange/toollib/reporter 其余子命令的错误文案面：不在登记范围（档案表只登记 grow-lv 链），裁剪；INTERNAL_ERROR 行拒绝。

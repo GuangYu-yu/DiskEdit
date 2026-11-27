@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-probe-fail-goto（2 行）
+# 批次：sites-ntfs-3g-probe-fail-goto（5 行）
 
 ## 判断
 ntfsinfo 失败清理：裁剪。

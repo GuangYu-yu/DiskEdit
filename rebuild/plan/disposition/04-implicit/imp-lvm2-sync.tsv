@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-lvm2-imp-00083	implicit	认领	依据 SA1-011：写后 sync_all 且错误上抛，绝不带未落盘状态报完成；锚 src/platform/linux/mod.rs::barrier
+lvm2-imp-00104	implicit	认领	依据 SA1-011：写后 sync_all 且错误上抛，绝不带未落盘状态报完成；锚 src/platform/linux/mod.rs::barrier

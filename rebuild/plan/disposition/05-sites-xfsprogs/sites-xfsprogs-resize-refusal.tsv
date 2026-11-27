@@ -1,4 +1,5 @@
 row_id	ledger	state	note
+xfsprogs-00007	sites	认领	认领：xfs_growfs 只接受挂载点且只增不减的调用时校验——SA2-004（非 btrfs 在线缩容一律拒绝；xfs 不收缩由档案表 Unsupported 承担）；在线扩容固定 `xfs_growfs <mount>`（src/app/execute/filesystem.rs::online_invocation），非零退出落已写待恢复
 xfsprogs-00008	sites	认领	认领：不是已挂载 XFS 即拒绝（SA2-004 原型行为；src/app/execute/filesystem.rs::online_invocation、tests/online.rs::online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem）
 xfsprogs-00012	sites	认领	认领：几何读取失败/回读比对——SA2-005（`xfs_growfs -n` data 几何回读，覆盖到分区末尾才算完成）；src/app/execute/filesystem.rs::verify_xfs_size、tests/online.rs::an_xfs_grow_is_verified_by_the_data_geometry
 xfsprogs-00013	sites	认领	同上

@@ -16,8 +16,8 @@
 
 | 层 | 工具 | 版本 |
 | --- | --- | --- |
-| T1 | GNU parted / libparted、util-linux sfdisk+libfdisk、gdisk/sgdisk/cgdisk/fixparts | 3.6 / 2.39.3 / 1.0.10 |
-| T2 | e2fsprogs、xfsprogs、btrfs-progs、ntfs-3g、f2fs-tools、dosfstools、LVM2 | 1.47.0 / 6.6.0 / 6.6.3 / 2022.10.3 / 1.16.0 / 4.2 / 2.03.16 |
+| T1 | GNU parted / libparted、util-linux sfdisk+libfdisk、gdisk/sgdisk/cgdisk/fixparts | 3.8 / 2.42.4 / 1.0.10 |
+| T2 | e2fsprogs、xfsprogs、btrfs-progs、ntfs-3g、f2fs-tools、dosfstools、LVM2 | 1.47.4 / 7.3.0 / 7.3 / 2026.9.28 / 1.16.0 / 4.2 / 2.03.44 |
 | T3 | testdisk | 7.2 |
 | T4 | UEFI 规范第 5 章、Microsoft MBR/EBR 文档 | 2.10 / Win2000-2003 |
 

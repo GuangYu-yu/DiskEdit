@@ -446,10 +446,11 @@ def census_per_site(args: argparse.Namespace) -> int:
     defaults = dict(part.split("=", 1) for part in args.default_class.split(",") if part)
     missing = sorted(set(enumerated) - set(mapping))
     if missing and args.init_map and sources_ok:
+        new_file = not map_path.exists()
         with map_path.open("a", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-            if not map_path.exists():
-                f.write("site_key\tclass_id\tnote\n")
+            if new_file:
+                writer.writerow(["site_key", "class_id", "note"])
             for key in missing:
                 tool = key.split("|", 1)[0]
                 cls = defaults.get(tool, "")

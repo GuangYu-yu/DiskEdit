@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-lvm-refusal-tools（38 行）
+# 批次：sites-lvm2-lvm-refusal-tools（37 行）
 
 ## 判断
 lvm 通用 CLI 参数与互斥校验：其余子命令面裁剪；INTERNAL_ERROR 行拒绝。

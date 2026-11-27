@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-e2fsprogs-00093	sites	裁剪	裁剪：resize2fs 的 exit(1) 出口——随外部工具自带，非零退出码落入失败/已写待恢复（SA2-002）；本实现不实现 resize2fs
-e2fsprogs-00094	sites	裁剪	同上
-e2fsprogs-00099	sites	裁剪	同上
+e2fsprogs-00094	sites	裁剪	裁剪：resize2fs 的 exit(1) 出口——随外部工具自带，非零退出码落入失败/已写待恢复（SA2-002）；本实现不实现 resize2fs
+e2fsprogs-00095	sites	裁剪	同上
+e2fsprogs-00100	sites	裁剪	同上

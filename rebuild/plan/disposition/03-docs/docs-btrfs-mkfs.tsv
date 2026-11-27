@@ -1,2 +1,0 @@
-row_id	ledger	state	note
-btrfs-progs-doc-00080	docs	裁剪	mkfs.btrfs 上游选项/注记面；本实现 mkfs 以档案表固定参数调用（SA2-012）

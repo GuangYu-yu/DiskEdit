@@ -1,34 +1,37 @@
 row_id	ledger	state	note
-lvm2-00039	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00041	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00043	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00045	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00044	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00046	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00246	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00247	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00249	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00252	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00261	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00262	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00268	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00272	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00273	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00275	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00297	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00298	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00315	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00048	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00050	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00051	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00062	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00063	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00064	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00065	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00066	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00287	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00288	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00290	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00291	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00302	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00303	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00312	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00316	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00317	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00319	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00342	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00343	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00353	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00360	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00362	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00387	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00388	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00389	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00390	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00391	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00392	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00393	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00394	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00419	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00429	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00398	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00433	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00434	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00435	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00436	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00437	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00438	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00439	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00440	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
+lvm2-00487	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住

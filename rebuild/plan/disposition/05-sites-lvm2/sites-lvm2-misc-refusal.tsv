@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-lvm2-01076	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
-lvm2-01078	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
-lvm2-01079	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
-lvm2-01080	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
+lvm2-01210	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
+lvm2-01212	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
+lvm2-01213	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）
+lvm2-01214	sites	裁剪	裁剪：lvm 设备 IO 层（BLKGETSIZE64/BLKRAGET/BLKDISCARD/open）——本实现不实现 lvm 设备层，只经消费工具与内核接口（SA2-017）

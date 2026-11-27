@@ -1,149 +1,150 @@
 implicit_id	tool	version	layer	area	kind	file	line	finding	risk	disposition	note
-parted-imp-00001	parted	3.6	T1	frontend	kernel-reload	libparted/arch/gnu.c	211	#define BLKRRPART 0x125F	medium	待判	
-parted-imp-00002	parted	3.6	T1	frontend	kernel-reload	libparted/arch/gnu.c	225	while (device_set_status (store->port, BLKRRPART, NULL, 0)) {	medium	待判	
-parted-imp-00003	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	206	#define BLKRRPART _IO(0x12,95)	medium	待判	
-parted-imp-00004	parted	3.6	T1	frontend	default	libparted/arch/linux.c	210	#define BLKGETLASTSECT _IO(0x12,108)	medium	待判	
-parted-imp-00005	parted	3.6	T1	frontend	default	libparted/arch/linux.c	211	#define BLKSETLASTSECT _IO(0x12,109)	medium	待判	
-parted-imp-00006	parted	3.6	T1	frontend	default	libparted/arch/linux.c	292	#define MAX_NUM_PARTS 64	medium	待判	
-parted-imp-00007	parted	3.6	T1	frontend	sync	libparted/arch/linux.c	1685	if (fsync (fd) < 0 || close (fd) < 0)	medium	待判	
-parted-imp-00008	parted	3.6	T1	frontend	sync	libparted/arch/linux.c	1771	if (fsync (arch_specific->fd) < 0 || close (arch_specific->fd) < 0)	medium	待判	
-parted-imp-00009	parted	3.6	T1	frontend	sync	libparted/arch/linux.c	2162	status = fsync (arch_specific->fd);	medium	待判	
-parted-imp-00010	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2575	return ioctl (arch_specific->fd, BLKPG, &ioctl_arg) == 0;	medium	待判	
-parted-imp-00011	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2620	strncpy (linux_part.devname, dev_name, BLKPG_DEVNAMELTH-1);	medium	待判	
-parted-imp-00012	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2621	linux_part.devname[BLKPG_DEVNAMELTH-1] = '\0';	medium	待判	
-parted-imp-00013	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2623	strncpy (linux_part.volname, vol_name, BLKPG_VOLNAMELTH-1);	medium	待判	
-parted-imp-00014	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2624	linux_part.volname[BLKPG_VOLNAMELTH-1] = '\0';	medium	待判	
-parted-imp-00015	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2630	BLKPG_ADD_PARTITION)) {	medium	待判	
-parted-imp-00016	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2645	BLKPG_DEL_PARTITION);	medium	待判	
-parted-imp-00017	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2648	#ifdef BLKPG_RESIZE_PARTITION	medium	待判	
-parted-imp-00018	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2681	strncpy (linux_part.devname, dev_name, BLKPG_DEVNAMELTH-1);	medium	待判	
-parted-imp-00019	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2682	linux_part.devname[BLKPG_DEVNAMELTH-1] = '\0';	medium	待判	
-parted-imp-00020	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	2687	BLKPG_RESIZE_PARTITION)) {	medium	待判	
-parted-imp-00021	parted	3.6	T1	frontend	lock	libparted/arch/linux.c	2845	int fd = open (part_name, O_RDONLY | O_EXCL);	medium	待判	
-parted-imp-00022	parted	3.6	T1	frontend	kernel-reload	libparted/arch/linux.c	3101	#ifdef BLKPG_RESIZE_PARTITION	medium	待判	
-parted-imp-00023	parted	3.6	T1	frontend	default	libparted/fs/amiga/amiga.c	154	#define AMIGA_MAX_PARTITIONS 128	medium	待判	
-parted-imp-00024	parted	3.6	T1	label-uuid	default	libparted/labels/aix.c	39	#define MAX_TOTAL_PART 16	medium	待判	
-parted-imp-00025	parted	3.6	T1	label-uuid	default	libparted/labels/dos.c	328	#define MAX_CHS_CYLINDER 1021	medium	待判	
-parted-imp-00026	parted	3.6	T1	label-uuid	default	libparted/labels/dos.c	329	#define MAX_TOTAL_PART 64	medium	待判	
-parted-imp-00027	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	57	#define EFI_PMBR_OSTYPE_EFI 0xEE	medium	待判	
-parted-imp-00028	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	58	#define MSDOS_MBR_SIGNATURE 0xaa55	medium	待判	
-parted-imp-00029	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	104	#define LEGACY_MBR_PARTITION_GUID \	medium	待判	
-parted-imp-00030	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	279	#define GPT_PMBR_LBA 0	medium	待判	
-parted-imp-00031	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	280	#define GPT_PMBR_SECTORS 1	medium	待判	
-parted-imp-00032	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	282	#define GPT_HEADER_SECTORS 1	medium	待判	
-parted-imp-00033	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	290	#define GPT_DEFAULT_PARTITION_ENTRY_ARRAY_SIZE 16384	medium	待判	
-parted-imp-00034	parted	3.6	T1	label-uuid	default	libparted/labels/gpt.c	293	#define GPT_DEFAULT_PARTITION_ENTRIES \	medium	待判	
-parted-imp-00035	parted	3.6	T1	label-uuid	default	libparted/labels/pc98.c	75	#define MAX_PART_COUNT 16	medium	待判	
-parted-imp-00036	parted	3.6	T1	label-uuid	default	libparted/labels/pt-limit.c	40	#define MIN_WORD_LENGTH 3	medium	待判	
-parted-imp-00037	parted	3.6	T1	label-uuid	default	libparted/labels/pt-limit.c	41	#define MAX_WORD_LENGTH 5	medium	待判	
-parted-imp-00038	parted	3.6	T1	label-uuid	default	libparted/labels/pt-limit.c	42	#define MIN_HASH_VALUE 5	medium	待判	
-parted-imp-00039	parted	3.6	T1	label-uuid	default	libparted/labels/pt-limit.c	43	#define MAX_HASH_VALUE 55	medium	待判	
-parted-imp-00040	parted	3.6	T1	label-uuid	default	libparted/labels/rdb.c	238	#define AMIGA_MAX_PARTITIONS 128	medium	待判	
-parted-imp-00041	parted	3.6	T1	label-uuid	default	libparted/labels/rdb.c	239	#define MAX_RDB_BLOCK (RDB_LOCATION_LIMIT + 2 * AMIGA_MAX_PARTITIONS + 2)	medium	待判	
-parted-imp-00042	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	32	#define EXT2_MIN_BLOCK_SIZE 1024	medium	待判	
-parted-imp-00043	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	98	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
-parted-imp-00044	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	282	#define EXT2_SUPER_FIRST_DATA_BLOCK(sb) \	medium	待判	
-parted-imp-00045	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	296	#define EXT2_SUPER_MAX_MNT_COUNT(sb) \	medium	待判	
-parted-imp-00046	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	303	#define EXT2_SUPER_LASTCHECK(sb) (PED_LE32_TO_CPU((sb).s_lastcheck))	medium	待判	
-parted-imp-00047	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	310	#define EXT2_SUPER_FIRST_INO(sb) (PED_LE32_TO_CPU((sb).s_first_ino))	medium	待判	
-parted-imp-00048	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	320	#define EXT2_SUPER_LAST_MOUNTED(sb) ((sb).s_last_mounted)	medium	待判	
-parted-imp-00049	parted	3.6	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	327	#define EXT2_SUPER_LAST_ORPHAN(sb) (PED_LE32_TO_CPU((sb).s_last_orphan))	medium	待判	
-parted-imp-00050	parted	3.6	T1	frontend	default	libparted/fs/f2fs/f2fs.h	22	#define F2FS_MAX_VOLUME_NAME 512	medium	待判	
-parted-imp-00051	parted	3.6	T1	frontend	default	libparted/fs/fat/bootsector.h	21	#define PED_FAT_BOOTSECTOR_H	medium	待判	
-parted-imp-00052	parted	3.6	T1	frontend	default	libparted/fs/fat/fat.h	146	#define MAX_FAT12_CLUSTERS 4086	medium	待判	
-parted-imp-00053	parted	3.6	T1	frontend	default	libparted/fs/fat/fat.h	147	#define MAX_FAT16_CLUSTERS 65526	medium	待判	
-parted-imp-00054	parted	3.6	T1	frontend	default	libparted/fs/fat/fat.h	148	#define MAX_FAT32_CLUSTERS 2000000	medium	待判	
-parted-imp-00055	parted	3.6	T1	frontend	default	libparted/fs/hfs/hfs.h	33	#define BLOCK_MAX_BUFF 256	medium	待判	
-parted-imp-00056	parted	3.6	T1	frontend	default	libparted/fs/hfs/hfs.h	35	#define BYTES_MAX_BUFF 8388608	medium	待判	
-parted-imp-00057	parted	3.6	T1	frontend	default	libparted/fs/hfs/hfs.h	66	#define HFS_FIRST_REC 0x0E	medium	待判	
-parted-imp-00058	parted	3.6	T1	frontend	default	libparted/fs/hfs/hfs.h	91	#define HFSP_FIRST_AV_ID 0x10	medium	待判	
-parted-imp-00059	parted	3.6	T1	frontend	default	libparted/fs/r/fat/bootsector.h	21	#define PED_FAT_BOOTSECTOR_H	medium	待判	
-parted-imp-00060	parted	3.6	T1	frontend	default	libparted/fs/r/fat/fat.h	139	#define MAX_FAT12_CLUSTERS 4086	medium	待判	
-parted-imp-00061	parted	3.6	T1	frontend	default	libparted/fs/r/fat/fat.h	140	#define MAX_FAT16_CLUSTERS 65526	medium	待判	
-parted-imp-00062	parted	3.6	T1	frontend	default	libparted/fs/r/fat/fat.h	141	#define MAX_FAT32_CLUSTERS 2000000	medium	待判	
-parted-imp-00063	parted	3.6	T1	frontend	default	libparted/fs/r/hfs/hfs.h	33	#define BLOCK_MAX_BUFF 256	medium	待判	
-parted-imp-00064	parted	3.6	T1	frontend	default	libparted/fs/r/hfs/hfs.h	35	#define BYTES_MAX_BUFF 8388608	medium	待判	
-parted-imp-00065	parted	3.6	T1	frontend	default	libparted/fs/r/hfs/hfs.h	66	#define HFS_FIRST_REC 0x0E	medium	待判	
-parted-imp-00066	parted	3.6	T1	frontend	default	libparted/fs/r/hfs/hfs.h	91	#define HFSP_FIRST_AV_ID 0x10	medium	待判	
-parted-imp-00067	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	29	#define DEFAULT_BLOCK_SIZE 4096	medium	待判	
-parted-imp-00068	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	93	#define DEFAULT_JOURNAL_SIZE 8192	medium	待判	
-parted-imp-00069	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	95	#define JOURNAL_MIN_SIZE 512	medium	待判	
-parted-imp-00070	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	96	#define JOURNAL_MIN_TRANS 256	medium	待判	
-parted-imp-00071	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	97	#define JOURNAL_MAX_TRANS 1024	medium	待判	
-parted-imp-00072	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	100	#define JOURNAL_MIN_RATIO 2	medium	待判	
-parted-imp-00073	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	101	#define JOURNAL_MAX_BATCH 900	medium	待判	
-parted-imp-00074	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	102	#define JOURNAL_MAX_COMMIT_AGE 30	medium	待判	
-parted-imp-00075	parted	3.6	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	103	#define JOURNAL_MAX_TRANS_AGE 30	medium	待判	
-parted-imp-00076	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	48	#define XFS_SB_VERSION_NUMBITS 0x000f	medium	待判	
-parted-imp-00077	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	55	#define XFS_SB_VERSION_ALIGNBIT 0x0080	medium	待判	
-parted-imp-00078	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	56	#define XFS_SB_VERSION_DALIGNBIT 0x0100	medium	待判	
-parted-imp-00079	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	195	#define XFS_SB_MAX_SHARED_VN 0	medium	待判	
-parted-imp-00080	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	332	#define XFS_SB_VERSION_HASALIGN(sbp) xfs_sb_version_hasalign(sbp)	medium	待判	
-parted-imp-00081	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	334	#define XFS_SB_VERSION_HASALIGN(sbp) \	medium	待判	
-parted-imp-00082	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	341	#define XFS_SB_VERSION_SUBALIGN(sbp) xfs_sb_version_subalign(sbp)	medium	待判	
-parted-imp-00083	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	343	#define XFS_SB_VERSION_SUBALIGN(sbp) \	medium	待判	
-parted-imp-00084	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	350	#define XFS_SB_VERSION_HASDALIGN(sbp) xfs_sb_version_hasdalign(sbp)	medium	待判	
-parted-imp-00085	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	352	#define XFS_SB_VERSION_HASDALIGN(sbp) \	medium	待判	
-parted-imp-00086	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	359	#define XFS_SB_VERSION_ADDDALIGN(sbp) xfs_sb_version_adddalign(sbp)	medium	待判	
-parted-imp-00087	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	361	#define XFS_SB_VERSION_ADDDALIGN(sbp) \	medium	待判	
-parted-imp-00088	parted	3.6	T1	frontend	default	libparted/fs/xfs/xfs_types.h	117	#define NULLAGNUMBER ((xfs_agnumber_t)-1)	medium	待判	
-parted-imp-00089	parted	3.6	T1	frontend	default	parted/parted.c	70	#define MIN_FREESPACE (1000 * 2)	medium	待判	
-parted-imp-00090	parted	3.6	T1	frontend	confirm	parted/parted.c	2694	status = interactive_mode (&dev, &diskp, commands);	medium	待判	
-parted-imp-00091	parted	3.6	T1	frontend	default	parted/ui.c	190	#define MAX_WORDS 1024	medium	待判	
-parted-imp-00092	parted	3.6	T1	frontend	confirm	parted/ui.c	1613	interactive_mode (PedDevice** dev, PedDisk** disk, Command* cmd_list[])	medium	待判	
-parted-imp-00093	parted	3.6	T1	frontend	confirm	parted/ui.c	1690	"non-interactive mode.\n"), stdout);	medium	待判	
-parted-imp-00094	parted	3.6	T1	frontend	confirm	parted/ui.h	38	extern int interactive_mode (PedDevice** dev, PedDisk **disk,	medium	待判	
-libfdisk-imp-00001	libfdisk	2.39.3	T1	table-edit	default	libfdisk/src/ask.c	168	#define is_number_ask(a) (fdisk_is_ask(a, NUMBER) || fdisk_is_ask(a, OFFSET))	medium	待判	
-libfdisk-imp-00002	libfdisk	2.39.3	T1	table-edit	lock	libfdisk/src/context.c	692	flags |= (O_RDWR | O_EXCL);	medium	待判	
-libfdisk-imp-00003	libfdisk	2.39.3	T1	table-edit	lock	libfdisk/src/context.c	696	if (fd < 0 && errno == EBUSY && (flags & O_EXCL)) {	medium	待判	
-libfdisk-imp-00004	libfdisk	2.39.3	T1	table-edit	lock	libfdisk/src/context.c	697	flags &= ~O_EXCL;	medium	待判	
-libfdisk-imp-00005	libfdisk	2.39.3	T1	table-edit	lock	libfdisk/src/context.c	708	rc = fdisk_assign_fd(cxt, fd, fname, readonly, 1, flags & O_EXCL);	medium	待判	
-libfdisk-imp-00006	libfdisk	2.39.3	T1	table-edit	sync	libfdisk/src/context.c	766	if (fsync(cxt->dev_fd)) {	medium	待判	
-libfdisk-imp-00007	libfdisk	2.39.3	T1	table-edit	kernel-reload	libfdisk/src/context.c	854	#ifdef BLKRRPART	medium	待判	
-libfdisk-imp-00008	libfdisk	2.39.3	T1	table-edit	kernel-reload	libfdisk/src/context.c	856	i = ioctl(cxt->dev_fd, BLKRRPART);	medium	待判	
-libfdisk-imp-00009	libfdisk	2.39.3	T1	table-edit	kernel-reload	libfdisk/src/context.c	953	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_DEL_PARTITION", pa->partno));	medium	待判	
-libfdisk-imp-00010	libfdisk	2.39.3	T1	table-edit	kernel-reload	libfdisk/src/context.c	961	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_RESIZE_PARTITION", pa->partno));	medium	待判	
-libfdisk-imp-00011	libfdisk	2.39.3	T1	table-edit	kernel-reload	libfdisk/src/context.c	974	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_ADD_PARTITION", pa->partno));	medium	待判	
-libfdisk-imp-00012	libfdisk	2.39.3	T1	mbr	default	libfdisk/src/dos.c	87	#define sector(s) ((s) & 0x3f)	medium	待判	
-libfdisk-imp-00013	libfdisk	2.39.3	T1	mbr	default	libfdisk/src/dos.c	90	#define alignment_required(_x) ((_x)->grain != (_x)->sector_size)	medium	待判	
-libfdisk-imp-00014	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	45	#define GPT_PMBR_LBA 0	medium	待判	
-libfdisk-imp-00015	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	46	#define GPT_MBR_PROTECTIVE 1	medium	待判	
-libfdisk-imp-00016	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	47	#define GPT_MBR_HYBRID 2	medium	待判	
-libfdisk-imp-00017	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	51	#define EFI_PMBR_OSTYPE 0xEE	medium	待判	
-libfdisk-imp-00018	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	52	#define MSDOS_MBR_SIGNATURE 0xAA55	medium	待判	
-libfdisk-imp-00019	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	73	#define GPT_DEFAULT_ENTRY_TYPE "0FC63DAF-8483-4772-8E79-3D69D8477DE4"	medium	待判	
-libfdisk-imp-00020	libfdisk	2.39.3	T1	gpt	default	libfdisk/src/gpt.c	170	#define alignment_required(_x) ((_x)->grain != (_x)->sector_size)	medium	待判	
-libfdisk-imp-00021	libfdisk	2.39.3	T1	gpt	sync	libfdisk/src/gpt.c	2043	if (fsync(cxt->dev_fd) != 0)	medium	待判	
-libfdisk-imp-00022	libfdisk	2.39.3	T1	table-edit	confirm	libfdisk/src/script.c	69	force_label : 1;	medium	待判	
-libfdisk-imp-00023	libfdisk	2.39.3	T1	table-edit	confirm	libfdisk/src/script.c	441	return dp->force_label;	medium	待判	
-libfdisk-imp-00024	libfdisk	2.39.3	T1	table-edit	confirm	libfdisk/src/script.c	807	dp->force_label = 1;	medium	待判	
-libfdisk-imp-00025	libfdisk	2.39.3	T1	table-edit	confirm	libfdisk/src/sun.c	139	"or force a fresh label (s command in main menu)"));	medium	待判	
-libfdisk-imp-00026	libfdisk	2.39.3	T1	table-edit	default	libfdisk/src/fdiskP.h	77	#define FDISK_GPT_NPARTITIONS_DEFAULT 128	medium	待判	
-libfdisk-imp-00027	libfdisk	2.39.3	T1	table-edit	confirm	libfdisk/src/fdiskP.h	364	struct ask_yesno {	medium	待判	
-libfdisk-imp-00028	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	112	interactive : 1,	medium	待判	
-libfdisk-imp-00029	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	114	force : 1,	medium	待判	
-libfdisk-imp-00030	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	488	if (sf->interactive) {	medium	待判	
-libfdisk-imp-00031	libfdisk	2.39.3	T1	table-edit	sync	disk-utils/sfdisk.c	569	if (sf->movefsync && fsync(fd) != 0)	medium	待判	
-libfdisk-imp-00032	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1545	if (sf->interactive)	medium	待判	
-libfdisk-imp-00033	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1613	if (sf->interactive) {	medium	待判	
-libfdisk-imp-00034	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1654	if (sf->interactive && sf->wipemode == WIPEMODE_AUTO)	medium	待判	
-libfdisk-imp-00035	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1804	if (!sf->quiet && sf->interactive) {	medium	待判	
-libfdisk-imp-00036	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1824	if (!sf->force)	medium	待判	
-libfdisk-imp-00037	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1825	errx(EXIT_FAILURE, _("Use the --force flag to overrule all checks."));	medium	待判	
-libfdisk-imp-00038	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1851	if (!sf->quiet && sf->interactive) {	medium	待判	
-libfdisk-imp-00039	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1883	if (sf->prompt && (sf->interactive || !sf->quiet)) {	medium	待判	
-libfdisk-imp-00040	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1887	if (!sf->interactive)	medium	待判	
-libfdisk-imp-00041	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1947	if (!sf->interactive && !sf->quiet &&	medium	待判	
-libfdisk-imp-00042	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1972	if (sf->interactive)	medium	待判	
-libfdisk-imp-00043	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	1980	if (rc && !sf->interactive) {	medium	待判	
-libfdisk-imp-00044	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	2010	if (sf->interactive) {	medium	待判	
-libfdisk-imp-00045	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	2081	fputs(_(" -f, --force disable all consistency checking\n"), out);	medium	待判	
-libfdisk-imp-00046	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	2127	.interactive = isatty(STDIN_FILENO) ? 1 : 0,	medium	待判	
-libfdisk-imp-00047	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	2162	{ "force", no_argument, NULL, 'f' },	medium	待判	
-libfdisk-imp-00048	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/sfdisk.c	2257	sf->force = 1;	medium	待判	
-libfdisk-imp-00049	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/fdisk.c	105	DBG(ASK, ul_debug("asking for user reply %s", is_interactive ? "[interactive]" : ""));	medium	待判	
-libfdisk-imp-00050	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/cfdisk.c	2272	N_(" confirm or deny the write by entering 'yes' or 'no'"),	medium	待判	
-libfdisk-imp-00051	libfdisk	2.39.3	T1	table-edit	confirm	disk-utils/cfdisk.c	2727	fputs(_(" -r, --read-only forced open cfdisk in read-only mode\n"), out);	medium	待判	
+parted-imp-00001	parted	3.8	T1	frontend	kernel-reload	libparted/arch/gnu.c	211	#define BLKRRPART 0x125F	medium	待判	
+parted-imp-00002	parted	3.8	T1	frontend	kernel-reload	libparted/arch/gnu.c	225	while (device_set_status (store->port, BLKRRPART, NULL, 0)) {	medium	待判	
+parted-imp-00003	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	206	#define BLKRRPART _IO(0x12,95)	medium	待判	
+parted-imp-00004	parted	3.8	T1	frontend	default	libparted/arch/linux.c	210	#define BLKGETLASTSECT _IO(0x12,108)	medium	待判	
+parted-imp-00005	parted	3.8	T1	frontend	default	libparted/arch/linux.c	211	#define BLKSETLASTSECT _IO(0x12,109)	medium	待判	
+parted-imp-00006	parted	3.8	T1	frontend	default	libparted/arch/linux.c	292	#define MAX_NUM_PARTS 64	medium	待判	
+parted-imp-00007	parted	3.8	T1	frontend	sync	libparted/arch/linux.c	1685	if (fsync (fd) < 0 || close (fd) < 0)	medium	待判	
+parted-imp-00008	parted	3.8	T1	frontend	sync	libparted/arch/linux.c	1771	if (fsync (arch_specific->fd) < 0 || close (arch_specific->fd) < 0)	medium	待判	
+parted-imp-00009	parted	3.8	T1	frontend	sync	libparted/arch/linux.c	2162	status = fsync (arch_specific->fd);	medium	待判	
+parted-imp-00010	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2575	return ioctl (arch_specific->fd, BLKPG, &ioctl_arg) == 0;	medium	待判	
+parted-imp-00011	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2620	strncpy (linux_part.devname, dev_name, BLKPG_DEVNAMELTH-1);	medium	待判	
+parted-imp-00012	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2621	linux_part.devname[BLKPG_DEVNAMELTH-1] = '\0';	medium	待判	
+parted-imp-00013	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2623	strncpy (linux_part.volname, vol_name, BLKPG_VOLNAMELTH-1);	medium	待判	
+parted-imp-00014	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2624	linux_part.volname[BLKPG_VOLNAMELTH-1] = '\0';	medium	待判	
+parted-imp-00015	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2630	BLKPG_ADD_PARTITION)) {	medium	待判	
+parted-imp-00016	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2645	BLKPG_DEL_PARTITION);	medium	待判	
+parted-imp-00017	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2648	#ifdef BLKPG_RESIZE_PARTITION	medium	待判	
+parted-imp-00018	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2681	strncpy (linux_part.devname, dev_name, BLKPG_DEVNAMELTH-1);	medium	待判	
+parted-imp-00019	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2682	linux_part.devname[BLKPG_DEVNAMELTH-1] = '\0';	medium	待判	
+parted-imp-00020	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	2687	BLKPG_RESIZE_PARTITION)) {	medium	待判	
+parted-imp-00021	parted	3.8	T1	frontend	lock	libparted/arch/linux.c	2845	int fd = open (part_name, O_RDONLY | O_EXCL);	medium	待判	
+parted-imp-00022	parted	3.8	T1	frontend	kernel-reload	libparted/arch/linux.c	3101	#ifdef BLKPG_RESIZE_PARTITION	medium	待判	
+parted-imp-00023	parted	3.8	T1	frontend	default	libparted/fs/amiga/amiga.c	154	#define AMIGA_MAX_PARTITIONS 128	medium	待判	
+parted-imp-00024	parted	3.8	T1	label-uuid	default	libparted/labels/aix.c	39	#define MAX_TOTAL_PART 16	medium	待判	
+parted-imp-00025	parted	3.8	T1	label-uuid	default	libparted/labels/dos.c	311	#define MAX_CHS_CYLINDER 1021	medium	待判	
+parted-imp-00026	parted	3.8	T1	label-uuid	default	libparted/labels/dos.c	312	#define MAX_TOTAL_PART 64	medium	待判	
+parted-imp-00027	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	57	#define EFI_PMBR_OSTYPE_EFI 0xEE	medium	待判	
+parted-imp-00028	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	58	#define MSDOS_MBR_SIGNATURE 0xaa55	medium	待判	
+parted-imp-00029	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	104	#define LEGACY_MBR_PARTITION_GUID \	medium	待判	
+parted-imp-00030	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	279	#define GPT_PMBR_LBA 0	medium	待判	
+parted-imp-00031	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	280	#define GPT_PMBR_SECTORS 1	medium	待判	
+parted-imp-00032	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	282	#define GPT_HEADER_SECTORS 1	medium	待判	
+parted-imp-00033	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	290	#define GPT_DEFAULT_PARTITION_ENTRY_ARRAY_SIZE 16384	medium	待判	
+parted-imp-00034	parted	3.8	T1	label-uuid	default	libparted/labels/gpt.c	293	#define GPT_DEFAULT_PARTITION_ENTRIES \	medium	待判	
+parted-imp-00035	parted	3.8	T1	label-uuid	default	libparted/labels/pc98.c	75	#define MAX_PART_COUNT 16	medium	待判	
+parted-imp-00036	parted	3.8	T1	label-uuid	default	libparted/labels/pt-limit.c	40	#define MIN_WORD_LENGTH 3	medium	待判	
+parted-imp-00037	parted	3.8	T1	label-uuid	default	libparted/labels/pt-limit.c	41	#define MAX_WORD_LENGTH 5	medium	待判	
+parted-imp-00038	parted	3.8	T1	label-uuid	default	libparted/labels/pt-limit.c	42	#define MIN_HASH_VALUE 5	medium	待判	
+parted-imp-00039	parted	3.8	T1	label-uuid	default	libparted/labels/pt-limit.c	43	#define MAX_HASH_VALUE 55	medium	待判	
+parted-imp-00040	parted	3.8	T1	label-uuid	default	libparted/labels/rdb.c	238	#define AMIGA_MAX_PARTITIONS 128	medium	待判	
+parted-imp-00041	parted	3.8	T1	label-uuid	default	libparted/labels/rdb.c	239	#define MAX_RDB_BLOCK (RDB_LOCATION_LIMIT + 2 * AMIGA_MAX_PARTITIONS + 2)	medium	待判	
+parted-imp-00042	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	33	#define EXT2_MIN_BLOCK_SIZE 1024	medium	待判	
+parted-imp-00043	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	99	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
+parted-imp-00044	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	283	#define EXT2_SUPER_FIRST_DATA_BLOCK(sb) \	medium	待判	
+parted-imp-00045	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	297	#define EXT2_SUPER_MAX_MNT_COUNT(sb) \	medium	待判	
+parted-imp-00046	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	304	#define EXT2_SUPER_LASTCHECK(sb) (PED_LE32_TO_CPU((sb).s_lastcheck))	medium	待判	
+parted-imp-00047	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	311	#define EXT2_SUPER_FIRST_INO(sb) (PED_LE32_TO_CPU((sb).s_first_ino))	medium	待判	
+parted-imp-00048	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	321	#define EXT2_SUPER_LAST_MOUNTED(sb) ((sb).s_last_mounted)	medium	待判	
+parted-imp-00049	parted	3.8	T1	frontend	default	libparted/fs/ext2/ext2_fs.h	328	#define EXT2_SUPER_LAST_ORPHAN(sb) (PED_LE32_TO_CPU((sb).s_last_orphan))	medium	待判	
+parted-imp-00050	parted	3.8	T1	frontend	default	libparted/fs/f2fs/f2fs.h	22	#define F2FS_MAX_VOLUME_NAME 512	medium	待判	
+parted-imp-00051	parted	3.8	T1	frontend	default	libparted/fs/fat/bootsector.h	21	#define PED_FAT_BOOTSECTOR_H	medium	待判	
+parted-imp-00052	parted	3.8	T1	frontend	default	libparted/fs/fat/fat.h	146	#define MAX_FAT12_CLUSTERS 4086	medium	待判	
+parted-imp-00053	parted	3.8	T1	frontend	default	libparted/fs/fat/fat.h	147	#define MAX_FAT16_CLUSTERS 65526	medium	待判	
+parted-imp-00054	parted	3.8	T1	frontend	default	libparted/fs/fat/fat.h	148	#define MAX_FAT32_CLUSTERS 2000000	medium	待判	
+parted-imp-00055	parted	3.8	T1	frontend	default	libparted/fs/hfs/hfs.h	33	#define BLOCK_MAX_BUFF 256	medium	待判	
+parted-imp-00056	parted	3.8	T1	frontend	default	libparted/fs/hfs/hfs.h	35	#define BYTES_MAX_BUFF 8388608	medium	待判	
+parted-imp-00057	parted	3.8	T1	frontend	default	libparted/fs/hfs/hfs.h	66	#define HFS_FIRST_REC 0x0E	medium	待判	
+parted-imp-00058	parted	3.8	T1	frontend	default	libparted/fs/hfs/hfs.h	91	#define HFSP_FIRST_AV_ID 0x10	medium	待判	
+parted-imp-00059	parted	3.8	T1	frontend	default	libparted/fs/r/fat/bootsector.h	21	#define PED_FAT_BOOTSECTOR_H	medium	待判	
+parted-imp-00060	parted	3.8	T1	frontend	default	libparted/fs/r/fat/fat.h	139	#define MAX_FAT12_CLUSTERS 4086	medium	待判	
+parted-imp-00061	parted	3.8	T1	frontend	default	libparted/fs/r/fat/fat.h	140	#define MAX_FAT16_CLUSTERS 65526	medium	待判	
+parted-imp-00062	parted	3.8	T1	frontend	default	libparted/fs/r/fat/fat.h	141	#define MAX_FAT32_CLUSTERS 2000000	medium	待判	
+parted-imp-00063	parted	3.8	T1	frontend	default	libparted/fs/r/hfs/hfs.h	33	#define BLOCK_MAX_BUFF 256	medium	待判	
+parted-imp-00064	parted	3.8	T1	frontend	default	libparted/fs/r/hfs/hfs.h	35	#define BYTES_MAX_BUFF 8388608	medium	待判	
+parted-imp-00065	parted	3.8	T1	frontend	default	libparted/fs/r/hfs/hfs.h	66	#define HFS_FIRST_REC 0x0E	medium	待判	
+parted-imp-00066	parted	3.8	T1	frontend	default	libparted/fs/r/hfs/hfs.h	91	#define HFSP_FIRST_AV_ID 0x10	medium	待判	
+parted-imp-00067	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	29	#define DEFAULT_BLOCK_SIZE 4096	medium	待判	
+parted-imp-00068	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	93	#define DEFAULT_JOURNAL_SIZE 8192	medium	待判	
+parted-imp-00069	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	95	#define JOURNAL_MIN_SIZE 512	medium	待判	
+parted-imp-00070	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	96	#define JOURNAL_MIN_TRANS 256	medium	待判	
+parted-imp-00071	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	97	#define JOURNAL_MAX_TRANS 1024	medium	待判	
+parted-imp-00072	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	100	#define JOURNAL_MIN_RATIO 2	medium	待判	
+parted-imp-00073	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	101	#define JOURNAL_MAX_BATCH 900	medium	待判	
+parted-imp-00074	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	102	#define JOURNAL_MAX_COMMIT_AGE 30	medium	待判	
+parted-imp-00075	parted	3.8	T1	frontend	default	libparted/fs/reiserfs/reiserfs.h	103	#define JOURNAL_MAX_TRANS_AGE 30	medium	待判	
+parted-imp-00076	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	48	#define XFS_SB_VERSION_NUMBITS 0x000f	medium	待判	
+parted-imp-00077	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	55	#define XFS_SB_VERSION_ALIGNBIT 0x0080	medium	待判	
+parted-imp-00078	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	56	#define XFS_SB_VERSION_DALIGNBIT 0x0100	medium	待判	
+parted-imp-00079	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	195	#define XFS_SB_MAX_SHARED_VN 0	medium	待判	
+parted-imp-00080	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	332	#define XFS_SB_VERSION_HASALIGN(sbp) xfs_sb_version_hasalign(sbp)	medium	待判	
+parted-imp-00081	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	334	#define XFS_SB_VERSION_HASALIGN(sbp) \	medium	待判	
+parted-imp-00082	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	341	#define XFS_SB_VERSION_SUBALIGN(sbp) xfs_sb_version_subalign(sbp)	medium	待判	
+parted-imp-00083	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	343	#define XFS_SB_VERSION_SUBALIGN(sbp) \	medium	待判	
+parted-imp-00084	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	350	#define XFS_SB_VERSION_HASDALIGN(sbp) xfs_sb_version_hasdalign(sbp)	medium	待判	
+parted-imp-00085	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	352	#define XFS_SB_VERSION_HASDALIGN(sbp) \	medium	待判	
+parted-imp-00086	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	359	#define XFS_SB_VERSION_ADDDALIGN(sbp) xfs_sb_version_adddalign(sbp)	medium	待判	
+parted-imp-00087	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_sb.h	361	#define XFS_SB_VERSION_ADDDALIGN(sbp) \	medium	待判	
+parted-imp-00088	parted	3.8	T1	frontend	default	libparted/fs/xfs/xfs_types.h	117	#define NULLAGNUMBER ((xfs_agnumber_t)-1)	medium	待判	
+parted-imp-00089	parted	3.8	T1	frontend	default	parted/parted.c	70	#define MIN_FREESPACE (1000 * 2)	medium	待判	
+parted-imp-00090	parted	3.8	T1	frontend	confirm	parted/parted.c	2694	status = interactive_mode (&dev, &diskp, commands);	medium	待判	
+parted-imp-00091	parted	3.8	T1	frontend	default	parted/ui.c	190	#define MAX_WORDS 1024	medium	待判	
+parted-imp-00092	parted	3.8	T1	frontend	confirm	parted/ui.c	1613	interactive_mode (PedDevice** dev, PedDisk** disk, Command* cmd_list[])	medium	待判	
+parted-imp-00093	parted	3.8	T1	frontend	confirm	parted/ui.c	1690	"non-interactive mode.\n"), stdout);	medium	待判	
+parted-imp-00094	parted	3.8	T1	frontend	confirm	parted/ui.h	38	extern int interactive_mode (PedDevice** dev, PedDisk **disk,	medium	待判	
+libfdisk-imp-00001	libfdisk	2.42.4	T1	table-edit	default	libfdisk/src/ask.c	170	#define is_number_ask(a) (fdisk_is_ask(a, NUMBER) || fdisk_is_ask(a, OFFSET))	medium	待判	
+libfdisk-imp-00002	libfdisk	2.42.4	T1	table-edit	lock	libfdisk/src/context.c	713	flags |= (O_RDWR | O_EXCL);	medium	待判	
+libfdisk-imp-00003	libfdisk	2.42.4	T1	table-edit	lock	libfdisk/src/context.c	717	if (fd < 0 && errno == EBUSY && (flags & O_EXCL)) {	medium	待判	
+libfdisk-imp-00004	libfdisk	2.42.4	T1	table-edit	lock	libfdisk/src/context.c	718	flags &= ~O_EXCL;	medium	待判	
+libfdisk-imp-00005	libfdisk	2.42.4	T1	table-edit	lock	libfdisk/src/context.c	729	rc = fdisk_assign_fd(cxt, fd, fname, readonly, 1, flags & O_EXCL);	medium	待判	
+libfdisk-imp-00006	libfdisk	2.42.4	T1	table-edit	sync	libfdisk/src/context.c	787	if (fsync(cxt->dev_fd)) {	medium	待判	
+libfdisk-imp-00007	libfdisk	2.42.4	T1	table-edit	kernel-reload	libfdisk/src/context.c	875	#ifdef BLKRRPART	medium	待判	
+libfdisk-imp-00008	libfdisk	2.42.4	T1	table-edit	kernel-reload	libfdisk/src/context.c	877	i = ioctl(cxt->dev_fd, BLKRRPART);	medium	待判	
+libfdisk-imp-00009	libfdisk	2.42.4	T1	table-edit	kernel-reload	libfdisk/src/context.c	974	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_DEL_PARTITION", pa->partno));	medium	待判	
+libfdisk-imp-00010	libfdisk	2.42.4	T1	table-edit	kernel-reload	libfdisk/src/context.c	982	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_RESIZE_PARTITION", pa->partno));	medium	待判	
+libfdisk-imp-00011	libfdisk	2.42.4	T1	table-edit	kernel-reload	libfdisk/src/context.c	995	DBG(PART, ul_debugobj(pa, "#%zu calling BLKPG_ADD_PARTITION", pa->partno));	medium	待判	
+libfdisk-imp-00012	libfdisk	2.42.4	T1	mbr	default	libfdisk/src/dos.c	88	#define sector(s) ((s) & 0x3f)	medium	待判	
+libfdisk-imp-00013	libfdisk	2.42.4	T1	mbr	default	libfdisk/src/dos.c	91	#define alignment_required(_x) ((_x)->grain != (_x)->sector_size)	medium	待判	
+libfdisk-imp-00014	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	45	#define GPT_PMBR_LBA 0	medium	待判	
+libfdisk-imp-00015	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	46	#define GPT_MBR_PROTECTIVE 1	medium	待判	
+libfdisk-imp-00016	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	47	#define GPT_MBR_HYBRID 2	medium	待判	
+libfdisk-imp-00017	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	51	#define EFI_PMBR_OSTYPE 0xEE	medium	待判	
+libfdisk-imp-00018	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	52	#define MSDOS_MBR_SIGNATURE 0xAA55	medium	待判	
+libfdisk-imp-00019	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	74	#define GPT_DEFAULT_ENTRY_TYPE "0FC63DAF-8483-4772-8E79-3D69D8477DE4"	medium	待判	
+libfdisk-imp-00020	libfdisk	2.42.4	T1	gpt	default	libfdisk/src/gpt.c	172	#define alignment_required(_x) ((_x)->grain != (_x)->sector_size)	medium	待判	
+libfdisk-imp-00021	libfdisk	2.42.4	T1	gpt	sync	libfdisk/src/gpt.c	2061	if (fsync(cxt->dev_fd) != 0)	medium	待判	
+libfdisk-imp-00022	libfdisk	2.42.4	T1	table-edit	confirm	libfdisk/src/script.c	70	force_label : 1;	medium	待判	
+libfdisk-imp-00023	libfdisk	2.42.4	T1	table-edit	confirm	libfdisk/src/script.c	442	return dp->force_label;	medium	待判	
+libfdisk-imp-00024	libfdisk	2.42.4	T1	table-edit	confirm	libfdisk/src/script.c	816	dp->force_label = 1;	medium	待判	
+libfdisk-imp-00025	libfdisk	2.42.4	T1	table-edit	confirm	libfdisk/src/sun.c	139	"or force a fresh label (s command in main menu)"));	medium	待判	
+libfdisk-imp-00026	libfdisk	2.42.4	T1	table-edit	default	libfdisk/src/fdiskP.h	78	#define FDISK_GPT_NPARTITIONS_DEFAULT 128	medium	待判	
+libfdisk-imp-00027	libfdisk	2.42.4	T1	table-edit	confirm	libfdisk/src/fdiskP.h	365	struct ask_yesno {	medium	待判	
+libfdisk-imp-00028	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	113	interactive : 1,	medium	待判	
+libfdisk-imp-00029	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	115	force : 1,	medium	待判	
+libfdisk-imp-00030	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	489	if (sf->interactive) {	medium	待判	
+libfdisk-imp-00031	libfdisk	2.42.4	T1	table-edit	sync	disk-utils/sfdisk.c	570	if (sf->movefsync && fsync(fd) != 0)	medium	待判	
+libfdisk-imp-00032	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1621	if (sf->interactive)	medium	待判	
+libfdisk-imp-00033	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1689	if (sf->interactive) {	medium	待判	
+libfdisk-imp-00034	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1730	if (sf->interactive && sf->wipemode == WIPEMODE_AUTO)	medium	待判	
+libfdisk-imp-00035	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1890	if (!sf->quiet && sf->interactive) {	medium	待判	
+libfdisk-imp-00036	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1910	if (!sf->force)	medium	待判	
+libfdisk-imp-00037	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1911	errx(EXIT_FAILURE, _("Use the --force flag to overrule all checks."));	medium	待判	
+libfdisk-imp-00038	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1937	if (!sf->quiet && sf->interactive) {	medium	待判	
+libfdisk-imp-00039	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1969	if (sf->prompt && (sf->interactive || !sf->quiet)) {	medium	待判	
+libfdisk-imp-00040	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	1973	if (!sf->interactive)	medium	待判	
+libfdisk-imp-00041	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2016	if (sf->force && fdisk_script_get_header(dp, "last-lba")) {	medium	待判	
+libfdisk-imp-00042	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2039	if (!sf->interactive && !sf->quiet &&	medium	待判	
+libfdisk-imp-00043	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2064	if (sf->interactive)	medium	待判	
+libfdisk-imp-00044	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2072	if (rc && !sf->interactive) {	medium	待判	
+libfdisk-imp-00045	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2102	if (sf->interactive) {	medium	待判	
+libfdisk-imp-00046	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2174	fputs(_(" -f, --force disable all consistency checking\n"), out);	medium	待判	
+libfdisk-imp-00047	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2223	.interactive = isatty(STDIN_FILENO) ? 1 : 0,	medium	待判	
+libfdisk-imp-00048	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2260	{ "force", no_argument, NULL, 'f' },	medium	待判	
+libfdisk-imp-00049	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/sfdisk.c	2358	sf->force = 1;	medium	待判	
+libfdisk-imp-00050	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/fdisk.c	116	DBG(ASK, ul_debug("asking for user reply %s", is_interactive ? "[interactive]" : ""));	medium	待判	
+libfdisk-imp-00051	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/cfdisk.c	2267	N_(" confirm or deny the write by entering 'yes' or 'no'"),	medium	待判	
+libfdisk-imp-00052	libfdisk	2.42.4	T1	table-edit	confirm	disk-utils/cfdisk.c	2731	fputs(_(" -r, --read-only forced open cfdisk in read-only mode\n"), out);	medium	待判	
 gdisk-imp-00001	gdisk	1.0.10	T1	table-edit	default	cgdisk.cc	28	#define MAX_OPTIONS 50	medium	待判	
 gdisk-imp-00002	gdisk	1.0.10	T1	table-edit	sync	diskio-unix.cc	295	fsync(fd);	medium	待判	
 gdisk-imp-00003	gdisk	1.0.10	T1	table-edit	kernel-reload	diskio-unix.cc	296	i = ioctl(fd, BLKRRPART);	medium	待判	
@@ -173,471 +174,480 @@ gdisk-imp-00026	gdisk	1.0.10	T1	misc	default	support.h	32	#define DEFAULT_GPT_TY
 gdisk-imp-00027	gdisk	1.0.10	T1	misc	default	support.h	45	#define DEFAULT_GPT_TYPE 0x8300	medium	待判	
 gdisk-imp-00028	gdisk	1.0.10	T1	misc	default	support.h	49	#define DEFAULT_GPT_TYPE 0x8300	medium	待判	
 gdisk-imp-00029	gdisk	1.0.10	T1	misc	default	support.h	53	#define SECTOR_SIZE UINT32_C(512)	medium	待判	
-e2fsprogs-imp-00001	e2fsprogs	1.47.0	T2	label-uuid	default	misc/tune2fs.c	47	#define _DEFAULT_SOURCE	medium	待判	
-e2fsprogs-imp-00002	e2fsprogs	1.47.0	T2	label-uuid	confirm	misc/tune2fs.c	1143	fputs(_("WARNING: Could not confirm kernel support for "	medium	待判	
-e2fsprogs-imp-00003	e2fsprogs	1.47.0	T2	label-uuid	confirm	misc/tune2fs.c	2303	} else if (!strcmp(token, "force_fsck")) {	medium	待判	
-e2fsprogs-imp-00004	e2fsprogs	1.47.0	T2	label-uuid	confirm	misc/tune2fs.c	2305	printf(_("Setting filesystem error flag to force fsck.\n"));	medium	待判	
-e2fsprogs-imp-00005	e2fsprogs	1.47.0	T2	mkfs	default	misc/mke2fs.c	68	#define MAX_32_NUM ((((unsigned long long) 1) << 32) - 1)	medium	待判	
-e2fsprogs-imp-00006	e2fsprogs	1.47.0	T2	mkfs	default	misc/mke2fs.c	74	#define DISCARD_STEP_MB (2048)	medium	待判	
-e2fsprogs-imp-00007	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	89	static int force;	medium	待判	
-e2fsprogs-imp-00008	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	1384	if (!force) {	medium	待判	
-e2fsprogs-imp-00009	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	1742	force++;	medium	待判	
-e2fsprogs-imp-00010	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2007	check_mount(device_name, force, _("filesystem"));	medium	待判	
-e2fsprogs-imp-00011	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2067	} else if (!force && is_device && (fs_blocks_count > dev_size)) {	medium	待判	
-e2fsprogs-imp-00012	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2429	if (!force) {	medium	待判	
-e2fsprogs-imp-00013	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2436	"(max %d), forced to continue\n"),	medium	待判	
-e2fsprogs-imp-00014	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2731	if (!check_plausibility(device_name, flags, &is_device) && !force)	medium	待判	
-e2fsprogs-imp-00015	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2742	int csum_flag, force_undo;	medium	待判	
-e2fsprogs-imp-00016	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2746	force_undo = get_int_from_profile(fs_types, "force_undo", 0);	medium	待判	
-e2fsprogs-imp-00017	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	2747	if (!force_undo && (!csum_flag || !lazy_itable_init))	medium	待判	
-e2fsprogs-imp-00018	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	3386	if (!force)	medium	待判	
-e2fsprogs-imp-00019	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	3448	NULL) && !force)	medium	待判	
-e2fsprogs-imp-00020	e2fsprogs	1.47.0	T2	mkfs	confirm	misc/mke2fs.c	3450	check_mount(journal_device, force, _("journal"));	medium	待判	
-e2fsprogs-imp-00021	e2fsprogs	1.47.0	T2	probe	confirm	misc/dumpe2fs.c	598	int force = 0;	medium	待判	
-e2fsprogs-imp-00022	e2fsprogs	1.47.0	T2	probe	confirm	misc/dumpe2fs.c	635	force++;	medium	待判	
-e2fsprogs-imp-00023	e2fsprogs	1.47.0	T2	probe	confirm	misc/dumpe2fs.c	679	if (force)	medium	待判	
-e2fsprogs-imp-00024	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/ehandler.c	67	if (ask(ctx, _("Force rewrite"), 1))	medium	待判	
-e2fsprogs-imp-00025	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/extents.c	503	eti.force_rebuild = 1;	medium	待判	
-e2fsprogs-imp-00026	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/extents.c	529	!eti.force_rebuild &&	medium	待判	
-e2fsprogs-imp-00027	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/extents.c	575	if (eti->force_rebuild)	medium	待判	
-e2fsprogs-imp-00028	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/extents.c	612	if (eti->force_rebuild || fix_problem(ctx, op, pctx))	medium	待判	
-e2fsprogs-imp-00029	e2fsprogs	1.47.0	T2	check	default	e2fsck/iscan.c	146	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
-e2fsprogs-imp-00030	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/journal.c	1510	int reset = 0, force_fsck = 0;	medium	待判	
-e2fsprogs-imp-00031	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/journal.c	1565	force_fsck = recover ||	medium	待判	
-e2fsprogs-imp-00032	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/journal.c	1572	e2fsck_clear_recover(ctx, force_fsck);	medium	待判	
-e2fsprogs-imp-00033	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	2881	!pb->eti.force_rebuild &&	medium	待判	
-e2fsprogs-imp-00034	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	3307	pb->eti.force_rebuild = 1;	medium	待判	
-e2fsprogs-imp-00035	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	3426	pb.eti.force_rebuild = 0;	medium	待判	
-e2fsprogs-imp-00036	e2fsprogs	1.47.0	T2	check	default	e2fsck/pass2.c	324	#define MAX_DEPTH 32000	medium	待判	
-e2fsprogs-imp-00037	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	24	#define PROMPT_NONE 0	medium	待判	
-e2fsprogs-imp-00038	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	25	#define PROMPT_FIX 1	medium	待判	
-e2fsprogs-imp-00039	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	27	#define PROMPT_RELOCATE 3	medium	待判	
-e2fsprogs-imp-00040	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	30	#define PROMPT_CONNECT 6	medium	待判	
-e2fsprogs-imp-00041	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	31	#define PROMPT_CREATE 7	medium	待判	
-e2fsprogs-imp-00042	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	39	#define PROMPT_DELETE 15	medium	待判	
-e2fsprogs-imp-00043	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	119	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00044	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	123	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00045	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	129	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00046	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	140	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00047	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	154	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00048	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	159	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
-e2fsprogs-imp-00049	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	164	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
-e2fsprogs-imp-00050	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	169	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00051	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	179	PROMPT_NONE, PR_PREEN_OK | PR_NOCOLLATE, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00052	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	184	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
-e2fsprogs-imp-00053	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	190	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00054	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	195	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00055	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	210	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00056	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00057	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	220	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00058	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00059	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	239	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00060	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	254	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00061	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	264	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00062	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	269	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00063	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	274	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00064	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	279	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00065	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	285	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00066	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	291	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00067	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	312	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00068	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	318	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00069	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	324	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00070	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	334	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00071	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	339	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00072	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	346	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00073	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	361	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00074	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	366	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00075	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	372	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00076	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	377	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00077	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	382	PROMPT_FIX, PR_PREEN_OK | PR_LATCH_BG_CHECKSUM, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00078	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	388	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00079	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	393	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00080	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	398	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00081	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	404	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00082	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	415	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00083	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	421	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00084	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	426	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00085	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	431	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00086	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	436	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00087	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	441	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00088	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	451	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00089	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	457	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00090	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	463	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00091	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	470	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00092	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	475	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00093	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	480	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00094	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	490	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00095	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	495	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00096	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	506	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00097	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	511	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00098	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	516	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00099	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	521	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
-e2fsprogs-imp-00100	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	527	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00101	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	532	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00102	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	537	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00103	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	542	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00104	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	547	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00105	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	554	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00106	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	563	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00107	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	574	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00108	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	580	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00109	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	591	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00110	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	596	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00111	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	601	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00112	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	606	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00113	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	611	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00114	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	616	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00115	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	621	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00116	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	658	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00117	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	675	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK_PROMPT, 0, 0 },	medium	待判	
-e2fsprogs-imp-00118	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	686	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
-e2fsprogs-imp-00119	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	692	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
-e2fsprogs-imp-00120	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	697	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00121	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	704	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00122	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	710	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00123	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	715	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00124	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	721	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00125	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	726	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00126	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	732	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00127	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	737	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00128	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	742	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00129	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	747	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00130	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	752	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00131	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	758	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00132	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	764	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00133	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	770	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00134	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	776	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00135	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	781	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00136	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	787	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00137	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	793	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00138	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	815	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00139	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	820	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00140	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	830	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00141	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	836	PROMPT_FIX, PR_LATCH_LOW_DTIME, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00142	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	842	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00143	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	847	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00144	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	862	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00145	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	867	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00146	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	872	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00147	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	882	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00148	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	969	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00149	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	999	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00150	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1033	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00151	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1039	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00152	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1060	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00153	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1097	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00154	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1112	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00155	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1120	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00156	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1126	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00157	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1137	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00158	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1151	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00159	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1156	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00160	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1162	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00161	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1167	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00162	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1187	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00163	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1193	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00164	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1199	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00165	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00166	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00167	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1230	PROMPT_FIX, PR_NO_OK | PR_PREEN_NO | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00168	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1236	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00169	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1248	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00170	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1264	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00171	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1318	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00172	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1324	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00173	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1329	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00174	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1334	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00175	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1340	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00176	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1346	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00177	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1352	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00178	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1357	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00179	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1362	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00180	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1367	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00181	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1373	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00182	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1379	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00183	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1384	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00184	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1389	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00185	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1394	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00186	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1399	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00187	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1407	"", PROMPT_DELETE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00188	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1412	N_("Couldn't clone file: %m\n"), PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00189	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1419	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00190	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1425	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00191	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1430	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00192	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1435	PROMPT_NONE, PR_LATCH_OPTIMIZE_EXT | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00193	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1440	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00194	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1445	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00195	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1462	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00196	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1468	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00197	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1503	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00198	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1509	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00199	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1515	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00200	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1520	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00201	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1525	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00202	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1576	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00203	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1582	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00204	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1597	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00205	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1602	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00206	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1608	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00207	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1613	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00208	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1619	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00209	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1625	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00210	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1641	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00211	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1647	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00212	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1668	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK | PR_NO_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00213	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1673	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00214	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1698	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00215	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1703	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00216	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1708	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00217	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1713	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00218	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1718	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00219	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1727	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00220	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1737	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00221	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1763	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00222	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1778	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00223	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1793	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00224	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1798	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00225	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1820	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00226	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1825	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00227	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1830	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00228	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1856	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00229	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1869	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00230	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1885	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00231	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1890	PROMPT_CREATE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00232	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1895	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00233	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1901	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00234	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1907	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00235	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1913	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00236	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1919	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00237	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1925	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00238	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1931	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00239	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1937	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00240	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1943	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00241	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1949	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00242	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1955	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00243	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1961	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00244	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1966	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00245	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1972	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00246	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1978	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00247	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1983	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00248	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1988	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00249	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1993	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00250	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2014	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00251	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2025	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00252	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2032	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00253	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2038	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00254	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2043	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00255	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2048	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00256	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2053	PROMPT_NONE, PR_LATCH_OPTIMIZE_DIR | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00257	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2058	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00258	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2065	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00259	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2077	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00260	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2082	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00261	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2089	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00262	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2093	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00263	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2098	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00264	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2103	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00265	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2110	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00266	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2115	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00267	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2120	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00268	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2125	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00269	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2130	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00270	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2136	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00271	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2142	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00272	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2147	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00273	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2152	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00274	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2158	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00275	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2164	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00276	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2169	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00277	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2174	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00278	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2179	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00279	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2184	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00280	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2189	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00281	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2195	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00282	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2200	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00283	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2206	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00284	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2212	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00285	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2217	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00286	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2223	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00287	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2229	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00288	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2235	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
-e2fsprogs-imp-00289	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2242	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00290	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2248	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00291	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2254	PROMPT_FIX, PR_LATCH_IBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00292	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2260	PROMPT_FIX, PR_LATCH_BBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
-e2fsprogs-imp-00293	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2305	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00294	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2315	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00295	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2320	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00296	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2340	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00297	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2345	PROMPT_NONE, 0 },	medium	待判	
-e2fsprogs-imp-00298	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/problem.c	2530	reconfigure_bool(ctx, ptr, key, PR_FORCE_NO, "force_no");	medium	待判	
-e2fsprogs-imp-00299	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2602	if (!(ptr->flags & PR_PREEN_OK) && (ptr->prompt != PROMPT_NONE))	medium	待判	
-e2fsprogs-imp-00300	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2608	if (ptr->prompt == PROMPT_NONE) {	medium	待判	
-e2fsprogs-imp-00301	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2651	if (answer && (ptr->prompt != PROMPT_NONE) &&	medium	待判	
-e2fsprogs-imp-00302	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	23	#define MIN_CHECK 1	medium	待判	
-e2fsprogs-imp-00303	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	24	#define MAX_CHECK 2	medium	待判	
-e2fsprogs-imp-00304	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	89	" -f Force checking even if filesystem is marked clean\n"));	medium	待判	
-e2fsprogs-imp-00305	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	93	" -B blocksize Force blocksize when looking for superblock\n"	medium	待判	
-e2fsprogs-imp-00306	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	274	if (!ctx->interactive || ctx->mount_flags & EXT2_MF_BUSY)	medium	待判	
-e2fsprogs-imp-00307	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	413	log_out(ctx, "%s", _(", check forced.\n"));	medium	待判	
-e2fsprogs-imp-00308	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	839	ctx->interactive = 1;	medium	待判	
-e2fsprogs-imp-00309	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1487	if (!ctx->interactive)	medium	待判	
-e2fsprogs-imp-00310	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1489	_("need terminal for interactive repairs"));	medium	待判	
-e2fsprogs-imp-00311	e2fsprogs	1.47.0	T2	check	default	e2fsck/util.c	467	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
-e2fsprogs-imp-00312	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	135	#define EXT2_FIRST_INODE(s) EXT2_FIRST_INO(s)	medium	待判	
-e2fsprogs-imp-00313	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	440	#define EXT2_EXTENT_LAST_LEAF 0x0002	medium	待判	
-e2fsprogs-imp-00314	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	441	#define EXT2_EXTENT_FIRST_SIB 0x0003	medium	待判	
-e2fsprogs-imp-00315	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	442	#define EXT2_EXTENT_LAST_SIB 0x0004	medium	待判	
-e2fsprogs-imp-00316	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	451	#define EXT2_EXTENT_DOWN_AND_LAST 0x000D	medium	待判	
-e2fsprogs-imp-00317	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	783	#define EXT2_NEWRANGE_MIN_LENGTH (0x2)	medium	待判	
-e2fsprogs-imp-00318	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	1572	#define EXT2_INODE_SCAN_DEFAULT_BUFFER_BLOCKS 8	medium	待判	
-e2fsprogs-imp-00319	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	55	#define EXT2_DEFAULT_PREALLOC_BLOCKS 8	medium	待判	
-e2fsprogs-imp-00320	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	78	#define EXT2_GOOD_OLD_FIRST_INO 11	medium	待判	
-e2fsprogs-imp-00321	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	102	#define EXT2_MIN_BLOCK_LOG_SIZE 10	medium	待判	
-e2fsprogs-imp-00322	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	103	#define EXT2_MAX_BLOCK_LOG_SIZE 16	medium	待判	
-e2fsprogs-imp-00323	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	104	#define EXT2_MIN_BLOCK_SIZE (1 << EXT2_MIN_BLOCK_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00324	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	105	#define EXT2_MAX_BLOCK_SIZE (1 << EXT2_MAX_BLOCK_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00325	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	111	#define EXT2_FIRST_INO(s) (EXT2_SB(s)->s_first_ino)	medium	待判	
-e2fsprogs-imp-00326	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	117	#define EXT2_FIRST_INO(s) (((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \	medium	待判	
-e2fsprogs-imp-00327	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	125	#define EXT2_MIN_CLUSTER_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
-e2fsprogs-imp-00328	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	126	#define EXT2_MAX_CLUSTER_LOG_SIZE 29	medium	待判	
-e2fsprogs-imp-00329	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	127	#define EXT2_MIN_CLUSTER_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00330	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	128	#define EXT2_MAX_CLUSTER_SIZE (1 << EXT2_MAX_CLUSTER_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00331	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	139	#define EXT2_MIN_FRAG_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00332	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	140	#define EXT2_MAX_FRAG_SIZE EXT2_MAX_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00333	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	141	#define EXT2_MIN_FRAG_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
-e2fsprogs-imp-00334	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	280	#define EXT2_MIN_DESC_SIZE 32	medium	待判	
-e2fsprogs-imp-00335	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	281	#define EXT2_MIN_DESC_SIZE_64BIT 64	medium	待判	
-e2fsprogs-imp-00336	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	282	#define EXT2_MAX_DESC_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00337	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	291	#define EXT2_MAX_BLOCKS_PER_GROUP(s) ((((unsigned) 1 << 16) - 8) * \	medium	待判	
-e2fsprogs-imp-00338	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	294	#define EXT2_MAX_CLUSTERS_PER_GROUP(s) (((unsigned) 1 << 16) - 8)	medium	待判	
-e2fsprogs-imp-00339	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	295	#define EXT2_MAX_INODES_PER_GROUP(s) (((unsigned) 1 << 16) - \	medium	待判	
-e2fsprogs-imp-00340	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	589	#define EXT2_DFL_MAX_MNT_COUNT 20	medium	待判	
-e2fsprogs-imp-00341	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	598	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
-e2fsprogs-imp-00342	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	620	#define EXT4_MAX_KEY_SIZE 64	medium	待判	
-e2fsprogs-imp-00343	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	626	#define EXT4_MAX_PASSPHRASE_SIZE 1024	medium	待判	
-e2fsprogs-imp-00344	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	627	#define EXT4_MAX_SALT_SIZE 256	medium	待判	
-e2fsprogs-imp-00345	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	800	#define EXT2_MAX_SUPP_REV EXT2_DYNAMIC_REV	medium	待判	
-e2fsprogs-imp-00346	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1180	#define EXT4_MMP_MAX_UPDATE_INTERVAL 300	medium	待判	
-e2fsprogs-imp-00347	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1185	#define EXT4_MMP_MIN_CHECK_INTERVAL 5	medium	待判	
-e2fsprogs-imp-00348	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1190	#define EXT4_MIN_INLINE_DATA_SIZE ((sizeof(__u32) * EXT2_N_BLOCKS))	medium	待判	
-e2fsprogs-imp-00349	e2fsprogs	1.47.0	T2	misc	default	lib/support/profile.c	135	#define PROFILE_LAST_FILESPEC(x) (((x) == NULL) || ((x)[0] == '\0'))	medium	待判	
-xfsprogs-imp-00001	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	28	#define XFS_MIN_REALISTIC_LOG_BLOCKS(blog) (MEGABYTES(64, (blog)))	medium	待判	
-xfsprogs-imp-00002	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	154	#define MAX_SUBOPTS (D_MAX_OPTS + 1)	medium	待判	
-xfsprogs-imp-00003	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	157	#define MAX_CONFLICTS 8	medium	待判	
-xfsprogs-imp-00004	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	158	#define LAST_CONFLICT (-1)	medium	待判	
-xfsprogs-imp-00005	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	232	#define MAX_INI_NAME_LEN 32	medium	待判	
-xfsprogs-imp-00006	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1160	bool force_overwrite)	medium	待判	
-xfsprogs-imp-00007	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1162	if (!force_overwrite && check_overwrite(name)) {	medium	待判	
-xfsprogs-imp-00008	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1164	_("%s: Use the -f option to force overwrite.\n"),	medium	待判	
-xfsprogs-imp-00009	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1957	int force_overwrite)	medium	待判	
-xfsprogs-imp-00010	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1978	get_topology(cli->xi, ft, force_overwrite);	medium	待判	
-xfsprogs-imp-00011	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	4042	int force_overwrite = 0;	medium	待判	
-xfsprogs-imp-00012	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	4139	force_overwrite = 1;	medium	待判	
-xfsprogs-imp-00013	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	4196	validate_sectorsize(&cfg, &cli, &dft, &ft, dry_run, force_overwrite);	medium	待判	
-xfsprogs-imp-00014	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	4231	validate_overwrite(xi.data.name, force_overwrite);	medium	待判	
-xfsprogs-imp-00015	xfsprogs	6.6.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	4310	prepare_devices(&cfg, &xi, mp, sbp, force_overwrite);	medium	待判	
-xfsprogs-imp-00016	xfsprogs	6.6.0	T2	misc	confirm	db/init.c	25	static int force;	medium	待判	
-xfsprogs-imp-00017	xfsprogs	6.6.0	T2	misc	confirm	db/init.c	67	force = 1;	medium	待判	
-xfsprogs-imp-00018	xfsprogs	6.6.0	T2	misc	confirm	db/init.c	126	if (!force) {	medium	待判	
-xfsprogs-imp-00019	xfsprogs	6.6.0	T2	misc	confirm	db/init.c	127	fprintf(stderr, _("Use -F to force a read attempt.\n"));	medium	待判	
-btrfs-progs-imp-00001	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/filesystem.c	861	"Force a sync on a filesystem",	medium	待判	
-btrfs-progs-imp-00002	btrfs-progs	6.6.3	T2	frontend	lock	cmds/filesystem.c	1640	fd = open(fname, O_RDWR | O_CREAT | O_EXCL, 0600);	medium	待判	
-btrfs-progs-imp-00003	btrfs-progs	6.6.3	T2	frontend	default	cmds/filesystem-usage.c	440	#define MIN_UNALOCATED_THRESH SZ_16M	medium	待判	
-btrfs-progs-imp-00004	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	75	bool force)	medium	待判	
-btrfs-progs-imp-00005	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	108	if (force) {	medium	待判	
-btrfs-progs-imp-00006	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	112	"cannot flip ro->rw with received_uuid set, use force if you really want that");	medium	待判	
-btrfs-progs-imp-00007	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	129	pr_verbose(LOG_INFO, "force used, clearing received_uuid, previously %s",	medium	待判	
-btrfs-progs-imp-00008	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	152	bool force)	medium	待判	
-btrfs-progs-imp-00009	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	173	bool force)	medium	待判	
-btrfs-progs-imp-00010	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	464	const char *name, const char *value, bool force)	medium	待判	
-btrfs-progs-imp-00011	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	492	ret = prop->handler(types, object, name, value, force);	medium	待判	
-btrfs-progs-imp-00012	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	506	bool *force)	medium	待判	
-btrfs-progs-imp-00013	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	512	*force = false;	medium	待判	
-btrfs-progs-imp-00014	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	523	*force = true;	medium	待判	
-btrfs-progs-imp-00015	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	607	bool force;	medium	待判	
-btrfs-progs-imp-00016	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	609	if (parse_args(cmd, argc, argv, &types, &object, &name, NULL, 1, &force))	medium	待判	
-btrfs-progs-imp-00017	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	613	ret = setget_prop(types, object, name, NULL, force);	medium	待判	
-btrfs-progs-imp-00018	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	628	OPTLINE("-f", "force the change, could potentially break something"),	medium	待判	
-btrfs-progs-imp-00019	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	640	bool force = false;	medium	待判	
-btrfs-progs-imp-00020	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	642	if (parse_args(cmd, argc, argv, &types, &object, &name, &value, 3, &force))	medium	待判	
-btrfs-progs-imp-00021	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	645	ret = setget_prop(types, object, name, value, force);	medium	待判	
-btrfs-progs-imp-00022	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	668	bool force;	medium	待判	
-btrfs-progs-imp-00023	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/property.c	670	if (parse_args(cmd, argc, argv, &types, &object, NULL, NULL, 1, &force))	medium	待判	
-btrfs-progs-imp-00024	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	55	OPTLINE("-f|--force", "force overwrite existing filesystem on the disk"),	medium	待判	
-btrfs-progs-imp-00025	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	67	bool force = false;	medium	待判	
-btrfs-progs-imp-00026	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	79	{ "force", no_argument, NULL, 'f'},	medium	待判	
-btrfs-progs-imp-00027	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	92	force = true;	medium	待判	
-btrfs-progs-imp-00028	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	141	res = test_dev_for_mkfs(argv[i], force);	medium	待判	
-btrfs-progs-imp-00029	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	197	bool force = false;	medium	待判	
-btrfs-progs-imp-00030	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	206	{ "force", no_argument, NULL, GETOPT_VAL_FORCE },	medium	待判	
-btrfs-progs-imp-00031	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	218	force = true;	medium	待判	
-btrfs-progs-imp-00032	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	251	"\t Use --force to skip the timeout.\n"	medium	待判	
-btrfs-progs-imp-00033	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	254	if (force) {	medium	待判	
-btrfs-progs-imp-00034	btrfs-progs	6.6.3	T2	frontend	confirm	cmds/device.c	255	pr_verbose(LOG_DEFAULT, "Safety timeout skipped due to --force\n\n");	medium	待判	
-btrfs-progs-imp-00035	btrfs-progs	6.6.3	T2	mkfs	sync	mkfs/common.c	749	ret = fsync(fd);	medium	待判	
-btrfs-progs-imp-00036	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/common.c	1074	bool test_dev_for_mkfs(const char *file, int force_overwrite)	medium	待判	
-btrfs-progs-imp-00037	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/common.c	1089	ret = test_status_for_mkfs(file, force_overwrite);	medium	待判	
-btrfs-progs-imp-00038	btrfs-progs	6.6.3	T2	mkfs	lock	mkfs/common.c	1096	fd = open(file, O_RDONLY | O_EXCL);	medium	待判	
-btrfs-progs-imp-00039	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/common.c	1118	bool test_status_for_mkfs(const char *file, bool force_overwrite)	medium	待判	
-btrfs-progs-imp-00040	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/common.c	1122	if (!force_overwrite) {	medium	待判	
-btrfs-progs-imp-00041	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/common.c	1124	error("use the -f option to force overwrite of %s",	medium	待判	
-btrfs-progs-imp-00042	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	441	OPTLINE("-f|--force", "force overwrite of existing filesystem"),	medium	待判	
-btrfs-progs-imp-00043	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	1179	bool force_overwrite = false;	medium	待判	
-btrfs-progs-imp-00044	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	1218	{ "force", no_argument, NULL, 'f' },	medium	待判	
-btrfs-progs-imp-00045	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	1251	force_overwrite = true;	medium	待判	
-btrfs-progs-imp-00046	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	1446	ret = test_dev_for_mkfs(file, force_overwrite);	medium	待判	
-btrfs-progs-imp-00047	btrfs-progs	6.6.3	T2	mkfs	confirm	mkfs/main.c	1448	ret = test_status_for_mkfs(file, force_overwrite);	medium	待判	
-btrfs-progs-imp-00048	btrfs-progs	6.6.3	T2	mkfs	lock	mkfs/main.c	1721	opt_oflags |= O_DIRECT;	medium	待判	
-btrfs-progs-imp-00049	btrfs-progs	6.6.3	T2	misc	confirm	tune/main.c	45	static int force = 0;	medium	待判	
-btrfs-progs-imp-00050	btrfs-progs	6.6.3	T2	misc	confirm	tune/main.c	246	force = 1;	medium	待判	
-btrfs-progs-imp-00051	btrfs-progs	6.6.3	T2	misc	confirm	tune/main.c	457	if (!seeding_value && !force) {	medium	待判	
-btrfs-progs-imp-00052	btrfs-progs	6.6.3	T2	misc	confirm	tune/main.c	468	ret = update_seeding_flag(root, device, seeding_value, force);	medium	待判	
-btrfs-progs-imp-00053	btrfs-progs	6.6.3	T2	misc	confirm	tune/main.c	508	if (!force) {	medium	待判	
-btrfs-progs-imp-00054	btrfs-progs	6.6.3	T2	misc	confirm	tune/seeding.c	25	int update_seeding_flag(struct btrfs_root *root, const char *device, int set_flag, int force)	medium	待判	
-btrfs-progs-imp-00055	btrfs-progs	6.6.3	T2	misc	confirm	tune/seeding.c	36	if (force)	medium	待判	
-btrfs-progs-imp-00056	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	9957	OPTLINE("--force", "skip mount checks, recommended only with --readonly; "	medium	待判	
-btrfs-progs-imp-00057	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10003	int force = 0;	medium	待判	
-btrfs-progs-imp-00058	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10035	{ "force", no_argument, NULL, GETOPT_VAL_FORCE },	medium	待判	
-btrfs-progs-imp-00059	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10124	force = 1;	medium	待判	
-btrfs-progs-imp-00060	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10143	if (opt_check_repair && !force) {	medium	待判	
-btrfs-progs-imp-00061	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10167	if (!force) {	medium	待判	
-btrfs-progs-imp-00062	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10175	"%s is currently mounted, use --force if you really intend to check the filesystem",	medium	待判	
-btrfs-progs-imp-00063	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10184	"cannot check mount status of %s, the filesystem could be mounted, continuing because of --force",	medium	待判	
-btrfs-progs-imp-00064	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10188	"filesystem mounted, continuing because of --force");	medium	待判	
-btrfs-progs-imp-00065	btrfs-progs	6.6.3	T2	check	confirm	check/main.c	10241	ret = ask_user("repair mode will force to clear out log tree, are you sure?");	medium	待判	
-btrfs-progs-imp-00066	btrfs-progs	6.6.3	T2	check	confirm	check/mode-lowmem.c	380	static int force_cow_in_new_chunk(u64 *start_ret)	medium	待判	
-btrfs-progs-imp-00067	btrfs-progs	6.6.3	T2	check	confirm	check/mode-lowmem.c	505	ret = force_cow_in_new_chunk(new_start);	medium	待判	
-ntfs-3g-imp-00001	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	147	int force;	medium	待判	
-ntfs-3g-imp-00002	ntfs-3g	2022.10.3	T2	resize	default	ntfsprogs/ntfsresize.c	239	#define NTFS_MBYTE (1000 * 1000)	medium	待判	
-ntfs-3g-imp-00003	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	354	" -f, --force Force to progress\n"	medium	待判	
-ntfs-3g-imp-00004	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	488	{ "force", no_argument, NULL, 'f' },	medium	待判	
-ntfs-3g-imp-00005	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	527	opt.force++;	medium	待判	
-ntfs-3g-imp-00006	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	2947	if (opt.force-- <= 0)	medium	待判	
-ntfs-3g-imp-00007	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	3411	if ((flags & VOLUME_IS_DIRTY) && (opt.force-- <= 0)) {	medium	待判	
-ntfs-3g-imp-00008	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	4424	if (!opt.ro_flag && (opt.force-- <= 0))	medium	待判	
-ntfs-3g-imp-00009	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	4436	opt.force++;	medium	待判	
-ntfs-3g-imp-00010	ntfs-3g	2022.10.3	T2	resize	confirm	ntfsprogs/ntfsresize.c	4656	if (opt.force-- <= 0 && !opt.ro_flag) {	medium	待判	
-ntfs-3g-imp-00011	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	65	int force;	medium	待判	
-ntfs-3g-imp-00012	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	101	" -f, --force Use less caution\n"	medium	待判	
-ntfs-3g-imp-00013	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	125	{ "force", no_argument, NULL, 'f' },	medium	待判	
-ntfs-3g-imp-00014	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	156	opts.force++;	medium	待判	
-ntfs-3g-imp-00015	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	428	&& !opts.force	medium	待判	
-ntfs-3g-imp-00016	ntfs-3g	2022.10.3	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	441	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
-ntfs-3g-imp-00017	ntfs-3g	2022.10.3	T2	probe	confirm	ntfsprogs/ntfsinfo.c	93	int force;	medium	待判	
-ntfs-3g-imp-00018	ntfs-3g	2022.10.3	T2	probe	confirm	ntfsprogs/ntfsinfo.c	141	" -f, --force Use less caution\n"	medium	待判	
-ntfs-3g-imp-00019	ntfs-3g	2022.10.3	T2	probe	confirm	ntfsprogs/ntfsinfo.c	164	{ "force", no_argument, NULL, 'f' },	medium	待判	
-ntfs-3g-imp-00020	ntfs-3g	2022.10.3	T2	probe	confirm	ntfsprogs/ntfsinfo.c	212	opts.force++;	medium	待判	
-ntfs-3g-imp-00021	ntfs-3g	2022.10.3	T2	probe	confirm	ntfsprogs/ntfsinfo.c	2468	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
-ntfs-3g-imp-00022	ntfs-3g	2022.10.3	T2	frontend	default	ntfsprogs/ntfsfix.c	94	#define DEFAULT_SECTOR_SIZE 512	medium	待判	
-ntfs-3g-imp-00023	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfsfix.c	1618	BOOL force = FALSE;	medium	待判	
-ntfs-3g-imp-00024	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfsfix.c	1626	!(mnt_flags & NTFS_MF_READONLY) && !force) {	medium	待判	
-ntfs-3g-imp-00025	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfscluster.c	93	" -f, --force Use less caution\n"	medium	待判	
-ntfs-3g-imp-00026	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfscluster.c	117	{ "force", no_argument, NULL, 'f' },	medium	待判	
-ntfs-3g-imp-00027	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfscluster.c	169	opts.force++;	medium	待判	
-ntfs-3g-imp-00028	ntfs-3g	2022.10.3	T2	frontend	confirm	ntfsprogs/ntfscluster.c	502	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
-ntfs-3g-imp-00029	ntfs-3g	2022.10.3	T2	misc	confirm	libntfs-3g/volume.c	1467	int ntfs_umount(ntfs_volume *vol, const BOOL force __attribute__((unused)))	medium	待判	
-ntfs-3g-imp-00030	ntfs-3g	2022.10.3	T2	misc	confirm	libntfs-3g/attrib.c	5584	ntfs_log_error("Failed to force non-resident\n");	medium	待判	
+e2fsprogs-imp-00001	e2fsprogs	1.47.4	T2	label-uuid	default	misc/tune2fs.c	47	#define _DEFAULT_SOURCE	medium	待判	
+e2fsprogs-imp-00002	e2fsprogs	1.47.4	T2	label-uuid	confirm	misc/tune2fs.c	1149	fputs(_("WARNING: Could not confirm kernel support for "	medium	待判	
+e2fsprogs-imp-00003	e2fsprogs	1.47.4	T2	label-uuid	confirm	misc/tune2fs.c	2325	} else if (!strcmp(token, "force_fsck")) {	medium	待判	
+e2fsprogs-imp-00004	e2fsprogs	1.47.4	T2	label-uuid	confirm	misc/tune2fs.c	2327	printf(_("Setting filesystem error flag to force fsck.\n"));	medium	待判	
+e2fsprogs-imp-00005	e2fsprogs	1.47.4	T2	mkfs	default	misc/mke2fs.c	71	#define MAX_32_NUM ((((unsigned long long) 1) << 32) - 1)	medium	待判	
+e2fsprogs-imp-00006	e2fsprogs	1.47.4	T2	mkfs	default	misc/mke2fs.c	77	#define DISCARD_STEP_MB (2048)	medium	待判	
+e2fsprogs-imp-00007	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	92	static int force;	medium	待判	
+e2fsprogs-imp-00008	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	1483	if (!force) {	medium	待判	
+e2fsprogs-imp-00009	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	1879	force++;	medium	待判	
+e2fsprogs-imp-00010	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2153	check_mount(device_name, force, _("filesystem"));	medium	待判	
+e2fsprogs-imp-00011	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2214	} else if (!force && is_device && (fs_blocks_count > dev_size)) {	medium	待判	
+e2fsprogs-imp-00012	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2593	if (!force) {	medium	待判	
+e2fsprogs-imp-00013	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2600	"(max %d), forced to continue\n"),	medium	待判	
+e2fsprogs-imp-00014	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2920	if (!check_plausibility(device_name, flags, &is_device) && !force)	medium	待判	
+e2fsprogs-imp-00015	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2931	int csum_flag, force_undo;	medium	待判	
+e2fsprogs-imp-00016	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2935	force_undo = get_int_from_profile(fs_types, "force_undo", 0);	medium	待判	
+e2fsprogs-imp-00017	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	2936	if (!force_undo && (!csum_flag || !lazy_itable_init))	medium	待判	
+e2fsprogs-imp-00018	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	3575	if (!force)	medium	待判	
+e2fsprogs-imp-00019	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	3637	NULL) && !force)	medium	待判	
+e2fsprogs-imp-00020	e2fsprogs	1.47.4	T2	mkfs	confirm	misc/mke2fs.c	3639	check_mount(journal_device, force, _("journal"));	medium	待判	
+e2fsprogs-imp-00021	e2fsprogs	1.47.4	T2	probe	confirm	misc/dumpe2fs.c	599	int force = 0;	medium	待判	
+e2fsprogs-imp-00022	e2fsprogs	1.47.4	T2	probe	confirm	misc/dumpe2fs.c	636	force++;	medium	待判	
+e2fsprogs-imp-00023	e2fsprogs	1.47.4	T2	probe	confirm	misc/dumpe2fs.c	685	if (force)	medium	待判	
+e2fsprogs-imp-00024	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/ehandler.c	68	if (ask(ctx, _("Force rewrite"), 1)) {	medium	待判	
+e2fsprogs-imp-00025	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/extents.c	506	eti.force_rebuild = 1;	medium	待判	
+e2fsprogs-imp-00026	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/extents.c	532	!eti.force_rebuild &&	medium	待判	
+e2fsprogs-imp-00027	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/extents.c	578	if (eti->force_rebuild)	medium	待判	
+e2fsprogs-imp-00028	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/extents.c	615	if (eti->force_rebuild || fix_problem(ctx, op, pctx))	medium	待判	
+e2fsprogs-imp-00029	e2fsprogs	1.47.4	T2	check	default	e2fsck/iscan.c	147	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
+e2fsprogs-imp-00030	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/journal.c	1510	int reset = 0, force_fsck = 0;	medium	待判	
+e2fsprogs-imp-00031	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/journal.c	1565	force_fsck = recover ||	medium	待判	
+e2fsprogs-imp-00032	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/journal.c	1572	e2fsck_clear_recover(ctx, force_fsck);	medium	待判	
+e2fsprogs-imp-00033	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/pass1.c	2954	!pb->eti.force_rebuild &&	medium	待判	
+e2fsprogs-imp-00034	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/pass1.c	3380	pb->eti.force_rebuild = 1;	medium	待判	
+e2fsprogs-imp-00035	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/pass1.c	3499	pb.eti.force_rebuild = 0;	medium	待判	
+e2fsprogs-imp-00036	e2fsprogs	1.47.4	T2	check	default	e2fsck/pass2.c	324	#define MAX_DEPTH 32000	medium	待判	
+e2fsprogs-imp-00037	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	24	#define PROMPT_NONE 0	medium	待判	
+e2fsprogs-imp-00038	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	25	#define PROMPT_FIX 1	medium	待判	
+e2fsprogs-imp-00039	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	27	#define PROMPT_RELOCATE 3	medium	待判	
+e2fsprogs-imp-00040	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	30	#define PROMPT_CONNECT 6	medium	待判	
+e2fsprogs-imp-00041	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	31	#define PROMPT_CREATE 7	medium	待判	
+e2fsprogs-imp-00042	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	39	#define PROMPT_DELETE 15	medium	待判	
+e2fsprogs-imp-00043	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	119	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00044	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	123	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00045	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	129	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00046	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	140	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00047	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	154	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00048	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	159	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00049	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	164	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00050	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	169	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00051	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	179	PROMPT_NONE, PR_PREEN_OK | PR_NOCOLLATE, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00052	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	184	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00053	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	190	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00054	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	195	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00055	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	210	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00056	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00057	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	220	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00058	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00059	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	239	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00060	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	254	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00061	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	264	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00062	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	269	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00063	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	274	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00064	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	279	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00065	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	285	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00066	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	291	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00067	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	312	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00068	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	318	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00069	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	324	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00070	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	334	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00071	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	339	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00072	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	346	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00073	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	361	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00074	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	366	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00075	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	372	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00076	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	377	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00077	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	382	PROMPT_FIX, PR_PREEN_OK | PR_LATCH_BG_CHECKSUM, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00078	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	388	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00079	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	393	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00080	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	398	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00081	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	404	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00082	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	415	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00083	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	421	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00084	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	426	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00085	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	431	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00086	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	436	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00087	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	441	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00088	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	451	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00089	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	457	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00090	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	463	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00091	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	470	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00092	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	475	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00093	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	480	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00094	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	490	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00095	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	495	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00096	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	506	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00097	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	511	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00098	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	516	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00099	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	521	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00100	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	527	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00101	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	532	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00102	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	537	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00103	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	542	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00104	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	547	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00105	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	554	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00106	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	563	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00107	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	574	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00108	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	580	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00109	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	591	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00110	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	596	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00111	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	601	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00112	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	606	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00113	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	611	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00114	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	616	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00115	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	621	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00116	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	658	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00117	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	675	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK_PROMPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00118	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	686	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
+e2fsprogs-imp-00119	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	692	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
+e2fsprogs-imp-00120	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	697	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00121	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	704	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00122	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	710	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00123	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	715	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00124	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	721	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00125	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	726	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00126	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	732	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00127	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	737	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00128	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	742	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00129	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	747	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00130	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	752	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00131	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	758	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00132	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	764	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00133	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	770	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00134	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	776	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00135	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	781	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00136	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	787	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00137	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	793	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00138	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	815	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00139	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	820	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00140	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	830	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00141	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	836	PROMPT_FIX, PR_LATCH_LOW_DTIME, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00142	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	842	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00143	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	847	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00144	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	862	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00145	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	867	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00146	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	872	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00147	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	882	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00148	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	969	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00149	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	999	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00150	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1033	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00151	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1039	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00152	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1060	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00153	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1097	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00154	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1112	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00155	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1120	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00156	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1126	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00157	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1137	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00158	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1151	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00159	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1156	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00160	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1162	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00161	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1167	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00162	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1187	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00163	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1193	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00164	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1199	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00165	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00166	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00167	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1230	PROMPT_FIX, PR_NO_OK | PR_PREEN_NO | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00168	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1236	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00169	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1248	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00170	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1264	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00171	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1320	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00172	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1328	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00173	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1334	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00174	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1339	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00175	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1344	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00176	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1350	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00177	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1356	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00178	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1362	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00179	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1367	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00180	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1372	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00181	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1377	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00182	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1383	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00183	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1389	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00184	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1394	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00185	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1399	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00186	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1404	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00187	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1409	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00188	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1417	"", PROMPT_DELETE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00189	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1422	N_("Couldn't clone file: %m\n"), PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00190	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1429	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00191	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1435	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00192	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1440	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00193	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1445	PROMPT_NONE, PR_LATCH_OPTIMIZE_EXT | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00194	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1450	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00195	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1455	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00196	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1472	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00197	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1478	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00198	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1513	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00199	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1519	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00200	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1525	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00201	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1530	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00202	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1535	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00203	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1586	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00204	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1592	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00205	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1607	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00206	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1612	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00207	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1618	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00208	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1623	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00209	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1629	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00210	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1635	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00211	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1651	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00212	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1657	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00213	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1678	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK | PR_NO_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00214	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1683	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00215	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1708	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00216	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1713	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00217	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1718	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00218	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1723	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00219	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1728	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00220	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1737	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00221	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1747	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00222	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1773	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00223	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1788	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00224	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1803	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00225	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1808	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00226	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1830	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00227	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1835	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00228	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1840	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00229	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1866	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00230	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1883	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00231	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1899	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00232	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1904	PROMPT_CREATE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00233	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1909	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00234	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1915	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00235	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1921	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00236	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1927	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00237	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1933	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00238	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1939	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00239	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1945	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00240	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1951	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00241	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1957	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00242	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1963	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00243	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1969	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00244	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1975	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00245	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1980	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00246	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1986	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00247	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1992	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00248	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	1997	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00249	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2002	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00250	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2007	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00251	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2028	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00252	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2039	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00253	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2046	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00254	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2052	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00255	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2057	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00256	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2062	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00257	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2067	PROMPT_NONE, PR_LATCH_OPTIMIZE_DIR | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00258	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2072	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00259	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2079	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00260	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2091	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00261	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2096	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00262	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2103	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00263	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2107	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00264	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2112	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00265	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2117	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00266	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2128	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00267	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2133	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00268	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2138	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00269	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2143	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00270	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2148	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00271	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2154	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00272	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2160	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00273	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2165	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00274	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2170	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00275	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2176	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00276	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2182	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00277	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2187	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00278	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2192	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00279	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2197	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00280	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2202	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00281	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2207	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00282	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2213	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00283	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2218	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00284	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2224	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00285	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2230	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00286	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2235	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00287	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2241	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00288	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2247	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00289	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2253	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00290	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2260	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00291	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2266	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00292	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2272	PROMPT_FIX, PR_LATCH_IBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00293	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2278	PROMPT_FIX, PR_LATCH_BBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00294	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2323	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00295	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2333	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00296	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2338	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00297	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2358	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00298	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2363	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00299	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/problem.c	2548	reconfigure_bool(ctx, ptr, key, PR_FORCE_NO, "force_no");	medium	待判	
+e2fsprogs-imp-00300	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2620	if (!(ptr->flags & PR_PREEN_OK) && (ptr->prompt != PROMPT_NONE))	medium	待判	
+e2fsprogs-imp-00301	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2626	if (ptr->prompt == PROMPT_NONE) {	medium	待判	
+e2fsprogs-imp-00302	e2fsprogs	1.47.4	T2	check	prompt	e2fsck/problem.c	2669	if (answer && (ptr->prompt != PROMPT_NONE) &&	medium	待判	
+e2fsprogs-imp-00303	e2fsprogs	1.47.4	T2	check	default	e2fsck/super.c	23	#define MIN_CHECK 1	medium	待判	
+e2fsprogs-imp-00304	e2fsprogs	1.47.4	T2	check	default	e2fsck/super.c	24	#define MAX_CHECK 2	medium	待判	
+e2fsprogs-imp-00305	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	89	" -f Force checking even if filesystem is marked clean\n"));	medium	待判	
+e2fsprogs-imp-00306	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	93	" -B blocksize Force blocksize when looking for superblock\n"	medium	待判	
+e2fsprogs-imp-00307	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	274	if (!ctx->interactive || ctx->mount_flags & EXT2_MF_BUSY)	medium	待判	
+e2fsprogs-imp-00308	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	419	log_out(ctx, "%s", _(", check forced.\n"));	medium	待判	
+e2fsprogs-imp-00309	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	846	ctx->interactive = 1;	medium	待判	
+e2fsprogs-imp-00310	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	1494	if (!ctx->interactive)	medium	待判	
+e2fsprogs-imp-00311	e2fsprogs	1.47.4	T2	check	confirm	e2fsck/unix.c	1496	_("need terminal for interactive repairs"));	medium	待判	
+e2fsprogs-imp-00312	e2fsprogs	1.47.4	T2	check	default	e2fsck/util.c	468	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
+e2fsprogs-imp-00313	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	135	#define EXT2_FIRST_INODE(s) EXT2_FIRST_INO(s)	medium	待判	
+e2fsprogs-imp-00314	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	446	#define EXT2_EXTENT_LAST_LEAF 0x0002	medium	待判	
+e2fsprogs-imp-00315	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	447	#define EXT2_EXTENT_FIRST_SIB 0x0003	medium	待判	
+e2fsprogs-imp-00316	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	448	#define EXT2_EXTENT_LAST_SIB 0x0004	medium	待判	
+e2fsprogs-imp-00317	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	457	#define EXT2_EXTENT_DOWN_AND_LAST 0x000D	medium	待判	
+e2fsprogs-imp-00318	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	874	#define EXT2_NEWRANGE_MIN_LENGTH (0x2)	medium	待判	
+e2fsprogs-imp-00319	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	1675	#define EXT2_INODE_SCAN_DEFAULT_BUFFER_BLOCKS 8	medium	待判	
+e2fsprogs-imp-00320	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	1822	#define EXT4_MAX_ORPHAN_FILE_SIZE 8 << 20	medium	待判	
+e2fsprogs-imp-00321	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2fs.h	1823	#define EXT4_DEFAULT_ORPHAN_FILE_SIZE 2 << 20	medium	待判	
+e2fsprogs-imp-00322	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	55	#define EXT2_DEFAULT_PREALLOC_BLOCKS 8	medium	待判	
+e2fsprogs-imp-00323	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	78	#define EXT2_GOOD_OLD_FIRST_INO 11	medium	待判	
+e2fsprogs-imp-00324	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	102	#define EXT2_MIN_BLOCK_LOG_SIZE 10	medium	待判	
+e2fsprogs-imp-00325	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	103	#define EXT2_MAX_BLOCK_LOG_SIZE 16	medium	待判	
+e2fsprogs-imp-00326	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	104	#define EXT2_MIN_BLOCK_SIZE (1 << EXT2_MIN_BLOCK_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00327	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	105	#define EXT2_MAX_BLOCK_SIZE (1 << EXT2_MAX_BLOCK_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00328	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	111	#define EXT2_FIRST_INO(s) (EXT2_SB(s)->s_first_ino)	medium	待判	
+e2fsprogs-imp-00329	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	117	#define EXT2_FIRST_INO(s) (((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \	medium	待判	
+e2fsprogs-imp-00330	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	125	#define EXT2_MIN_CLUSTER_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
+e2fsprogs-imp-00331	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	126	#define EXT2_MAX_CLUSTER_LOG_SIZE 29	medium	待判	
+e2fsprogs-imp-00332	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	127	#define EXT2_MIN_CLUSTER_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00333	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	128	#define EXT2_MAX_CLUSTER_SIZE (1 << EXT2_MAX_CLUSTER_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00334	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	139	#define EXT2_MIN_FRAG_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00335	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	140	#define EXT2_MAX_FRAG_SIZE EXT2_MAX_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00336	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	141	#define EXT2_MIN_FRAG_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
+e2fsprogs-imp-00337	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	280	#define EXT2_MIN_DESC_SIZE 32	medium	待判	
+e2fsprogs-imp-00338	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	281	#define EXT2_MIN_DESC_SIZE_64BIT 64	medium	待判	
+e2fsprogs-imp-00339	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	282	#define EXT2_MAX_DESC_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00340	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	291	#define EXT2_MAX_BLOCKS_PER_GROUP(s) ((((unsigned) 1 << 16) - 8) * \	medium	待判	
+e2fsprogs-imp-00341	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	294	#define EXT2_MAX_CLUSTERS_PER_GROUP(s) (((unsigned) 1 << 16) - 8)	medium	待判	
+e2fsprogs-imp-00342	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	295	#define EXT2_MAX_INODES_PER_GROUP(s) (((unsigned) 1 << 16) - \	medium	待判	
+e2fsprogs-imp-00343	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	589	#define EXT2_DFL_MAX_MNT_COUNT 20	medium	待判	
+e2fsprogs-imp-00344	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	598	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
+e2fsprogs-imp-00345	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	620	#define EXT4_MAX_KEY_SIZE 64	medium	待判	
+e2fsprogs-imp-00346	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	626	#define EXT4_MAX_PASSPHRASE_SIZE 1024	medium	待判	
+e2fsprogs-imp-00347	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	627	#define EXT4_MAX_SALT_SIZE 256	medium	待判	
+e2fsprogs-imp-00348	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	800	#define EXT2_MAX_SUPP_REV EXT2_DYNAMIC_REV	medium	待判	
+e2fsprogs-imp-00349	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	1184	#define EXT4_MMP_MAX_UPDATE_INTERVAL 300	medium	待判	
+e2fsprogs-imp-00350	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	1189	#define EXT4_MMP_MIN_CHECK_INTERVAL 5	medium	待判	
+e2fsprogs-imp-00351	e2fsprogs	1.47.4	T2	misc	default	lib/ext2fs/ext2_fs.h	1194	#define EXT4_MIN_INLINE_DATA_SIZE ((sizeof(__u32) * EXT2_N_BLOCKS))	medium	待判	
+e2fsprogs-imp-00352	e2fsprogs	1.47.4	T2	misc	default	lib/support/profile.c	135	#define PROFILE_LAST_FILESPEC(x) (((x) == NULL) || ((x)[0] == '\0'))	medium	待判	
+xfsprogs-imp-00001	xfsprogs	7.3.0	T2	mkfs	default	mkfs/proto.c	1332	#define HARDLINK_DEFAULT_GROWTH_FACTOR 2	medium	待判	
+xfsprogs-imp-00002	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	32	#define XFS_MIN_REALISTIC_LOG_BLOCKS(blog) (MEGABLOCKS(64, (blog)))	medium	待判	
+xfsprogs-imp-00003	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	180	#define MAX_SUBOPTS (D_MAX_OPTS + 1)	medium	待判	
+xfsprogs-imp-00004	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	183	#define MAX_CONFLICTS 8	medium	待判	
+xfsprogs-imp-00005	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	184	#define LAST_CONFLICT (-1)	medium	待判	
+xfsprogs-imp-00006	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	258	#define MAX_INI_NAME_LEN 32	medium	待判	
+xfsprogs-imp-00007	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1423	bool force_overwrite)	medium	待判	
+xfsprogs-imp-00008	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1425	if (!force_overwrite && check_overwrite(name)) {	medium	待判	
+xfsprogs-imp-00009	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	1427	_("%s: Use the -f option to force overwrite.\n"),	medium	待判	
+xfsprogs-imp-00010	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	2431	int force_overwrite)	medium	待判	
+xfsprogs-imp-00011	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	2446	libxfs_get_topology(cli->xi, ft, force_overwrite);	medium	待判	
+xfsprogs-imp-00012	xfsprogs	7.3.0	T2	mkfs	default	mkfs/xfs_mkfs.c	5130	#define MAX_RW_COUNT (INT_MAX & ~(getpagesize() - 1))	medium	待判	
+xfsprogs-imp-00013	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	6087	int force_overwrite = 0;	medium	待判	
+xfsprogs-imp-00014	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	6202	force_overwrite = 1;	medium	待判	
+xfsprogs-imp-00015	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	6261	validate_sectorsize(&cfg, &cli, &dft, &ft, dry_run, force_overwrite);	medium	待判	
+xfsprogs-imp-00016	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	6307	validate_overwrite(xi.data.name, force_overwrite);	medium	待判	
+xfsprogs-imp-00017	xfsprogs	7.3.0	T2	mkfs	confirm	mkfs/xfs_mkfs.c	6430	prepare_devices(&cfg, &xi, mp, sbp, force_overwrite);	medium	待判	
+xfsprogs-imp-00018	xfsprogs	7.3.0	T2	misc	confirm	db/init.c	25	static int force;	medium	待判	
+xfsprogs-imp-00019	xfsprogs	7.3.0	T2	misc	confirm	db/init.c	67	force = 1;	medium	待判	
+xfsprogs-imp-00020	xfsprogs	7.3.0	T2	misc	confirm	db/init.c	129	if (!force) {	medium	待判	
+xfsprogs-imp-00021	xfsprogs	7.3.0	T2	misc	confirm	db/init.c	130	fprintf(stderr, _("Use -F to force a read attempt.\n"));	medium	待判	
+btrfs-progs-imp-00001	btrfs-progs	7.3	T2	frontend	confirm	cmds/filesystem.c	911	"Force a sync on a filesystem",	medium	待判	
+btrfs-progs-imp-00002	btrfs-progs	7.3	T2	frontend	lock	cmds/filesystem.c	1938	fd = open(fname, O_RDWR | O_CREAT | O_EXCL, 0600);	medium	待判	
+btrfs-progs-imp-00003	btrfs-progs	7.3	T2	frontend	default	cmds/filesystem-usage.c	443	#define MIN_UNALOCATED_THRESH SZ_16M	medium	待判	
+btrfs-progs-imp-00004	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	75	bool force)	medium	待判	
+btrfs-progs-imp-00005	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	108	if (force) {	medium	待判	
+btrfs-progs-imp-00006	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	112	"cannot flip ro->rw with received_uuid set, use force option -f if you really want unset the read-only status."	medium	待判	
+btrfs-progs-imp-00007	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	131	pr_info("force used, clearing received_uuid, previously %s",	medium	待判	
+btrfs-progs-imp-00008	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	154	bool force)	medium	待判	
+btrfs-progs-imp-00009	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	175	bool force)	medium	待判	
+btrfs-progs-imp-00010	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	464	const char *name, const char *value, bool force)	medium	待判	
+btrfs-progs-imp-00011	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	492	ret = prop->handler(types, object, name, value, force);	medium	待判	
+btrfs-progs-imp-00012	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	506	bool *force)	medium	待判	
+btrfs-progs-imp-00013	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	512	*force = false;	medium	待判	
+btrfs-progs-imp-00014	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	523	*force = true;	medium	待判	
+btrfs-progs-imp-00015	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	607	bool force;	medium	待判	
+btrfs-progs-imp-00016	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	609	if (parse_args(cmd, argc, argv, &types, &object, &name, NULL, 1, &force))	medium	待判	
+btrfs-progs-imp-00017	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	613	ret = setget_prop(types, object, name, NULL, force);	medium	待判	
+btrfs-progs-imp-00018	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	628	OPTLINE("-f", "force the change, could potentially break something"),	medium	待判	
+btrfs-progs-imp-00019	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	640	bool force = false;	medium	待判	
+btrfs-progs-imp-00020	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	642	if (parse_args(cmd, argc, argv, &types, &object, &name, &value, 3, &force))	medium	待判	
+btrfs-progs-imp-00021	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	645	ret = setget_prop(types, object, name, value, force);	medium	待判	
+btrfs-progs-imp-00022	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	668	bool force;	medium	待判	
+btrfs-progs-imp-00023	btrfs-progs	7.3	T2	frontend	confirm	cmds/property.c	670	if (parse_args(cmd, argc, argv, &types, &object, NULL, NULL, 1, &force))	medium	待判	
+btrfs-progs-imp-00024	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	55	OPTLINE("-f, --force", "force overwrite existing filesystem on the disk"),	medium	待判	
+btrfs-progs-imp-00025	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	66	bool force = false;	medium	待判	
+btrfs-progs-imp-00026	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	78	{ "force", no_argument, NULL, 'f'},	medium	待判	
+btrfs-progs-imp-00027	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	91	force = true;	medium	待判	
+btrfs-progs-imp-00028	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	140	res = test_dev_for_mkfs(argv[i], force);	medium	待判	
+btrfs-progs-imp-00029	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	195	bool force = false;	medium	待判	
+btrfs-progs-imp-00030	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	204	{ "force", no_argument, NULL, GETOPT_VAL_FORCE },	medium	待判	
+btrfs-progs-imp-00031	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	216	force = true;	medium	待判	
+btrfs-progs-imp-00032	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	248	"\t Use --force to skip the timeout.\n"	medium	待判	
+btrfs-progs-imp-00033	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	251	if (force) {	medium	待判	
+btrfs-progs-imp-00034	btrfs-progs	7.3	T2	frontend	confirm	cmds/device.c	252	pr_default("Safety timeout skipped due to --force\n\n");	medium	待判	
+btrfs-progs-imp-00035	btrfs-progs	7.3	T2	mkfs	sync	mkfs/common.c	800	ret = fsync(fd);	medium	待判	
+btrfs-progs-imp-00036	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1131	bool test_dev_for_mkfs(const char *file, int force_overwrite)	medium	待判	
+btrfs-progs-imp-00037	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1146	ret = test_status_for_mkfs(file, force_overwrite);	medium	待判	
+btrfs-progs-imp-00038	btrfs-progs	7.3	T2	mkfs	lock	mkfs/common.c	1153	fd = open(file, O_RDONLY | O_EXCL);	medium	待判	
+btrfs-progs-imp-00039	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1175	bool test_status_for_mkfs(const char *file, bool force_overwrite)	medium	待判	
+btrfs-progs-imp-00040	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1179	if (!force_overwrite) {	medium	待判	
+btrfs-progs-imp-00041	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1181	error("use the -f option to force overwrite of %s",	medium	待判	
+btrfs-progs-imp-00042	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1189	if (force_overwrite) {	medium	待判	
+btrfs-progs-imp-00043	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/common.c	1190	warning("forced overwrite but cannot check mount status of %s: %m",	medium	待判	
+btrfs-progs-imp-00044	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	500	OPTLINE("-f, --force", "force overwrite of existing filesystem"),	medium	待判	
+btrfs-progs-imp-00045	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	1529	bool force_overwrite = false;	medium	待判	
+btrfs-progs-imp-00046	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	1578	{ "force", no_argument, NULL, 'f' },	medium	待判	
+btrfs-progs-imp-00047	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	1615	force_overwrite = true;	medium	待判	
+btrfs-progs-imp-00048	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	1901	ret = test_dev_for_mkfs(file, force_overwrite);	medium	待判	
+btrfs-progs-imp-00049	btrfs-progs	7.3	T2	mkfs	confirm	mkfs/main.c	1903	ret = test_status_for_mkfs(file, force_overwrite);	medium	待判	
+btrfs-progs-imp-00050	btrfs-progs	7.3	T2	mkfs	lock	mkfs/main.c	2208	opt_oflags |= O_DIRECT;	medium	待判	
+btrfs-progs-imp-00051	btrfs-progs	7.3	T2	mkfs	default	mkfs/rootdir.c	732	#define MAX_EXTENT_SIZE SZ_1M	medium	待判	
+btrfs-progs-imp-00052	btrfs-progs	7.3	T2	misc	confirm	tune/main.c	48	static int force = 0;	medium	待判	
+btrfs-progs-imp-00053	btrfs-progs	7.3	T2	misc	confirm	tune/main.c	271	force = 1;	medium	待判	
+btrfs-progs-imp-00054	btrfs-progs	7.3	T2	misc	lock	tune/main.c	378	oflags |= O_DIRECT;	medium	待判	
+btrfs-progs-imp-00055	btrfs-progs	7.3	T2	misc	confirm	tune/main.c	528	if (!seeding_value && !force) {	medium	待判	
+btrfs-progs-imp-00056	btrfs-progs	7.3	T2	misc	confirm	tune/main.c	539	ret = update_seeding_flag(root, device, seeding_value, force);	medium	待判	
+btrfs-progs-imp-00057	btrfs-progs	7.3	T2	misc	confirm	tune/main.c	590	if (!force) {	medium	待判	
+btrfs-progs-imp-00058	btrfs-progs	7.3	T2	misc	confirm	tune/seeding.c	25	int update_seeding_flag(struct btrfs_root *root, const char *device, int set_flag, int force)	medium	待判	
+btrfs-progs-imp-00059	btrfs-progs	7.3	T2	misc	confirm	tune/seeding.c	36	if (force)	medium	待判	
+btrfs-progs-imp-00060	btrfs-progs	7.3	T2	check	confirm	check/main.c	10749	OPTLINE("--force", "skip mount checks, recommended only with --readonly; "	medium	待判	
+btrfs-progs-imp-00061	btrfs-progs	7.3	T2	check	confirm	check/main.c	10789	bool force = false;	medium	待判	
+btrfs-progs-imp-00062	btrfs-progs	7.3	T2	check	confirm	check/main.c	10827	{ "force", no_argument, NULL, GETOPT_VAL_FORCE },	medium	待判	
+btrfs-progs-imp-00063	btrfs-progs	7.3	T2	check	confirm	check/main.c	10912	force = true;	medium	待判	
+btrfs-progs-imp-00064	btrfs-progs	7.3	T2	check	confirm	check/main.c	10943	if (opt_check_repair && !force) {	medium	待判	
+btrfs-progs-imp-00065	btrfs-progs	7.3	T2	check	confirm	check/main.c	10967	if (!force) {	medium	待判	
+btrfs-progs-imp-00066	btrfs-progs	7.3	T2	check	confirm	check/main.c	10975	"%s is currently mounted, use --force if you really intend to check the filesystem",	medium	待判	
+btrfs-progs-imp-00067	btrfs-progs	7.3	T2	check	confirm	check/main.c	10984	"cannot check mount status of %s, the filesystem could be mounted, continuing because of --force",	medium	待判	
+btrfs-progs-imp-00068	btrfs-progs	7.3	T2	check	confirm	check/main.c	10988	"filesystem mounted, continuing because of --force");	medium	待判	
+btrfs-progs-imp-00069	btrfs-progs	7.3	T2	check	confirm	check/main.c	11046	ret = ask_user("repair mode will force to clear out log tree, are you sure?");	medium	待判	
+btrfs-progs-imp-00070	btrfs-progs	7.3	T2	check	confirm	check/mode-lowmem.c	381	static int force_cow_in_new_chunk(u64 *start_ret)	medium	待判	
+btrfs-progs-imp-00071	btrfs-progs	7.3	T2	check	confirm	check/mode-lowmem.c	506	ret = force_cow_in_new_chunk(new_start);	medium	待判	
+ntfs-3g-imp-00001	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	147	int force;	medium	待判	
+ntfs-3g-imp-00002	ntfs-3g	2026.9.28	T2	resize	default	ntfsprogs/ntfsresize.c	239	#define NTFS_MBYTE (1000 * 1000)	medium	待判	
+ntfs-3g-imp-00003	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	354	" -f, --force Force to progress\n"	medium	待判	
+ntfs-3g-imp-00004	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	488	{ "force", no_argument, NULL, 'f' },	medium	待判	
+ntfs-3g-imp-00005	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	527	opt.force++;	medium	待判	
+ntfs-3g-imp-00006	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	2968	if (opt.force-- <= 0)	medium	待判	
+ntfs-3g-imp-00007	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	3432	if ((flags & VOLUME_IS_DIRTY) && (opt.force-- <= 0)) {	medium	待判	
+ntfs-3g-imp-00008	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	4445	if (!opt.ro_flag && (opt.force-- <= 0))	medium	待判	
+ntfs-3g-imp-00009	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	4457	opt.force++;	medium	待判	
+ntfs-3g-imp-00010	ntfs-3g	2026.9.28	T2	resize	confirm	ntfsprogs/ntfsresize.c	4677	if (opt.force-- <= 0 && !opt.ro_flag) {	medium	待判	
+ntfs-3g-imp-00011	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	65	int force;	medium	待判	
+ntfs-3g-imp-00012	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	101	" -f, --force Use less caution\n"	medium	待判	
+ntfs-3g-imp-00013	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	125	{ "force", no_argument, NULL, 'f' },	medium	待判	
+ntfs-3g-imp-00014	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	173	opts.force++;	medium	待判	
+ntfs-3g-imp-00015	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	515	&& !opts.force	medium	待判	
+ntfs-3g-imp-00016	ntfs-3g	2026.9.28	T2	label-uuid	confirm	ntfsprogs/ntfslabel.c	528	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
+ntfs-3g-imp-00017	ntfs-3g	2026.9.28	T2	probe	confirm	ntfsprogs/ntfsinfo.c	94	int force;	medium	待判	
+ntfs-3g-imp-00018	ntfs-3g	2026.9.28	T2	probe	confirm	ntfsprogs/ntfsinfo.c	142	" -f, --force Use less caution\n"	medium	待判	
+ntfs-3g-imp-00019	ntfs-3g	2026.9.28	T2	probe	confirm	ntfsprogs/ntfsinfo.c	165	{ "force", no_argument, NULL, 'f' },	medium	待判	
+ntfs-3g-imp-00020	ntfs-3g	2026.9.28	T2	probe	confirm	ntfsprogs/ntfsinfo.c	213	opts.force++;	medium	待判	
+ntfs-3g-imp-00021	ntfs-3g	2026.9.28	T2	probe	confirm	ntfsprogs/ntfsinfo.c	2611	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
+ntfs-3g-imp-00022	ntfs-3g	2026.9.28	T2	frontend	default	ntfsprogs/ntfsfix.c	94	#define DEFAULT_SECTOR_SIZE 512	medium	待判	
+ntfs-3g-imp-00023	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfsfix.c	1618	BOOL force = FALSE;	medium	待判	
+ntfs-3g-imp-00024	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfsfix.c	1626	!(mnt_flags & NTFS_MF_READONLY) && !force) {	medium	待判	
+ntfs-3g-imp-00025	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfscluster.c	93	" -f, --force Use less caution\n"	medium	待判	
+ntfs-3g-imp-00026	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfscluster.c	117	{ "force", no_argument, NULL, 'f' },	medium	待判	
+ntfs-3g-imp-00027	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfscluster.c	169	opts.force++;	medium	待判	
+ntfs-3g-imp-00028	ntfs-3g	2026.9.28	T2	frontend	confirm	ntfsprogs/ntfscluster.c	502	(opts.force ? NTFS_MNT_RECOVER : 0));	medium	待判	
+ntfs-3g-imp-00029	ntfs-3g	2026.9.28	T2	misc	confirm	libntfs-3g/volume.c	1467	int ntfs_umount(ntfs_volume *vol, const BOOL force __attribute__((unused)))	medium	待判	
+ntfs-3g-imp-00030	ntfs-3g	2026.9.28	T2	misc	confirm	libntfs-3g/attrib.c	5607	ntfs_log_error("Failed to force non-resident\n");	medium	待判	
 f2fs-tools-imp-00001	f2fs-tools	1.16.0	T2	mkfs	default	mkfs/f2fs_format.c	45	#define last_zone(cur) ((cur - 1) * c.segs_per_zone)	medium	待判	
 f2fs-tools-imp-00002	f2fs-tools	1.16.0	T2	mkfs	default	mkfs/f2fs_format.c	46	#define last_section(cur) (cur + (c.secs_per_zone - 1) * c.segs_per_sec)	medium	待判	
 f2fs-tools-imp-00003	f2fs-tools	1.16.0	T2	mkfs	confirm	mkfs/f2fs_format_main.c	46	static int force_overwrite = 0;	medium	待判	
@@ -715,93 +725,114 @@ dosfstools-imp-00023	dosfstools	4.2	T2	mkfs	default	src/mkfs.fat.c	133	#define G
 dosfstools-imp-00024	dosfstools	4.2	T2	mkfs	lock	src/mkfs.fat.c	1863	dev = open(device_name, O_EXCL | O_RDWR);	medium	待判	
 dosfstools-imp-00025	dosfstools	4.2	T2	mkfs	lock	src/mkfs.fat.c	1871	dev = open(device_name, O_EXCL | O_RDWR | O_CREAT, 0666);	medium	待判	
 dosfstools-imp-00026	dosfstools	4.2	T2	mkfs	sync	src/mkfs.fat.c	1957	if (fsync(dev) < 0)	medium	待判	
-lvm2-imp-00001	lvm2	2.03.16	T2	resize	confirm	tools/lvresize.c	197	.force = arg_is_set(cmd, force_ARG),	medium	待判	
-lvm2-imp-00002	lvm2	2.03.16	T2	frontend	confirm	tools/pvchange.c	79	if (used && (arg_count(cmd, force_ARG) != DONT_PROMPT_OVERRIDE)) {	medium	待判	
-lvm2-imp-00003	lvm2	2.03.16	T2	frontend	confirm	tools/pvchange.c	137	(arg_count(cmd, force_ARG) == PROMPT) &&	medium	待判	
-lvm2-imp-00004	lvm2	2.03.16	T2	frontend	confirm	tools/pvchange.c	138	yes_no_prompt("Override preferred number of copies "	medium	待判	
-lvm2-imp-00005	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	533	yes_no_prompt("Remove system ID %s from volume group %s? [y/n]: ",	medium	待判	
-lvm2-imp-00006	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	556	yes_no_prompt("Set foreign system ID %s on volume group %s? [y/n]: ",	medium	待判	
-lvm2-imp-00007	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	620	if (arg_is_set(cmd, force_ARG))	medium	待判	
-lvm2-imp-00008	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	951	(yes_no_prompt("Change clustered property of all volumes groups? [y/n]: ") == 'n')) {	medium	待判	
-lvm2-imp-00009	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	1033	if (lock_type && lockopt && !strcmp(lock_type, "none") && !strcmp(lockopt, "force")) {	medium	待判	
-lvm2-imp-00010	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	1249	if (lockopt && !strcmp(lockopt, "force")) {	medium	待判	
-lvm2-imp-00011	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	1251	log_error("Lock type can only be forced to \"none\" for recovery.");	medium	待判	
-lvm2-imp-00012	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	1256	yes_no_prompt("Forcibly change VG lock type to none? [y/n]: ") == 'n') {	medium	待判	
-lvm2-imp-00013	lvm2	2.03.16	T2	frontend	confirm	tools/vgchange.c	1265	cmd->force_access_clustered = 1;	medium	待判	
-lvm2-imp-00014	lvm2	2.03.16	T2	lvm	confirm	tools/lvmcmdline.c	368	int yes_no_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)	medium	待判	
-lvm2-imp-00015	lvm2	2.03.16	T2	lvm	default	tools/lvmcmdline.c	1653	#define MAX_UNUSED_COUNT 8	medium	待判	
-lvm2-imp-00016	lvm2	2.03.16	T2	lvm	default	tools/lvmcmdline.c	1655	#define MAX_OPTS_MSG 64	medium	待判	
-lvm2-imp-00017	lvm2	2.03.16	T2	lvm	lock	tools/lvmcmdline.c	3223	log_debug("O_DIRECT will be used");	medium	待判	
-lvm2-imp-00018	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	1478	if (yes_no_prompt("Use unrecognized writecache setting? [y/n]: ") == 'n') {	medium	待判	
-lvm2-imp-00019	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4741	force_t force = (force_t) arg_count(cmd, force_ARG)	medium	待判	
-lvm2-imp-00020	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4744	if (!lv_remove_with_dependencies(cmd, lv, force, 0))	medium	待判	
-lvm2-imp-00021	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4753	pp->force = (force_t) arg_count(cmd, force_ARG);	medium	待判	
-lvm2-imp-00022	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4908	if (pp->force != DONT_PROMPT_OVERRIDE) {	medium	待判	
-lvm2-imp-00023	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4923	if (yes_no_prompt("Really INITIALIZE physical volume \"%s\" of volume group \"%s\" [y/n]? ", pvname, vgname) == 'n') {	medium	待判	
-lvm2-imp-00024	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4939	if (yes_no_prompt("WARNING: %s: device size %s does not match requested size %s. Proceed? [y/n]: ", pvname,	medium	待判	
-lvm2-imp-00025	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4952	if (pp->force != DONT_PROMPT_OVERRIDE) {	medium	待判	
-lvm2-imp-00026	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4959	log_error("(If you are certain you need pvremove, then confirm by using --force twice.)");	medium	待判	
-lvm2-imp-00027	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	4965	if (yes_no_prompt("Really WIPE LABELS from physical volume \"%s\" of volume group \"%s\" [y/n]? ", pvname, vgname) == 'n')	medium	待判	
-lvm2-imp-00028	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5005	(pp->force == DONT_PROMPT_OVERRIDE))	medium	待判	
-lvm2-imp-00029	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5165	if (pp->force)	medium	待判	
-lvm2-imp-00030	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5171	if (pp->force)	medium	待判	
-lvm2-imp-00031	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5252	log_debug("Checking %s to confirm %.32s.",	medium	待判	
-lvm2-imp-00032	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5256	log_debug("Check confirm arg %s no PVID found", dev_name(pd->dev));	medium	待判	
-lvm2-imp-00033	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5261	log_debug("Check confirm arg %s no info.", dev_name(pd->dev));	medium	待判	
-lvm2-imp-00034	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5572	if (pp->is_remove && (pp->force == DONT_PROMPT_OVERRIDE) &&	medium	待判	
-lvm2-imp-00035	lvm2	2.03.16	T2	frontend	confirm	tools/toollib.c	5768	0, pp->yes, pp->force, &pd->wiped)) {	medium	待判	
-lvm2-imp-00036	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/pv_manip.c	641	if (!yes && yes_no_prompt("%s: Requested size %s exceeds real size %s. Proceed? [y/n]: ",	medium	待判	
-lvm2-imp-00037	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/pv_manip.c	649	if (!yes && yes_no_prompt("%s: Requested size %s is less than real size %s. Proceed? [y/n]: ",	medium	待判	
-lvm2-imp-00038	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	4580	if (yes_no_prompt("Do full resync of extended "	medium	待判	
-lvm2-imp-00039	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	4973	if (!lp->force && !lp->yes) {	medium	待判	
-lvm2-imp-00040	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	4974	if (yes_no_prompt("Do you really want to reduce %s? [y/n]: ",	medium	待判	
-lvm2-imp-00041	lvm2	2.03.16	T2	lvm	default	lib/metadata/lv_manip.c	4987	#define FSADM_CMD_MAX_ARGS 6	medium	待判	
-lvm2-imp-00042	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	4998	int force,	medium	待判	
-lvm2-imp-00043	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	5019	if (force)	medium	待判	
-lvm2-imp-00044	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	5020	argv[i++] = "--force";	medium	待判	
-lvm2-imp-00045	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6061	!_fsadm_cmd(FSADM_CMD_CHECK, lv, 0, lp->yes, lp->force, &status)) {	medium	待判	
-lvm2-imp-00046	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6071	!_fsadm_cmd(FSADM_CMD_RESIZE, lv, lp->extents, lp->yes, lp->force, NULL)) {	medium	待判	
-lvm2-imp-00047	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6195	!_fsadm_cmd(FSADM_CMD_RESIZE, lv, lp->extents, lp->yes, lp->force, NULL))	medium	待判	
-lvm2-imp-00048	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6552	static int _lv_remove_check_in_use(struct logical_volume *lv, force_t force)	medium	待判	
-lvm2-imp-00049	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6581	if (force == PROMPT) {	medium	待判	
-lvm2-imp-00050	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6595	if (yes_no_prompt("Do you really want to remove%s%s%s%s "	medium	待判	
-lvm2-imp-00051	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6612	force_t force, int suppress_remove_message)	medium	待判	
-lvm2-imp-00052	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6686	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
-lvm2-imp-00053	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6702	if (!lv_remove_single(cmd, cachevol_lv, force, 1)) {	medium	待判	
-lvm2-imp-00054	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6722	if (!lv_remove_single(cmd, cachevol_lv, force, suppress_remove_message)) {	medium	待判	
-lvm2-imp-00055	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6747	if (force < DONT_PROMPT_OVERRIDE) {	medium	待判	
-lvm2-imp-00056	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6824	if (force < DONT_PROMPT_OVERRIDE) {	medium	待判	
-lvm2-imp-00057	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6853	const force_t force, unsigned level,	medium	待判	
-lvm2-imp-00058	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6858	if ((force == PROMPT) &&	medium	待判	
-lvm2-imp-00059	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6859	yes_no_prompt("Removing %s %s will remove %u dependent volume(s). "	medium	待判	
-lvm2-imp-00060	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6878	force, level + 1))	medium	待判	
-lvm2-imp-00061	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6887	const force_t force, unsigned level)	medium	待判	
-lvm2-imp-00062	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6922	(force == PROMPT) &&	medium	待判	
-lvm2-imp-00063	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6923	yes_no_prompt("Removing snapshot %s that failed to merge "	medium	待判	
-lvm2-imp-00064	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6937	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
-lvm2-imp-00065	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6949	force, level + 1))	medium	待判	
-lvm2-imp-00066	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6953	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
-lvm2-imp-00067	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6962	force, level + 1))	medium	待判	
-lvm2-imp-00068	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6974	if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "cache origin"))	medium	待判	
-lvm2-imp-00069	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6981	!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "external origin"))	medium	待判	
-lvm2-imp-00070	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6985	!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "pool"))	medium	待判	
-lvm2-imp-00071	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	6989	if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "VDO pool"))	medium	待判	
-lvm2-imp-00072	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	7005	(force == PROMPT)) {	medium	待判	
-lvm2-imp-00073	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	7008	if (yes_no_prompt("Removal of pool metadata spare logical volume "	medium	待判	
-lvm2-imp-00074	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	7017	return lv_remove_single(cmd, lv, force, 0);	medium	待判	
-lvm2-imp-00075	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	7817	wp.yes, wp.force, NULL)) {	medium	待判	
-lvm2-imp-00076	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/lv_manip.c	8747	.force = lp->force,	medium	待判	
-lvm2-imp-00077	lvm2	2.03.16	T2	lvm	default	lib/metadata/metadata.c	138	#define ONE_MB_IN_SECTORS 2048	medium	待判	
-lvm2-imp-00078	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/metadata.c	1412	pp->force = PROMPT;	medium	待判	
-lvm2-imp-00079	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/metadata.c	3724	if (cmd->force_access_clustered) {	medium	待判	
-lvm2-imp-00080	lvm2	2.03.16	T2	lvm	confirm	lib/metadata/metadata.c	3725	log_debug("Allowing forced access to clustered vg %s", vg->name);	medium	待判	
-lvm2-imp-00081	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	49	# ifndef O_DIRECT	medium	待判	
-lvm2-imp-00082	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	50	# error O_DIRECT support configured but O_DIRECT definition not found in headers	medium	待判	
-lvm2-imp-00083	lvm2	2.03.16	T2	misc	sync	lib/device/dev-io.c	293	if (fsync(dev->fd) >= 0)	medium	待判	
-lvm2-imp-00084	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	308	if ((flags & O_EXCL))	medium	待判	
-lvm2-imp-00085	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	348	flags |= O_DIRECT;	medium	待判	
-lvm2-imp-00086	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	372	flags &= ~O_DIRECT;	medium	待判	
-lvm2-imp-00087	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	375	log_debug_devs("%s: Not using O_DIRECT", name);	medium	待判	
-lvm2-imp-00088	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	427	dev->flags & DEV_OPENED_EXCL ? " O_EXCL" : "",	medium	待判	
-lvm2-imp-00089	lvm2	2.03.16	T2	misc	lock	lib/device/dev-io.c	428	dev->flags & DEV_O_DIRECT ? " O_DIRECT" : "");	medium	待判	
+lvm2-imp-00001	lvm2	2.03.44	T2	resize	confirm	tools/lvresize.c	195	lp->force = arg_is_set(cmd, force_ARG);	medium	待判	
+lvm2-imp-00002	lvm2	2.03.44	T2	frontend	confirm	tools/pvchange.c	138	(arg_count(cmd, force_ARG) == PROMPT) &&	medium	待判	
+lvm2-imp-00003	lvm2	2.03.44	T2	frontend	confirm	tools/pvchange.c	139	yes_no_prompt("Override preferred number of copies "	medium	待判	
+lvm2-imp-00004	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	281	if (arg_count(cmd, force_ARG) == PROMPT) {	medium	待判	
+lvm2-imp-00005	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	288	if (arg_count(cmd, force_ARG) < DONT_PROMPT_OVERRIDE &&	medium	待判	
+lvm2-imp-00006	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	290	yes_no_prompt("Interrupt pvmove on %s? "	medium	待判	
+lvm2-imp-00007	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	651	yes_no_prompt("Remove system ID %s from volume group %s? [y/n]: ",	medium	待判	
+lvm2-imp-00008	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	674	yes_no_prompt("Set foreign system ID %s on volume group %s? [y/n]: ",	medium	待判	
+lvm2-imp-00009	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	740	if (arg_is_set(cmd, force_ARG))	medium	待判	
+lvm2-imp-00010	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	1171	(yes_no_prompt("Change clustered property of all volume groups? [y/n]: ") == 'n')) {	medium	待判	
+lvm2-imp-00011	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	1527	yes_no_prompt("Forcibly change VG lock type to %s? [y/n]: ", lock_type) == 'n') {	medium	待判	
+lvm2-imp-00012	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	1536	cmd->force_access_clustered = 1;	medium	待判	
+lvm2-imp-00013	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	1822	if (!arg_is_set(cmd, force_ARG) && lvs_in_vg_activated(vg)) {	medium	待判	
+lvm2-imp-00014	lvm2	2.03.44	T2	frontend	confirm	tools/vgchange.c	1833	yes_no_prompt("WARNING: clearing PR may disrupt ongoing activity. Continue? [y/n]: ") == 'n') {	medium	待判	
+lvm2-imp-00015	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	390	force_t arg_force_value(const struct cmd_context *cmd)	medium	待判	
+lvm2-imp-00016	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	394	switch ((f = arg_count(cmd, force_ARG))) {	medium	待判	
+lvm2-imp-00017	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	398	log_debug("Changing force level %d to %d.",	medium	待判	
+lvm2-imp-00018	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	410	int yes_no_arg(struct cmd_context *cmd __attribute__((unused)), struct arg_values *av)	medium	待判	
+lvm2-imp-00019	lvm2	2.03.44	T2	lvm	default	tools/lvmcmdline.c	1635	#define MAX_UNUSED_COUNT 8	medium	待判	
+lvm2-imp-00020	lvm2	2.03.44	T2	lvm	default	tools/lvmcmdline.c	1637	#define MAX_OPTS_MSG 64	medium	待判	
+lvm2-imp-00021	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	2252	log_error("Argument%s%c%s%s cannot be used in interactive mode.",	medium	待判	
+lvm2-imp-00022	lvm2	2.03.44	T2	lvm	confirm	tools/lvmcmdline.c	2743	cmd->force_access_clustered = 0;	medium	待判	
+lvm2-imp-00023	lvm2	2.03.44	T2	lvm	lock	tools/lvmcmdline.c	3248	log_debug("O_DIRECT will be used");	medium	待判	
+lvm2-imp-00024	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	1577	if (yes_no_prompt("Use unrecognized writecache setting? [y/n]: ") == 'n') {	medium	待判	
+lvm2-imp-00025	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5009	force_t force = (force_t) (int) arg_count(cmd, force_ARG)	medium	待判	
+lvm2-imp-00026	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5012	if (!lv_remove_with_dependencies(cmd, lv, force, 0))	medium	待判	
+lvm2-imp-00027	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5027	pp->force = (force_t) (int) arg_count(cmd, force_ARG);	medium	待判	
+lvm2-imp-00028	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5211	if (pp->force != DONT_PROMPT_OVERRIDE) {	medium	待判	
+lvm2-imp-00029	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5226	if (yes_no_prompt("Really INITIALIZE physical volume \"%s\" of volume group \"%s\" [y/n]? ", pvname, vgname) == 'n') {	medium	待判	
+lvm2-imp-00030	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5242	if (yes_no_prompt("WARNING: %s: device size %s does not match requested size %s. Proceed? [y/n]: ", pvname,	medium	待判	
+lvm2-imp-00031	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5255	if (pp->force != DONT_PROMPT_OVERRIDE) {	medium	待判	
+lvm2-imp-00032	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5262	log_error("(If you are certain you need pvremove, then confirm by using --force twice.)");	medium	待判	
+lvm2-imp-00033	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5268	if (yes_no_prompt("Really WIPE LABELS from physical volume \"%s\" of volume group \"%s\" [y/n]? ", pvname, vgname) == 'n')	medium	待判	
+lvm2-imp-00034	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5308	(pp->force == DONT_PROMPT_OVERRIDE))	medium	待判	
+lvm2-imp-00035	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5468	if (pp->force)	medium	待判	
+lvm2-imp-00036	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5474	if (pp->force)	medium	待判	
+lvm2-imp-00037	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5555	log_debug("Checking %s to confirm %.32s.",	medium	待判	
+lvm2-imp-00038	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5559	log_debug("Check confirm arg %s no PVID found", dev_name(pd->dev));	medium	待判	
+lvm2-imp-00039	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5564	log_debug("Check confirm arg %s no info.", dev_name(pd->dev));	medium	待判	
+lvm2-imp-00040	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	5881	if (pp->is_remove && (pp->force == DONT_PROMPT_OVERRIDE) &&	medium	待判	
+lvm2-imp-00041	lvm2	2.03.44	T2	frontend	confirm	tools/toollib.c	6158	0, pp->yes, pp->force, &pd->wiped)) {	medium	待判	
+lvm2-imp-00042	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/pv_manip.c	643	if (!yes && yes_no_prompt("%s: Requested size %s exceeds real size %s. Proceed? [y/n]: ",	medium	待判	
+lvm2-imp-00043	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/pv_manip.c	651	if (!yes && yes_no_prompt("%s: Requested size %s is less than real size %s. Proceed? [y/n]: ",	medium	待判	
+lvm2-imp-00044	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	4686	if (yes_no_prompt("Do full resync of extended "	medium	待判	
+lvm2-imp-00045	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	5072	if (!lp->force && !lp->yes) {	medium	待判	
+lvm2-imp-00046	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	5073	if (yes_no_prompt("Do you really want to reduce %s? [y/n]: ",	medium	待判	
+lvm2-imp-00047	lvm2	2.03.44	T2	lvm	default	lib/metadata/lv_manip.c	5086	#define FSADM_CMD_MAX_ARGS 10	medium	待判	
+lvm2-imp-00048	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	5097	int force,	medium	待判	
+lvm2-imp-00049	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	5126	if (force)	medium	待判	
+lvm2-imp-00050	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	5127	argv[i++] = "--force";	medium	待判	
+lvm2-imp-00051	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6212	int confirm_mount_change = 0;	medium	待判	
+lvm2-imp-00052	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6368	confirm_mount_change = 1;	medium	待判	
+lvm2-imp-00053	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6371	confirm_mount_change = 0;	medium	待判	
+lvm2-imp-00054	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6396	if (!lp->yes && confirm_mount_change) {	medium	待判	
+lvm2-imp-00055	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6397	if (yes_no_prompt("Continue with %s file system reduce steps:%s%s%s%s%s? [y/n]:",	medium	待判	
+lvm2-imp-00056	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6417	int confirm_mount_change = 0;	medium	待判	
+lvm2-imp-00057	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6572	confirm_mount_change = 1;	medium	待判	
+lvm2-imp-00058	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6574	if (!lp->yes && confirm_mount_change) {	medium	待判	
+lvm2-imp-00059	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	6575	if (yes_no_prompt("Continue with %s file system extend steps:%s%s%s%s%s? [y/n]:",	medium	待判	
+lvm2-imp-00060	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7229	!_fsadm_cmd(FSADM_CMD_CHECK, lv_top, 0, lp->yes, lp->force, &status)) {	medium	待判	
+lvm2-imp-00061	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7239	if (!_fsadm_cmd(FSADM_CMD_RESIZE, lv_top, lp->extents, lp->yes, lp->force, NULL)) {	medium	待判	
+lvm2-imp-00062	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7341	if (!_fsadm_cmd(FSADM_CMD_RESIZE, lv_top, lp->extents, lp->yes, lp->force, NULL)) {	medium	待判	
+lvm2-imp-00063	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7810	static int _lv_remove_check_in_use(struct logical_volume *lv, force_t force)	medium	待判	
+lvm2-imp-00064	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7839	if (force == PROMPT) {	medium	待判	
+lvm2-imp-00065	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7853	if (yes_no_prompt("Do you really want to remove%s%s%s%s "	medium	待判	
+lvm2-imp-00066	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7870	force_t force, int suppress_remove_message)	medium	待判	
+lvm2-imp-00067	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7938	if (force < DONT_PROMPT) {	medium	待判	
+lvm2-imp-00068	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7952	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
+lvm2-imp-00069	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7968	if (!lv_remove_single(cmd, cachevol_lv, force, 1)) {	medium	待判	
+lvm2-imp-00070	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	7988	if (!lv_remove_single(cmd, cachevol_lv, force, suppress_remove_message)) {	medium	待判	
+lvm2-imp-00071	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8013	if (force < DONT_PROMPT_OVERRIDE) {	medium	待判	
+lvm2-imp-00072	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8106	if (force < DONT_PROMPT_OVERRIDE) {	medium	待判	
+lvm2-imp-00073	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8143	const force_t force, unsigned level,	medium	待判	
+lvm2-imp-00074	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8148	if ((force == PROMPT) &&	medium	待判	
+lvm2-imp-00075	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8149	yes_no_prompt("Removing %s %s will remove %u dependent volume(s). "	medium	待判	
+lvm2-imp-00076	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8168	force, level + 1))	medium	待判	
+lvm2-imp-00077	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8177	const force_t force, unsigned level)	medium	待判	
+lvm2-imp-00078	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8212	(force == PROMPT) &&	medium	待判	
+lvm2-imp-00079	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8213	yes_no_prompt("Removing snapshot %s that failed to merge "	medium	待判	
+lvm2-imp-00080	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8227	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
+lvm2-imp-00081	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8239	force, level + 1))	medium	待判	
+lvm2-imp-00082	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8243	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
+lvm2-imp-00083	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8252	force, level + 1))	medium	待判	
+lvm2-imp-00084	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8264	if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "cache origin"))	medium	待判	
+lvm2-imp-00085	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8271	if (!_lv_remove_check_in_use(lv, force))	medium	待判	
+lvm2-imp-00086	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8279	if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "external origin"))	medium	待判	
+lvm2-imp-00087	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8284	!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "pool"))	medium	待判	
+lvm2-imp-00088	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8288	if (!_lv_remove_segs_using_this_lv(cmd, lv, force, level, "VDO pool"))	medium	待判	
+lvm2-imp-00089	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8304	(force == PROMPT)) {	medium	待判	
+lvm2-imp-00090	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8307	if (yes_no_prompt("Removal of pool metadata spare logical volume "	medium	待判	
+lvm2-imp-00091	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	8316	return lv_remove_single(cmd, lv, force, 0);	medium	待判	
+lvm2-imp-00092	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	9178	wp.yes, wp.force, NULL)) {	medium	待判	
+lvm2-imp-00093	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	9267	int activate_and_wipe_lvlist(struct dm_list *lv_list, int wipe_mode, int yes, force_t force)	medium	待判	
+lvm2-imp-00094	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	9312	wp.force = force;	medium	待判	
+lvm2-imp-00095	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	9344	int activate_and_wipe_lv(struct logical_volume *lv, int wipe_mode, int yes, force_t force)	medium	待判	
+lvm2-imp-00096	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	9351	return activate_and_wipe_lvlist(&lv_list, wipe_mode, yes, force);	medium	待判	
+lvm2-imp-00097	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/lv_manip.c	10163	.force = lp->force,	medium	待判	
+lvm2-imp-00098	lvm2	2.03.44	T2	lvm	default	lib/metadata/metadata.c	148	#define ONE_MB_IN_SECTORS 2048	medium	待判	
+lvm2-imp-00099	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/metadata.c	1434	pp->force = PROMPT;	medium	待判	
+lvm2-imp-00100	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/metadata.c	3714	if (cmd->force_access_clustered) {	medium	待判	
+lvm2-imp-00101	lvm2	2.03.44	T2	lvm	confirm	lib/metadata/metadata.c	3715	log_debug("Allowing forced access to clustered vg %s", vg->name);	medium	待判	
+lvm2-imp-00102	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	49	# ifndef O_DIRECT	medium	待判	
+lvm2-imp-00103	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	50	# error O_DIRECT support configured but O_DIRECT definition not found in headers	medium	待判	
+lvm2-imp-00104	lvm2	2.03.44	T2	misc	sync	lib/device/dev-io.c	293	if (fsync(dev->fd) >= 0)	medium	待判	
+lvm2-imp-00105	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	308	if ((flags & O_EXCL))	medium	待判	
+lvm2-imp-00106	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	349	flags |= O_DIRECT;	medium	待判	
+lvm2-imp-00107	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	373	flags &= ~O_DIRECT;	medium	待判	
+lvm2-imp-00108	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	376	log_debug_devs("%s: Not using O_DIRECT", name);	medium	待判	
+lvm2-imp-00109	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	428	dev->flags & DEV_OPENED_EXCL ? " O_EXCL" : "",	medium	待判	
+lvm2-imp-00110	lvm2	2.03.44	T2	misc	lock	lib/device/dev-io.c	429	dev->flags & DEV_O_DIRECT ? " O_DIRECT" : "");	medium	待判	
 testdisk-imp-00001	testdisk	7.2	T3	mbr	confirm	src/tmbrcode.c	55	if(ask_YN(stdscr)!=0 && ask_confirmation("Write a new copy of MBR code, confirm ? (Y/N)")!=0)	medium	待判	

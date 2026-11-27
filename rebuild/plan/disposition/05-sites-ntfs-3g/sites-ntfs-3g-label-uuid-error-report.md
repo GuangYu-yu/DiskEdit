@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-label-uuid-error-report（3 行）
+# 批次：sites-ntfs-3g-label-uuid-error-report（4 行）
 
 ## 判断
 ntfslabel 内部文案：CLI 面裁剪；标签编码校验认领（attrs.rs::label_problem）。

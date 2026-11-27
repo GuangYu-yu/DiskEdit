@@ -1,5 +1,9 @@
 row_id	ledger	state	note
-ntfs-3g-00071	sites	裁剪	裁剪：ntfslabel CLI/usage 面——固定形式调用（ntfslabel <dev> <label> / --new-serial <dev>，src/app/execute/filesystem.rs），不可达
-ntfs-3g-00075	sites	认领	认领：占用闸在写前等价前置挂载卷拒绝（src/app/decide B4/B17）；链内检查随消费工具自带（SA2-009）
-ntfs-3g-00077	sites	差异	D15：NTFS 卷标超长按 128 UTF-16 码元字段容量前置拒绝，不采纳参考工具的截断+警告——依据 crates/core/src/fs/attrs.rs::label_problem
-ntfs-3g-00078	sites	认领	认领：占用闸在写前等价前置挂载卷拒绝（src/app/decide B4/B17）；链内检查随消费工具自带（SA2-009）
+ntfs-3g-00071	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00072	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00073	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00074	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00076	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00080	sites	认领	认领：占用闸在写前等价前置挂载卷拒绝（src/app/decide B4/B17）；链内检查随消费工具自带（SA2-009）
+ntfs-3g-00082	sites	差异	D15：NTFS 卷标超长按 128 UTF-16 码元字段容量前置拒绝，不采纳参考工具的截断+警告——依据 crates/core/src/fs/attrs.rs::label_problem
+ntfs-3g-00083	sites	认领	认领：占用闸在写前等价前置挂载卷拒绝（src/app/decide B4/B17）；链内检查随消费工具自带（SA2-009）

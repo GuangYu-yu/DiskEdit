@@ -1,25 +1,25 @@
 row_id	ledger	state	note
-parted-01818	sites	裁剪	裁剪|交互确认（占用告示 YES/NO）；非交互等价=占用闸拒绝（SA1-004，tests/online.rs）
-parted-01819	sites	认领	认领|占用拒绝已有：SA1-004（写命令先过占用闸；tests/online.rs）
-parted-01820	sites	裁剪	裁剪|交互确认（毁盘告示 YES/NO）；非交互等价=--overwrite-data 拒绝（SA1-005）
-parted-01855	sites	认领	认领|请求值不可精确满足时拒绝/下取整已有：R0173/R0174（place 拒绝 --start end/align）+SA1-014（--end 按 --align 下取整）
-parted-01857	sites	拒绝	拒绝|对齐由构造保证（SA1-008/SA1-014）；未对齐输入在 decide 拒绝（R0173/R0174），不设告示牌
-parted-01865	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
-parted-01875	sites	认领	认领|type 按标签校验已有：GPT type 非 GUID→R0114/R0171；MBR 上 GUID→R0176
-parted-01882	sites	认领	认领|R0115（MBR type 非 0xNN → TableEdit）
-parted-01888	sites	认领	认领|R0114（GPT type 非 GUID → TableEdit）
-parted-01895	sites	裁剪	裁剪|交互 INFORMATION/YES_NO_CANCEL（发现既有分区提示）；非交互等价=TableOccupied 拒绝（R0157；SA1-005）
-parted-01904	sites	拒绝	拒绝|parted 3.x 已移除 resize 命令；本实现按 sfdisk 语义提供 resize（SA1-004/SA1-013/SA1-014），不采纳该移除行为
-parted-01913	sites	裁剪	裁剪|交互确认（收缩告示 YES/NO）；非交互等价=拒绝不安全收缩（SA1-014，tests/case_runner.rs::resize_rewrites_the_table_and_refuses_unsafe_shrinks）
-parted-01951	sites	认领	认领|R0143（目标打不开→拒绝）
-parted-01957	sites	拒绝	拒绝|引导器重装告示依赖对用户环境的猜测，违背不猜边界；写后结果由退出码与记录承担（SA1-009）
-parted-01958	sites	拒绝	拒绝|fstab 更新提示依赖对用户挂载配置的猜测；同上不提供
-parted-02009	sites	认领	认领|R0082/R0108（需要 :N 选择器的形态校验）
-parted-02010	sites	认领	认领|选择器解析失败拒绝已有：R0082；无表目标→TableMissing（R0116/R0121）
-parted-02011	sites	认领	认领|R0091/R0078（值选项缺值报用法）
-parted-02012	sites	认领	认领|未登记族按未知拒绝已有：SA1-017（crates/core/src/fs/catalog.rs；R0134）
-parted-02014	sites	认领	认领|R0091/R0078（值选项缺值报用法）
-parted-02016	sites	认领	认领|R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP 类型 GUID）
-parted-02017	sites	认领	同上
-parted-02018	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs EditError::TableFull
-parted-02019	sites	认领	认领|R0091/R0078（值选项缺值报用法）
+parted-01829	sites	裁剪	裁剪|交互确认（占用告示 YES/NO）；非交互等价=占用闸拒绝（SA1-004，tests/online.rs）
+parted-01830	sites	认领	认领|占用拒绝已有：SA1-004（写命令先过占用闸；tests/online.rs）
+parted-01831	sites	裁剪	裁剪|交互确认（毁盘告示 YES/NO）；非交互等价=--overwrite-data 拒绝（SA1-005）
+parted-01866	sites	认领	认领|请求值不可精确满足时拒绝/下取整已有：R0173/R0174（place 拒绝 --start end/align）+SA1-014（--end 按 --align 下取整）
+parted-01868	sites	拒绝	拒绝|对齐由构造保证（SA1-008/SA1-014）；未对齐输入在 decide 拒绝（R0173/R0174），不设告示牌
+parted-01876	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
+parted-01886	sites	认领	认领|type 按标签校验已有：GPT type 非 GUID→R0114/R0171；MBR 上 GUID→R0176
+parted-01893	sites	认领	认领|R0115（MBR type 非 0xNN → TableEdit）
+parted-01899	sites	认领	认领|R0114（GPT type 非 GUID → TableEdit）
+parted-01906	sites	裁剪	裁剪|交互 INFORMATION/YES_NO_CANCEL（发现既有分区提示）；非交互等价=TableOccupied 拒绝（R0157；SA1-005）
+parted-01915	sites	拒绝	拒绝|parted 3.x 已移除 resize 命令；本实现按 sfdisk 语义提供 resize（SA1-004/SA1-013/SA1-014），不采纳该移除行为
+parted-01924	sites	裁剪	裁剪|交互确认（收缩告示 YES/NO）；非交互等价=拒绝不安全收缩（SA1-014，tests/case_runner.rs::resize_rewrites_the_table_and_refuses_unsafe_shrinks）
+parted-01962	sites	认领	认领|R0143（目标打不开→拒绝）
+parted-01968	sites	拒绝	拒绝|引导器重装告示依赖对用户环境的猜测，违背不猜边界；写后结果由退出码与记录承担（SA1-009）
+parted-01969	sites	拒绝	拒绝|fstab 更新提示依赖对用户挂载配置的猜测；同上不提供
+parted-02021	sites	认领	认领|R0082/R0108（需要 :N 选择器的形态校验）
+parted-02022	sites	认领	认领|选择器解析失败拒绝已有：R0082；无表目标→TableMissing（R0116/R0121）
+parted-02023	sites	认领	认领|R0091/R0078（值选项缺值报用法）
+parted-02024	sites	认领	认领|未登记族按未知拒绝已有：SA1-017（crates/core/src/fs/catalog.rs；R0134）
+parted-02026	sites	认领	认领|R0091/R0078（值选项缺值报用法）
+parted-02028	sites	认领	认领|R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP 类型 GUID）
+parted-02029	sites	认领	同上
+parted-02030	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs EditError::TableFull
+parted-02031	sites	认领	认领|R0091/R0078（值选项缺值报用法）

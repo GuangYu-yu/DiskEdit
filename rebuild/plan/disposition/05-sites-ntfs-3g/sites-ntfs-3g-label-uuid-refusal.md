@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-label-uuid-refusal（6 行）
+# 批次：sites-ntfs-3g-label-uuid-refusal（8 行）
 
 ## 判断
 ntfslabel 拒绝面：CLI/显式 serial 解析面裁剪（本实现 serial 仅生成）；挂载拒绝认领（占用闸）；超长标签截断登记差异。

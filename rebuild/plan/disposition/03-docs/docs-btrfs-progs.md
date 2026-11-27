@@ -1,4 +1,4 @@
-# 03-docs/docs-btrfs-progs（138 行）
+# 03-docs/docs-btrfs-progs（181 行）
 
 ## 判断
 - 认领 15：label（00018-00020，btrfs attrs 面 catalog.rs）、resize 语义（00028-00036，SA2-006/007/008/016）、min-dev-size 等价的失败拒绝（00062，SA2-007/016）、mkfs label（00094）、mkfs 拒绝覆盖取向（00104，SA1-005）。

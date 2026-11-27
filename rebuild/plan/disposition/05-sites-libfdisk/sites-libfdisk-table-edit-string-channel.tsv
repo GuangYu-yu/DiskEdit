@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-libfdisk-00781	sites	拒绝	测试驱动/调试输出内部件，不属行为合同。依据：SA1-022 同口径
-libfdisk-00825	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
-libfdisk-00828	sites	认领	同上
+libfdisk-00785	sites	拒绝	测试驱动/调试输出内部件，不属行为合同。依据：SA1-022 同口径
+libfdisk-00829	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
+libfdisk-00832	sites	认领	同上

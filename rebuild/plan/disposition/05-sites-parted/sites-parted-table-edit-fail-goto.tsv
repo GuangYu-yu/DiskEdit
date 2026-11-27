@@ -2,45 +2,47 @@ row_id	ledger	state	note
 parted-00327	sites	认领	认领|盘标探测/读取失败拒绝已有：R0132（src/app/observe/table.rs；crates/core/src/table）
 parted-00329	sites	认领	认领|建新表已有：crates/core/src/table/create.rs（SA1-005）
 parted-00330	sites	认领	认领|盘标探测/读取失败拒绝已有：R0132（src/app/observe/table.rs；crates/core/src/table）
-parted-00331	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00332	sites	拒绝	同上
-parted-00333	sites	认领	认领|add 落位与重叠拒绝已有：crates/core/src/table/edit.rs
-parted-00334	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00335	sites	拒绝	同上
-parted-00336	sites	拒绝	同上
-parted-00341	sites	拒绝	同上
-parted-00342	sites	拒绝	同上
+parted-00331	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00332	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00333	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00334	sites	拒绝	同上
+parted-00335	sites	认领	认领|add 落位与重叠拒绝已有：crates/core/src/table/edit.rs
+parted-00336	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00337	sites	拒绝	同上
+parted-00338	sites	拒绝	同上
 parted-00343	sites	拒绝	同上
 parted-00344	sites	拒绝	同上
-parted-00346	sites	认领	认领|换标清签名已有：SA1-005（src/app/observe/new.rs signature_sites）
-parted-00348	sites	认领	同上
-parted-00349	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00355	sites	拒绝	同上
-parted-00356	sites	拒绝	同上
+parted-00345	sites	拒绝	同上
+parted-00346	sites	拒绝	同上
+parted-00348	sites	认领	认领|换标清签名已有：SA1-005（src/app/observe/new.rs signature_sites）
+parted-00350	sites	认领	同上
+parted-00351	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00357	sites	拒绝	同上
 parted-00358	sites	拒绝	同上
-parted-00362	sites	认领	认领|表写已有：src/app/execute/table.rs/write.rs
-parted-00363	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00368	sites	拒绝	同上
-parted-00369	sites	认领	认领|SA1-005（new 遇已有数据须显式 --overwrite-data）
-parted-00370	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00371	sites	拒绝	同上
-parted-00372	sites	认领	认领|表写已有：src/app/execute/table.rs/write.rs
-parted-00373	sites	认领	认领|内核视图同步已有：SA1-013（BLKPG；src/platform/linux）
-parted-00374	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00409	sites	拒绝	同上
-parted-00410	sites	拒绝	同上
-parted-00411	sites	认领	认领|add 对齐已有：SA1-008（自动起点 1 MiB 对齐；crates/core/src/geometry）
-parted-00412	sites	认领	同上
-parted-00416	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00417	sites	拒绝	同上
-parted-00418	sites	拒绝	同上
-parted-00516	sites	认领	认领|add 枚举/对齐/落位已有：crates/core/src/table/edit.rs + SA1-008
-parted-00517	sites	认领	同上
-parted-00518	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00519	sites	认领	认领|add 枚举/对齐/落位已有：crates/core/src/table/edit.rs + SA1-008
+parted-00360	sites	拒绝	同上
+parted-00364	sites	认领	认领|表写已有：src/app/execute/table.rs/write.rs
+parted-00365	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00370	sites	拒绝	同上
+parted-00371	sites	认领	认领|SA1-005（new 遇已有数据须显式 --overwrite-data）
+parted-00372	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00373	sites	拒绝	同上
+parted-00374	sites	认领	认领|表写已有：src/app/execute/table.rs/write.rs
+parted-00375	sites	认领	认领|内核视图同步已有：SA1-013（BLKPG；src/platform/linux）
+parted-00376	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00411	sites	拒绝	同上
+parted-00412	sites	拒绝	同上
+parted-00413	sites	认领	认领|add 对齐已有：SA1-008（自动起点 1 MiB 对齐；crates/core/src/geometry）
+parted-00414	sites	认领	同上
+parted-00418	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00419	sites	拒绝	同上
+parted-00420	sites	拒绝	同上
+parted-00518	sites	认领	认领|add 枚举/对齐/落位已有：crates/core/src/table/edit.rs + SA1-008
+parted-00519	sites	认领	同上
 parted-00520	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00534	sites	拒绝	同上
-parted-00535	sites	认领	认领|写前校验已有：R0170（decide precheck 拒绝损坏 GPT）+edit.rs 重叠校验
-parted-00536	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
-parted-00537	sites	拒绝	同上
-parted-00541	sites	拒绝	同上
+parted-00521	sites	认领	认领|add 枚举/对齐/落位已有：crates/core/src/table/edit.rs + SA1-008
+parted-00522	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00536	sites	拒绝	同上
+parted-00537	sites	认领	认领|写前校验已有：R0170（decide precheck 拒绝损坏 GPT）+edit.rs 重叠校验
+parted-00538	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00539	sites	拒绝	同上
+parted-00543	sites	拒绝	同上

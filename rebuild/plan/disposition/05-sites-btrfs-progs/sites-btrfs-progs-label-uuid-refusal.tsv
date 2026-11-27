@@ -1,7 +1,8 @@
 row_id	ledger	state	note
-btrfs-progs-00489	sites	裁剪	裁剪：btrfstune -m metadata UUID 特性（seed 设备拒绝、unfinished fsid 校验）——本实现只用 -U/-u（fsid 变更），metadata UUID 面不在消费范围
-btrfs-progs-00490	sites	裁剪	同上
-btrfs-progs-00494	sites	认领	同上
-btrfs-progs-00502	sites	认领	同上
-btrfs-progs-00504	sites	认领	同上
-btrfs-progs-00506	sites	认领	同上
+btrfs-progs-00597	sites	裁剪	裁剪：btrfstune -m metadata UUID 特性（seed 设备拒绝、unfinished fsid 校验）——本实现只用 -U/-u（fsid 变更），metadata UUID 面不在消费范围
+btrfs-progs-00598	sites	裁剪	同上
+btrfs-progs-00600	sites	认领	认领：btrfstune fsid 变更（-f -U 指定值 / -f -u 生成）的拒绝与失败路径，调用时生效、退出码消费——uuid_program(Btrfs)=Btrfstune（crates/core/src/fs/attrs.rs）、src/app/execute/filesystem.rs content_property
+btrfs-progs-00602	sites	认领	同上
+btrfs-progs-00610	sites	认领	同上
+btrfs-progs-00612	sites	认领	同上
+btrfs-progs-00614	sites	认领	同上

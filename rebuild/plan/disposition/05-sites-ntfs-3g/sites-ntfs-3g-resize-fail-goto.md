@@ -1,4 +1,4 @@
-# 批次：sites-ntfs-3g-resize-fail-goto（2 行）
+# 批次：sites-ntfs-3g-resize-fail-goto（4 行）
 
 ## 判断
 ntfsresize 位图核对/重定位失败清理：链内行为，认领引 SA2-009/015。

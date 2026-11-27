@@ -1,4 +1,4 @@
-# 02-incidents/inc-xfsprogs（93 行）
+# 02-incidents/inc-xfsprogs（102 行）
 
 ## 判断
 - 裁剪 93：全部为依赖工具 xfsprogs（xfs_repair/mkfs.xfs/xfs_db/xfs_io/metadump/quota/logprint/libxfs）内部修复/特性；本实现仅按档案表以 xfs_growfs 承接在线扩容（SA2-004/005）及登记的 mkfs/attrs 面（SA2-012），工具内部随发行版版本固定（SA2-011）。

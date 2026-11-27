@@ -1,15 +1,15 @@
 row_id	ledger	state	note
-xfsprogs-imp-00006	implicit	认领	mkfs.xfs force_overwrite/check_overwrite ↔ 建卷前占用+已有数据闸（写任何字节前拒绝/显式确认）；依据 SA1-005、SA2-012；锚 src/app/decide/new.rs、src/app/decide/filesystem.rs::Occupied
-xfsprogs-imp-00007	implicit	认领	同上
+xfsprogs-imp-00007	implicit	认领	mkfs.xfs force_overwrite/check_overwrite ↔ 建卷前占用+已有数据闸（写任何字节前拒绝/显式确认）；依据 SA1-005、SA2-012；锚 src/app/decide/new.rs、src/app/decide/filesystem.rs::Occupied
 xfsprogs-imp-00008	implicit	认领	同上
 xfsprogs-imp-00009	implicit	认领	同上
 xfsprogs-imp-00010	implicit	认领	同上
-xfsprogs-imp-00011	implicit	认领	同上
-xfsprogs-imp-00012	implicit	认领	同上
+xfsprogs-imp-00011	implicit	待判	换版重放：本行在上游新版本新增或改写
 xfsprogs-imp-00013	implicit	认领	同上
 xfsprogs-imp-00014	implicit	认领	同上
 xfsprogs-imp-00015	implicit	认领	同上
-xfsprogs-imp-00016	implicit	裁剪	xfs_db 调试器 -F 强制读；xfs 面只登记 growfs（SA2-004/005），调试器不纳入
+xfsprogs-imp-00016	implicit	认领	同上
 xfsprogs-imp-00017	implicit	认领	同上
-xfsprogs-imp-00018	implicit	认领	同上
+xfsprogs-imp-00018	implicit	裁剪	xfs_db 调试器 -F 强制读；xfs 面只登记 growfs（SA2-004/005），调试器不纳入
 xfsprogs-imp-00019	implicit	认领	同上
+xfsprogs-imp-00020	implicit	认领	同上
+xfsprogs-imp-00021	implicit	认领	同上

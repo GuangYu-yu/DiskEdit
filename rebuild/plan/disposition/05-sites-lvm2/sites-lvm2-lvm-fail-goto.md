@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-lvm-fail-goto（51 行）
+# 批次：sites-lvm2-lvm-fail-goto（75 行）
 
 ## 判断
 lvm CLI 与库内部失败清理（goto out）：裁剪。

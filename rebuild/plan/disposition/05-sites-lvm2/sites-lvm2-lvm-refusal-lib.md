@@ -1,4 +1,4 @@
-# 批次：sites-lvm2-lvm-refusal-lib（316 行）
+# 批次：sites-lvm2-lvm-refusal-lib（348 行）
 
 ## 判断
 lvm 库拒绝面：库内部路径裁剪；其中 PV/VG/LV 尺寸校验与 pvresize 边界行（_reduce_pv/_extend_pv/_pv_resize/MAX_EXTENT_COUNT）认领引 SA2-017；INTERNAL_ERROR 行拒绝。

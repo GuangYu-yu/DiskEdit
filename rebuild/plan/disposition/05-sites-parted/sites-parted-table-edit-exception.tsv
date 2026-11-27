@@ -1,28 +1,28 @@
 row_id	ledger	state	note
 parted-00328	sites	认领	认领|未知盘标拒绝已有：R0132（CaptureError::Unreadable）；SA1-016 note（统一按不识别拒绝并提示）
-parted-00366	sites	认领	认领|不识别盘标统一拒绝已有：SA1-016（无写支持面一并按不识别拒绝）
-parted-00378	sites	认领	认领|文件系统尺寸回读证实已有：SA2-003/SA2-005（src/app/execute/filesystem.rs；只接受恰好填满目标）
-parted-00386	sites	认领	认领|旗标可用性已有：R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP）
-parted-00389	sites	认领	认领|R0119/R0120（未知/非法旗标拒绝）
-parted-00391	sites	认领	认领|旗标可用性已有：R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP）
-parted-00415	sites	认领	认领|扩展/逻辑类型按标签校验已有：R0114/R0171+crates/core/src/table/edit.rs（extended-container 越界拒绝）
-parted-00428	sites	认领	同上
-parted-00443	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
-parted-00444	sites	认领	认领|R0114/R0171（GPT 上 0xNN 类型 → TableEdit）
-parted-00445	sites	认领	认领|R0176（MBR 上 GUID 类型 → TableEdit）
-parted-00446	sites	认领	认领|R0165（MBR 无 PARTUUID 写位；身份语义见 SA1-007：copy 派生新确定性 PARTUUID）
-parted-00500	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
-parted-00501	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs EditError::TableFull
-parted-00503	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
-parted-00506	sites	裁剪	同上
-parted-00507	sites	裁剪	同上
+parted-00368	sites	认领	认领|不识别盘标统一拒绝已有：SA1-016（无写支持面一并按不识别拒绝）
+parted-00380	sites	认领	认领|文件系统尺寸回读证实已有：SA2-003/SA2-005（src/app/execute/filesystem.rs；只接受恰好填满目标）
+parted-00388	sites	认领	认领|旗标可用性已有：R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP）
+parted-00391	sites	认领	认领|R0119/R0120（未知/非法旗标拒绝）
+parted-00393	sites	认领	认领|旗标可用性已有：R0120（MBR 仅 boot/hidden）+SA1-015（GPT boot→ESP）
+parted-00417	sites	认领	认领|扩展/逻辑类型按标签校验已有：R0114/R0171+crates/core/src/table/edit.rs（extended-container 越界拒绝）
+parted-00430	sites	认领	同上
+parted-00445	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
+parted-00446	sites	认领	认领|R0114/R0171（GPT 上 0xNN 类型 → TableEdit）
+parted-00447	sites	认领	认领|R0176（MBR 上 GUID 类型 → TableEdit）
+parted-00448	sites	认领	认领|R0165（MBR 无 PARTUUID 写位；身份语义见 SA1-007：copy 派生新确定性 PARTUUID）
+parted-00502	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
+parted-00503	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs EditError::TableFull
+parted-00505	sites	裁剪	裁剪|逻辑分区写侧不入范围：扩展容器类型按越界拒绝（crates/core/src/table/edit.rs）；读侧链遍历见 crates/core/src/table/mbr/extended.rs
+parted-00508	sites	裁剪	同上
 parted-00509	sites	裁剪	同上
-parted-00510	sites	认领	认领|重叠拒绝已有：crates/core/src/table/edit.rs（mbr_add_uses_the_first_empty_slot_and_rejects_overlap）
-parted-00511	sites	认领	认领|R0182（分区出盘→PastAddressSpace）
-parted-00514	sites	认领	认领|重叠拒绝已有：crates/core/src/table/edit.rs（mbr_add_uses_the_first_empty_slot_and_rejects_overlap）
-parted-00532	sites	认领	同上
-parted-00547	sites	认领	认领|R0119/R0120（未知旗标拒绝）
-parted-00857	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
-parted-00859	sites	裁剪	同上
-parted-00861	sites	裁剪	同上
-parted-00864	sites	裁剪	同上
+parted-00511	sites	裁剪	同上
+parted-00512	sites	认领	认领|重叠拒绝已有：crates/core/src/table/edit.rs（mbr_add_uses_the_first_empty_slot_and_rejects_overlap）
+parted-00513	sites	认领	认领|R0182（分区出盘→PastAddressSpace）
+parted-00516	sites	认领	认领|重叠拒绝已有：crates/core/src/table/edit.rs（mbr_add_uses_the_first_empty_slot_and_rejects_overlap）
+parted-00534	sites	认领	同上
+parted-00549	sites	认领	认领|R0119/R0120（未知旗标拒绝）
+parted-00864	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
+parted-00866	sites	裁剪	同上
+parted-00868	sites	裁剪	同上
+parted-00871	sites	裁剪	同上

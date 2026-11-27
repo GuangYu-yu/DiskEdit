@@ -1,23 +1,31 @@
 row_id	ledger	state	note
-ntfs-3g-00081	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00082	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00091	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00092	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00093	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00094	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00095	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00096	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00097	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00086	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00087	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00094	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00096	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00099	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
 ntfs-3g-00100	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
 ntfs-3g-00101	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
 ntfs-3g-00102	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
 ntfs-3g-00103	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
 ntfs-3g-00104	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00107	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00108	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00110	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00112	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00113	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00105	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00108	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00109	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00111	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00112	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00113	sites	待判	换版重放：本行在上游新版本新增或改写
 ntfs-3g-00114	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00118	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
-ntfs-3g-00123	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00115	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00116	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00117	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00120	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00121	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00123	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00125	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00127	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00129	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00130	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00131	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00135	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
+ntfs-3g-00140	sites	裁剪	裁剪：ntfsinfo 探针面——本实现不实现 ntfsinfo；识别/几何以档案表与消费工具输出为事实源（SA2-012 范围）
