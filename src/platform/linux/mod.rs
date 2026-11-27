@@ -836,7 +836,8 @@ fn block_identity(path: &Path, metadata: &std::fs::Metadata) -> PlatformResult<F
     }
     // loop 设备没有 WWN/EUI/序列号，但它的承载文件是稳定事实：文件身份 + 映射
     // 偏移/长度 + 分区起点与长度足以跨次识别同一目标。
-    if let Some(fingerprint) = loop_identity(&topology, metadata) {
+    let sysfs = Path::new("/sys/class/block").join(&topology.disk);
+    if let Some(fingerprint) = loop_identity(&sysfs, &topology, metadata) {
         return Ok(fingerprint);
     }
     Ok(Fingerprint::unusable([0u8; 32]))
@@ -914,11 +915,14 @@ fn stable_serial(path: &Path) -> Option<String> {
 }
 
 /// loop 设备：承载文件身份 + 映射偏移/限长 + 分区位置。
-fn loop_identity(topology: &Topology, metadata: &std::fs::Metadata) -> Option<Fingerprint> {
-    let base = Path::new("/sys/class/block").join(&topology.disk);
-    let backing = sysfs_text(&base.join("loop/backing_file"))?;
-    let offset = sysfs_u64(&base.join("loop/offset")).unwrap_or(0);
-    let sizelimit = sysfs_u64(&base.join("loop/sizelimit")).unwrap_or(0);
+fn loop_identity(
+    sysfs: &Path,
+    topology: &Topology,
+    metadata: &std::fs::Metadata,
+) -> Option<Fingerprint> {
+    let backing = sysfs_text(&sysfs.join("loop/backing_file"))?;
+    let offset = sysfs_u64(&sysfs.join("loop/offset"))?;
+    let sizelimit = sysfs_u64(&sysfs.join("loop/sizelimit"))?;
     // 承载文件的身份取自文件本身（设备号 + inode + 长度），不是 sysfs 路径字符串：
     // 同一路径被换成另一个文件时必须识别为不同目标。
     let file = std::fs::metadata(Path::new("/").join(&backing)).ok()?;
@@ -1287,6 +1291,40 @@ mod tests {
         bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
         std::fs::write(&image, &bytes).expect("镜像可写");
         assert!(btrfs_multidevice(&image).is_none(), "单设备不算占用");
+
+        std::fs::remove_dir_all(&root).expect("清理临时根");
+    }
+
+    #[test]
+    fn a_loop_identity_without_its_mapping_facts_is_not_guessed() {
+        // sysfs 缺 `loop/sizelimit` 时，身份不能把缺失当成 0：映射偏移与限长是
+        // 跨次识别同一目标的依据，猜一个值继续就会把不同目标认成同一个。
+        let root = temporary_root("loop-identity");
+        let sysfs = root.join("sysfs");
+        std::fs::create_dir_all(sysfs.join("loop")).expect("临时 sysfs 可建立");
+        let backing = root.join("backing.img");
+        std::fs::write(&backing, b"x").expect("承载文件可写");
+        std::fs::write(
+            sysfs.join("loop/backing_file"),
+            format!("{}\n", backing.display()),
+        )
+        .expect("backing_file 可写");
+        std::fs::write(sysfs.join("loop/offset"), b"0\n").expect("offset 可写");
+        let metadata = std::fs::metadata(&backing).expect("元数据可读");
+        let topology = Topology {
+            disk: "loop0".to_owned(),
+            partition: None,
+        };
+        assert!(
+            loop_identity(&sysfs, &topology, &metadata).is_none(),
+            "缺少 sizelimit 时不得按 0 拼出身份"
+        );
+
+        std::fs::write(sysfs.join("loop/sizelimit"), b"0\n").expect("sizelimit 可写");
+        assert!(
+            loop_identity(&sysfs, &topology, &metadata).is_some(),
+            "映射事实齐全时应给出身份"
+        );
 
         std::fs::remove_dir_all(&root).expect("清理临时根");
     }

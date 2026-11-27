@@ -598,6 +598,39 @@ fn a_record_that_cannot_be_read_is_an_environment_failure() {
     assert_eq!(code, ENVIRONMENT, "读取记录失败必须按环境失败上报");
 }
 
+// covers: I14
+#[test]
+fn a_grow_chain_naming_a_smaller_target_than_its_recorded_size_is_invalid() {
+    // 决策层只会产出变大的 PV 尺寸。执行边界若看到 new < old，计划就自相矛盾：
+    // 不能把差值按 0 处理再照常 pvresize，那会静默把 PV 缩小。
+    let region = Region::sized(0, SECTOR).expect("区间可构造");
+    let step = Step::new(
+        StepKind::LvmGrowChain {
+            partition: 1,
+            start_bytes: 0,
+            old_bytes: 2 * 1024 * 1024,
+            new_bytes: 1024 * 1024,
+            grow_lv: false,
+            lv: None,
+        },
+        vec![region],
+    );
+    let plan = Plan::write(vec![step], IDENTITY).expect("计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    let plan = confirm(plan, true, &current).expect("计划可确认");
+    let outcome = diskedit::app::execute::lvm::run(
+        &diskedit::platform::UnsupportedPlatform,
+        Path::new("memory"),
+        &plan,
+    );
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    let reason = outcome.reason().unwrap_or_default();
+    assert!(
+        reason.contains("smaller than"),
+        "自相矛盾的 grow 计划应按无效计划拒绝，实际：{reason}"
+    );
+}
+
 // covers: D10
 #[test]
 fn a_host_without_a_backend_refuses_with_the_unsupported_code() {

@@ -249,9 +249,11 @@ mod tests {
     fn foreign_magic_is_reported_without_reading_frames() {
         let mut bytes = bytes_with(&all_frames());
         bytes[0] = b'Z';
+        let mut expected = crate::record::MAGIC;
+        expected[0] = b'Z';
         assert_eq!(
             recover(&bytes, TARGET),
-            RecoveryPlan::Foreign { magic: *b"ZRB2" }
+            RecoveryPlan::Foreign { magic: expected }
         );
     }
 
