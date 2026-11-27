@@ -37,10 +37,10 @@ fn sections(text: &str) -> Vec<(String, Vec<String>)> {
     for line in text.lines() {
         if line.starts_with('#') {
             out.push((line.to_string(), Vec::new()));
-        } else if let Some((_, blocks)) = out.last_mut() {
-            if !line.trim().is_empty() {
-                blocks.push(line.to_string());
-            }
+        } else if let Some((_, blocks)) = out.last_mut()
+            && !line.trim().is_empty()
+        {
+            blocks.push(line.to_string());
         }
     }
     out
