@@ -8,9 +8,9 @@ use crate::table::crc32;
 
 /// 记录文件的格式标识。
 ///
-/// 布局或语义变化就换标识：旧标识的记录按外来格式拒绝，只允许
-/// `recover --release`。标识必须与 `docs/*/internals.md` 写明的 `DRE2` 一致。
-pub const MAGIC: [u8; 4] = *b"DRE2";
+/// 名字里不带版本号：布局或语义变化就换一个新标识，旧标识的记录按外来格式
+/// 拒绝，只允许 `recover --release`。
+pub const MAGIC: [u8; 4] = *b"DREC";
 
 /// 记录头长度，字节。
 pub const HEADER_LEN: usize = 16;
@@ -124,14 +124,13 @@ mod tests {
     }
 
     #[test]
-    fn the_retired_magic_is_refused_as_a_foreign_format() {
-        // 代码曾经写 `DRB2`，而文档写的是 `DRE2`。这两个名字都不再是当前格式：
-        // 携带旧标识且头字段自洽的记录只能按外来格式拒绝，交给
+    fn a_non_current_magic_is_refused_as_a_foreign_format() {
+        // 头字段自洽但标识不是当前值的记录只能按外来格式拒绝，交给
         // `recover --release` 处理，不能被当成本实现的记录解析。
         let mut bytes = RecordHeader::of_payload(b"x")
             .expect("载荷应可编码")
             .to_bytes();
-        bytes[..4].copy_from_slice(b"DRB2");
+        bytes[..4].copy_from_slice(b"ZZZZ");
         let crc = crc32(&bytes[HEADER_CRC_RANGE]);
         bytes[12..16].copy_from_slice(&crc.to_le_bytes());
         assert!(matches!(

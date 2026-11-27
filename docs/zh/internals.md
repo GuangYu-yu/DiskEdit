@@ -48,11 +48,11 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 记录中的磁盘 GUID 凭据
 
-除身份段之外，记录（magic `DRE2`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DRE2` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `diskedit release` 放弃。`release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
+除身份段之外，记录（magic `DREC`，16 字节头部由 magic、载荷长度、载荷 CRC 与头部 CRC 组成——没有单独的版本字段）以三种状态保存目标的 GPT 磁盘 GUID：`Present` / `Unavailable` / `GeneratedThisOperation`。`Present` 必须与磁盘一致；`Unavailable` 表示目标上没有可读的 GPT（MBR / 未分区），不构成证据；`GeneratedThisOperation` 只出现在记录侧（整张表由写入该记录的操作生成），不与磁盘 GUID 比较。两侧均为 `Present` 但值不同、记录为 `Present` 而目标没有可读 GPT、记录为 `Unavailable` 而目标现在带有 GPT，都是身份不匹配。**一种 magic 一种布局**：magic 不是 `DREC` 的记录按无法识别的格式报告（`UnrecognizedFormat`，携带 magic 字节）；本次构建不回放也不迁移它，会写盘的命令以退出码 3 拒绝。因此旧版本写下的记录无法续跑：用写下它的那个版本完成，再用 `diskedit release` 放弃。`release` 的自动隔离要求探测能解码整条记录（magic、头部 CRC、载荷 CRC 以及每个尾部段），且记录的身份属于当前载体。
 
 ## 恢复记录的位置
 
-恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DRE2`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。非 Linux 是保留的移植位：它只用 `symlink_metadata` 回答存在性，从不读取内容，因此那里的普通文件按"不可读"拒绝——在该平台上本次构建可以拒绝，但无法读取记录。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
+恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DREC`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。非 Linux 是保留的移植位：它只用 `symlink_metadata` 回答存在性，从不读取内容，因此那里的普通文件按"不可读"拒绝——在该平台上本次构建可以拒绝，但无法读取记录。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
 
 ## Windows 上的目录项持久性
 
