@@ -45,6 +45,9 @@
 | `records list` | 可以 | 可以 | 可以 |
 | `records verify` | 可以 | 可以 | 可以 |
 | `records show` | 可以 | 可以 | 可以 |
+| `undo` | 可以 | 可以（需 root） | 拒绝（6） |
+| `replay` | 可以 | 可以（需 root） | 拒绝（6） |
+| `release` | 可以 | 可以（需 root） | 拒绝（6） |
 | `resize` | 可以 | 可以（需 root） | 拒绝（6） |
 | `move` | 可以 | 可以（需 root） | 拒绝（6） |
 | `copy` | 可以 | 可以（需 root） | 拒绝（6） |
@@ -52,8 +55,6 @@
 | `set` | 可以 | 可以（需 root） | 拒绝（6） |
 | `check` | 可以 | 可以 | 可以 |
 | `mkfs` | 可以 | 可以（需 root） | 拒绝（6） |
-| `resize --fs-only` | 可以 | 可以（需 root） | 拒绝（6） |
-| `undo` / `replay` / `release` | 可以 | 可以（需 root） | 拒绝（6） |
 | `new` | 可以 | 可以（需 root） | 拒绝（6） |
 | `add` | 可以 | 可以（需 root） | 拒绝（6） |
 
