@@ -12,7 +12,7 @@ This document answers one narrow question: when a fact is missing or an observat
 
 It does not repair a partition table it did not write. A corrupt primary or backup header, a wrong CRC, overlapping existing entries, a missing protective MBR, or a table of unknown origin is reported and left alone. Reading such a table to decide whether it is safe to proceed is allowed; writing, adopting, or "fixing" it is not.
 
-It does not reconstruct or adopt records from another tool, another product, or an unknown schema. A record whose ownership cannot be established is preserved and refused. Recovery is limited to state this tool created, including records written by earlier released versions when their schema is known.
+It does not reconstruct or adopt records from another tool, another product, or an unknown schema. A record whose ownership cannot be established is preserved and refused. Recovery is limited to records in the current format. A record written by an earlier format is treated as foreign: it is preserved and may be released, but it is not resumed.
 
 It does not rescue data. Bad sectors, deleted partitions, overwritten filesystems, failing drives, and forensic recovery are outside the command set. A read-only report is allowed; recovery of user data is not promised.
 
@@ -30,11 +30,11 @@ It does not grow a repair mode under the name of recovery. Recovery resumes or r
 
 An operation can look like one of the exclusions above and still be allowed in these cases.
 
-Recovering our own state is in scope. A record left by this tool, a table this tool wrote halfway, or an external step this tool started can be resumed, rolled back, quarantined, or released. The same applies to records from earlier released versions when their schema is known and tested; an unknown schema is refused.
+Recovering our own state is in scope. A record left by this tool, a table this tool wrote halfway, or an external step this tool started can be resumed, rolled back, quarantined, or released. This applies only to the current record format; a record from an earlier format is not resumed, only preserved and released.
 
 Read-only inspection is allowed. Reading a foreign record, an unknown table, or a damaged header to decide whether proceeding is safe does not violate the boundary, as long as nothing is written, adopted, deleted, or repaired.
 
-Documented compatibility is allowed. Old record formats, CLI aliases, and behaviours that appear in the README, reference, capability matrix, or previous release are product promises. They may be kept, but each needs tests and an owner. This policy does not authorize dropping them.
+Documented compatibility is allowed for CLI aliases and behaviours that appear in the README, reference, capability matrix, or previous release. Record formats are not included: the reader accepts the current format, and a record with a different magic is foreign. If an old record format is ever promised, it needs an explicit entry, tests, and an owner; this policy does not imply it.
 
 Documented features that touch these areas remain product scope. Online resize, LVM handling, the VM carrier, and image formats are features when they appear in the command surface or capability matrix. They are not fallbacks, and this policy is not a reason to remove them.
 
@@ -62,7 +62,7 @@ Before continuing, check whether continuing is safe under every interpretation. 
 
 If a degraded step fails halfway, the state it leaves must be recognizable by the next run. A half-written, half-changed, or half-completed operation must not look successful. Retries are allowed only after the write fact is recorded and only when repeating the step cannot duplicate a side effect. Retry, compatibility, and repair are different things and cannot substitute for one another.
 
-Every fallback that remains must justify itself. It needs a test that fails when the fallback is removed; an empty branch with no such test is either given one or deleted. Compatibility with older records, retrying after the kernel view lags, and reporting an unsupported platform are legitimate categories, but each has a boundary: old formats only for records this tool created with a known schema, retries only after the write fact is set, and unsupported platforms only refused, never emulated.
+Every fallback that remains must justify itself. It needs a test that fails when the fallback is removed; an empty branch with no such test is either given one or deleted. Retrying after the kernel view lags and reporting an unsupported platform are legitimate categories, but each has a boundary: retries only after the write fact is set, and unsupported platforms only refused, never emulated. Older record formats are not a compatibility category; they are foreign and release-only.
 
 Finally, a fallback must not expand the tool's responsibility. Supporting a format, platform, or repair scenario that was never promised, or bypassing permission, ownership, or identity checks to make progress, is not allowed. A fallback must not quietly change what the user sees. If it changes the result, the user has to know.
 
