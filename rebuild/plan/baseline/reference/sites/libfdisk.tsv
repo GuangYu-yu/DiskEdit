@@ -1,0 +1,936 @@
+site_id	tool	version	layer	area	category	tags	file	line	symbol	finding	risk	disposition	note
+libfdisk-00001	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart-fullspec.c	39	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); fputc('\n', stderr); break;	medium	待判	
+libfdisk-00002	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart-fullspec.c	44	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); errno = fdisk_ask_print_get_errno(ask); fprintf(stderr, ": %m\n");	medium	待判	
+libfdisk-00003	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart-fullspec.c	46	ask_callback	fprintf(stderr, ": %m\n"); break; default:	medium	待判	
+libfdisk-00004	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	98	main	errx(EXIT_FAILURE, "no device specified"); if (!label) label = "dos";	high	待判	
+libfdisk-00005	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	112	main	err(EXIT_FAILURE, "failed to assign device"); if (fdisk_create_disklabel(cxt, label)) err(EXIT_FAILURE, "failed to create disk label");	high	待判	
+libfdisk-00006	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	114	main	err(EXIT_FAILURE, "failed to create disk label"); fdisk_disable_dialogs(cxt, 1);	high	待判	
+libfdisk-00007	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	130	main	errx(EXIT_FAILURE, "failed to parse %s", str); fdisk_partition_partno_follow_default(pa, 1); fdisk_partition_unset_partno(pa);	high	待判	
+libfdisk-00008	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	136	main	errx(EXIT_FAILURE, "failed to parse %s", str); fdisk_partition_partno_follow_default(pa, 0);	high	待判	
+libfdisk-00009	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	174	main	errx(EXIT_FAILURE, "failed to add #%zu partition", fdisk_partition_has_partno(pa) ? fdisk_partition_get_partno(pa) + 1: n);	high	待判	
+libfdisk-00010	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart-fullspec.c	185	main	err(EXIT_FAILURE, "failed to write disk label"); fdisk_deassign_device(cxt, 1);	high	待判	
+libfdisk-00011	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart.c	51	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); fputc('\n', stderr); break;	medium	待判	
+libfdisk-00012	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart.c	56	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); errno = fdisk_ask_print_get_errno(ask); fprintf(stderr, ": %m\n");	medium	待判	
+libfdisk-00013	libfdisk	2.39.3	T1	table-edit	error-report	error-report	libfdisk/samples/mkpart.c	58	ask_callback	fprintf(stderr, ": %m\n"); break; default:	medium	待判	
+libfdisk-00014	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart.c	117	main	errx(EXIT_FAILURE, "no device specified"); if (!label) label = "dos";	high	待判	
+libfdisk-00015	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart.c	134	main	err(EXIT_FAILURE, "failed to assign device"); if (fdisk_create_disklabel(cxt, label)) err(EXIT_FAILURE, "failed to create disk label");	high	待判	
+libfdisk-00016	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart.c	136	main	err(EXIT_FAILURE, "failed to create disk label"); sectorsize = fdisk_get_sector_size(cxt);	high	待判	
+libfdisk-00017	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart.c	189	main	errx(EXIT_FAILURE, "failed to add #%d partition", n + 1); }	high	待判	
+libfdisk-00018	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/samples/mkpart.c	198	main	err(EXIT_FAILURE, "failed to write disk label"); fdisk_deassign_device(cxt, 1);	high	待判	
+libfdisk-00019	libfdisk	2.39.3	T1	align	fail-goto	fail-goto	libfdisk/src/alignment.c	153	fdisk_align_lba_in_range	goto done; }	high	待判	
+libfdisk-00020	libfdisk	2.39.3	T1	align	assert	assert	libfdisk/src/alignment.c	423	fdisk_zeroize_device_properties	assert(cxt); cxt->io_size = 0;	high	待判	
+libfdisk-00021	libfdisk	2.39.3	T1	align	assert	assert	libfdisk/src/alignment.c	482	fdisk_discover_geometry	assert(cxt); assert(cxt->geom.heads == 0);	high	待判	
+libfdisk-00022	libfdisk	2.39.3	T1	align	assert	assert	libfdisk/src/alignment.c	483	fdisk_discover_geometry	assert(cxt->geom.heads == 0); DBG(CXT, ul_debugobj(cxt, "%s: discovering geometry...", cxt->dev_path));	high	待判	
+libfdisk-00023	libfdisk	2.39.3	T1	align	assert	assert	libfdisk/src/alignment.c	521	fdisk_discover_topology	assert(cxt); assert(cxt->sector_size == 0);	high	待判	
+libfdisk-00024	libfdisk	2.39.3	T1	align	assert	assert	libfdisk/src/alignment.c	522	fdisk_discover_topology	assert(cxt->sector_size == 0); DBG(CXT, ul_debugobj(cxt, "%s: discovering topology...", cxt->dev_path));	high	待判	
+libfdisk-00025	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	29	fdisk_set_ask	assert(cxt); cxt->ask_cb = ask_cb;	high	待判	
+libfdisk-00026	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	52	fdisk_reset_ask	assert(ask); free(ask->query);	high	待判	
+libfdisk-00027	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	106	fdisk_ask_get_query	assert(ask); return ask->query; }	high	待判	
+libfdisk-00028	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	112	fdisk_ask_set_query	assert(ask); return strdup_to_struct_member(ask, query, str); }	high	待判	
+libfdisk-00029	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	124	fdisk_ask_get_type	assert(ask); return ask->type; }	high	待判	
+libfdisk-00030	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	130	fdisk_ask_set_type	assert(ask); ask->type = type; return 0;	high	待判	
+libfdisk-00031	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	139	fdisk_do_ask	assert(ask); assert(cxt);	high	待判	
+libfdisk-00032	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	140	fdisk_do_ask	assert(cxt); DBG(ASK, ul_debugobj(ask, "do_ask for '%s'",	high	待判	
+libfdisk-00033	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	178	fdisk_ask_number_get_range	assert(ask); assert(is_number_ask(ask)); return ask->data.num.range;	high	待判	
+libfdisk-00034	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	179	fdisk_ask_number_get_range	assert(is_number_ask(ask)); return ask->data.num.range; }	high	待判	
+libfdisk-00035	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	185	fdisk_ask_number_set_range	assert(ask); assert(is_number_ask(ask)); ask->data.num.range = range;	high	待判	
+libfdisk-00036	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	186	fdisk_ask_number_set_range	assert(is_number_ask(ask)); ask->data.num.range = range; return 0;	high	待判	
+libfdisk-00037	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	200	fdisk_ask_number_get_default	assert(ask); assert(is_number_ask(ask)); return ask->data.num.dfl;	high	待判	
+libfdisk-00038	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	201	fdisk_ask_number_get_default	assert(is_number_ask(ask)); return ask->data.num.dfl; }	high	待判	
+libfdisk-00039	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	207	fdisk_ask_number_set_default	assert(ask); ask->data.num.dfl = dflt; return 0;	high	待判	
+libfdisk-00040	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	220	fdisk_ask_number_get_low	assert(ask); assert(is_number_ask(ask)); return ask->data.num.low;	high	待判	
+libfdisk-00041	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	221	fdisk_ask_number_get_low	assert(is_number_ask(ask)); return ask->data.num.low; }	high	待判	
+libfdisk-00042	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	227	fdisk_ask_number_set_low	assert(ask); ask->data.num.low = low; return 0;	high	待判	
+libfdisk-00043	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	240	fdisk_ask_number_get_high	assert(ask); assert(is_number_ask(ask)); return ask->data.num.hig;	high	待判	
+libfdisk-00044	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	241	fdisk_ask_number_get_high	assert(is_number_ask(ask)); return ask->data.num.hig; }	high	待判	
+libfdisk-00045	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	247	fdisk_ask_number_set_high	assert(ask); ask->data.num.hig = high; return 0;	high	待判	
+libfdisk-00046	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	260	fdisk_ask_number_get_result	assert(ask); assert(is_number_ask(ask)); return ask->data.num.result;	high	待判	
+libfdisk-00047	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	261	fdisk_ask_number_get_result	assert(is_number_ask(ask)); return ask->data.num.result; }	high	待判	
+libfdisk-00048	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	274	fdisk_ask_number_set_result	assert(ask); ask->data.num.result = result; return 0;	high	待判	
+libfdisk-00049	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	287	fdisk_ask_number_get_base	assert(ask); assert(is_number_ask(ask)); return ask->data.num.base;	high	待判	
+libfdisk-00050	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	288	fdisk_ask_number_get_base	assert(is_number_ask(ask)); return ask->data.num.base; }	high	待判	
+libfdisk-00051	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	294	fdisk_ask_number_set_base	assert(ask); ask->data.num.base = base; return 0;	high	待判	
+libfdisk-00052	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	307	fdisk_ask_number_get_unit	assert(ask); assert(is_number_ask(ask)); return ask->data.num.unit;	high	待判	
+libfdisk-00053	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	308	fdisk_ask_number_get_unit	assert(is_number_ask(ask)); return ask->data.num.unit; }	high	待判	
+libfdisk-00054	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	314	fdisk_ask_number_set_unit	assert(ask); ask->data.num.unit = unit; return 0;	high	待判	
+libfdisk-00055	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	321	fdisk_ask_number_is_relative	assert(ask); assert(is_number_ask(ask)); return ask->data.num.relative;	high	待判	
+libfdisk-00056	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	322	fdisk_ask_number_is_relative	assert(is_number_ask(ask)); return ask->data.num.relative; }	high	待判	
+libfdisk-00057	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	339	fdisk_ask_number_is_wrap_negative	assert(ask); assert(is_number_ask(ask)); return ask->data.num.wrap_negative;	high	待判	
+libfdisk-00058	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	340	fdisk_ask_number_is_wrap_negative	assert(is_number_ask(ask)); return ask->data.num.wrap_negative; }	high	待判	
+libfdisk-00059	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	357	fdisk_ask_number_set_relative	assert(ask); ask->data.num.relative = relative ? 1 : 0; return 0;	high	待判	
+libfdisk-00060	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	374	fdisk_ask_number_inchars	assert(ask); assert(is_number_ask(ask)); return ask->data.num.inchars;	high	待判	
+libfdisk-00061	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	375	fdisk_ask_number_inchars	assert(is_number_ask(ask)); return ask->data.num.inchars; }	high	待判	
+libfdisk-00062	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	381	fdisk_ask_number_set_wrap_negative	assert(ask); ask->data.num.wrap_negative = wrap_negative ? 1 : 0; return 0;	high	待判	
+libfdisk-00063	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	459	fdisk_ask_partnum	assert(cxt); assert(cxt->label); assert(partnum);	high	待判	
+libfdisk-00064	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	460	fdisk_ask_partnum	assert(cxt->label); assert(partnum);	high	待判	
+libfdisk-00065	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	461	fdisk_ask_partnum	assert(partnum); if (cxt->label && cxt->label->flags & FDISK_LABEL_FL_INCHARS_PARTNO)	high	待判	
+libfdisk-00066	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/ask.c	524	fdisk_ask_partnum	fdisk_warnx(cxt, _("No free partition available!")); rc = 1; }	medium	待判	
+libfdisk-00067	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	570	fdisk_ask_number	assert(cxt); ask = fdisk_new_ask();	high	待判	
+libfdisk-00068	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	603	fdisk_ask_string_get_result	assert(ask); assert(fdisk_is_ask(ask, STRING)); return ask->data.str.result;	high	待判	
+libfdisk-00069	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	604	fdisk_ask_string_get_result	assert(fdisk_is_ask(ask, STRING)); return ask->data.str.result; }	high	待判	
+libfdisk-00070	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	620	fdisk_ask_string_set_result	assert(ask); ask->data.str.result = result; return 0;	high	待判	
+libfdisk-00071	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	642	fdisk_ask_string	assert(cxt); ask = fdisk_new_ask();	high	待判	
+libfdisk-00072	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	678	fdisk_ask_yesno	assert(cxt); ask = fdisk_new_ask();	high	待判	
+libfdisk-00073	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	705	fdisk_ask_yesno_get_result	assert(ask); assert(fdisk_is_ask(ask, YESNO)); return ask->data.yesno.result;	high	待判	
+libfdisk-00074	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	706	fdisk_ask_yesno_get_result	assert(fdisk_is_ask(ask, YESNO)); return ask->data.yesno.result; }	high	待判	
+libfdisk-00075	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	719	fdisk_ask_yesno_set_result	assert(ask); ask->data.yesno.result = result; return 0;	high	待判	
+libfdisk-00076	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	729	fdisk_ask_menu_set_default	assert(ask); assert(fdisk_is_ask(ask, MENU)); ask->data.menu.dfl = dfl;	high	待判	
+libfdisk-00077	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	730	fdisk_ask_menu_set_default	assert(fdisk_is_ask(ask, MENU)); ask->data.menu.dfl = dfl; return 0;	high	待判	
+libfdisk-00078	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	743	fdisk_ask_menu_get_default	assert(ask); assert(fdisk_is_ask(ask, MENU)); return ask->data.menu.dfl;	high	待判	
+libfdisk-00079	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	744	fdisk_ask_menu_get_default	assert(fdisk_is_ask(ask, MENU)); return ask->data.menu.dfl; }	high	待判	
+libfdisk-00080	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	757	fdisk_ask_menu_set_result	assert(ask); assert(fdisk_is_ask(ask, MENU)); ask->data.menu.result = key;	high	待判	
+libfdisk-00081	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	758	fdisk_ask_menu_set_result	assert(fdisk_is_ask(ask, MENU)); ask->data.menu.result = key; DBG(ASK, ul_debugobj(ask, "menu result: %c\n", key));	high	待判	
+libfdisk-00082	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	774	fdisk_ask_menu_get_result	assert(ask); assert(fdisk_is_ask(ask, MENU)); if (key)	high	待判	
+libfdisk-00083	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	775	fdisk_ask_menu_get_result	assert(fdisk_is_ask(ask, MENU)); if (key) *key = ask->data.menu.result;	high	待判	
+libfdisk-00084	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	797	fdisk_ask_menu_get_item	assert(ask); assert(fdisk_is_ask(ask, MENU));	high	待判	
+libfdisk-00085	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	798	fdisk_ask_menu_get_item	assert(fdisk_is_ask(ask, MENU)); for (i = 0, mi = ask->data.menu.first; mi; mi = mi->next, i++) {	high	待判	
+libfdisk-00086	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	820	fdisk_ask_menu_reset_items	assert(ask); assert(fdisk_is_ask(ask, MENU));	high	待判	
+libfdisk-00087	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	821	fdisk_ask_menu_reset_items	assert(fdisk_is_ask(ask, MENU)); for (mi = ask->data.menu.first; mi; ) {	high	待判	
+libfdisk-00088	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	841	fdisk_ask_menu_get_nitems	assert(ask); assert(fdisk_is_ask(ask, MENU));	high	待判	
+libfdisk-00089	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	842	fdisk_ask_menu_get_nitems	assert(fdisk_is_ask(ask, MENU)); for (n = 0, mi = ask->data.menu.first; mi; mi = mi->next, n++);	high	待判	
+libfdisk-00090	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	854	fdisk_ask_menu_add_item	assert(ask); assert(fdisk_is_ask(ask, MENU));	high	待判	
+libfdisk-00091	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	855	fdisk_ask_menu_add_item	assert(fdisk_is_ask(ask, MENU)); mi = calloc(1, sizeof(*mi));	high	待判	
+libfdisk-00092	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	893	fdisk_ask_print_get_errno	assert(ask); assert(is_print_ask(ask)); return ask->data.print.errnum;	high	待判	
+libfdisk-00093	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	894	fdisk_ask_print_get_errno	assert(is_print_ask(ask)); return ask->data.print.errnum; }	high	待判	
+libfdisk-00094	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	900	fdisk_ask_print_set_errno	assert(ask); ask->data.print.errnum = errnum; return 0;	high	待判	
+libfdisk-00095	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	913	fdisk_ask_print_get_mesg	assert(ask); assert(is_print_ask(ask)); return ask->data.print.mesg;	high	待判	
+libfdisk-00096	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	914	fdisk_ask_print_get_mesg	assert(is_print_ask(ask)); return ask->data.print.mesg; }	high	待判	
+libfdisk-00097	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	921	fdisk_ask_print_set_mesg	assert(ask); ask->data.print.mesg = mesg; return 0;	high	待判	
+libfdisk-00098	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	933	do_vprint	assert(cxt); if (vasprintf(&mesg, fmt, va) < 0)	high	待判	
+libfdisk-00099	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	970	fdisk_info	assert(cxt); va_start(ap, fmt); rc = do_vprint(cxt, -1, FDISK_ASKTYPE_INFO, fmt, ap);	high	待判	
+libfdisk-00100	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	992	fdisk_warn	assert(cxt); va_start(ap, fmt); rc = do_vprint(cxt, errno, FDISK_ASKTYPE_WARN, fmt, ap);	high	待判	
+libfdisk-00101	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/ask.c	1014	fdisk_warnx	assert(cxt); va_start(ap, fmt); rc = do_vprint(cxt, -1, FDISK_ASKTYPE_WARNX, fmt, ap);	high	待判	
+libfdisk-00102	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	97	self_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00103	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	98	self_label	assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00104	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	99	self_label	assert(fdisk_is_label(cxt, BSD)); return (struct fdisk_bsd_label *) cxt->label;	high	待判	
+libfdisk-00105	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	106	self_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00106	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	107	self_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00107	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	108	self_disklabel	assert(fdisk_is_label(cxt, BSD)); return &((struct fdisk_bsd_label *) cxt->label)->bsd;	high	待判	
+libfdisk-00108	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	165	bsd_assign_dos_partition	fdisk_warnx(cxt, _("Partition %zd: has invalid starting " "sector 0."), i + 1); return -1;	high	待判	
+libfdisk-00109	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	431	bsd_get_disklabel_item	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00110	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	432	bsd_get_disklabel_item	assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00111	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	433	bsd_get_disklabel_item	assert(fdisk_is_label(cxt, BSD)); d = self_disklabel(cxt);	high	待判	
+libfdisk-00112	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	542	bsd_get_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00113	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	543	bsd_get_partition	assert(cxt->label); assert(fdisk_is_label(cxt, BSD));	high	待判	
+libfdisk-00114	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/bsd.c	544	bsd_get_partition	assert(fdisk_is_label(cxt, BSD)); if (n >= d->d_npartitions)	high	待判	
+libfdisk-00115	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	642	bsd_get_bootstrap	fdisk_warn(cxt, _("cannot open %s"), path); return -errno; }	high	待判	
+libfdisk-00116	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	647	bsd_get_bootstrap	fdisk_warn(cxt, _("cannot read %s"), path); close(fd); return -errno;	high	待判	
+libfdisk-00117	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/bsd.c	678	fdisk_bsd_write_bootstrap	goto done; if (res && *res) name = res;	high	待判	
+libfdisk-00118	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/bsd.c	685	fdisk_bsd_write_bootstrap	goto done; /* We need a backup of the disklabel (might have changed). */	high	待判	
+libfdisk-00119	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/bsd.c	699	fdisk_bsd_write_bootstrap	goto done; /* check end of the bootstrap */	high	待判	
+libfdisk-00120	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	705	fdisk_bsd_write_bootstrap	fdisk_warnx(cxt, _("Bootstrap overlaps with disklabel!")); return -EINVAL; }	medium	待判	
+libfdisk-00121	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/bsd.c	721	fdisk_bsd_write_bootstrap	goto done; } if (write_all(cxt->dev_fd, l->bsdbuffer, BSD_BBSIZE)) {	high	待判	
+libfdisk-00122	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	724	fdisk_bsd_write_bootstrap	fdisk_warn(cxt, _("cannot write %s"), cxt->dev_path); rc = -errno; goto done;	high	待判	
+libfdisk-00123	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/bsd.c	726	fdisk_bsd_write_bootstrap	goto done; }	high	待判	
+libfdisk-00124	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/bsd.c	905	bsd_write_disklabel	fdisk_warn(cxt, _("cannot write %s"), cxt->dev_path); return -errno; }	high	待判	
+libfdisk-00125	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	83	init_nested_from_parent	assert(cxt); assert(cxt->parent);	high	待判	
+libfdisk-00126	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	84	init_nested_from_parent	assert(cxt->parent); parent = cxt->parent;	high	待判	
+libfdisk-00127	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	152	fdisk_new_nested_context	assert(parent); cxt = calloc(1, sizeof(*cxt));	high	待判	
+libfdisk-00128	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	225	fdisk_get_label	assert(cxt); if (!name)	high	待判	
+libfdisk-00129	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	504	fdisk_is_labeltype	assert(cxt); return cxt->label && (unsigned)fdisk_label_get_type(cxt->label) == id;	high	待判	
+libfdisk-00130	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	517	fdisk_get_parent	assert(cxt); return cxt->parent; }	high	待判	
+libfdisk-00131	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	578	fdisk_assign_fd	assert(cxt); assert(fd >= 0);	high	待判	
+libfdisk-00132	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	579	fdisk_assign_fd	assert(fd >= 0); errno = 0;	high	待判	
+libfdisk-00133	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/context.c	605	fdisk_assign_fd	goto fail; cxt->readonly = readonly ? 1 : 0;	high	待判	
+libfdisk-00134	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/context.c	614	fdisk_assign_fd	goto fail; fdisk_discover_topology(cxt);	high	待判	
+libfdisk-00135	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/context.c	622	fdisk_assign_fd	goto fail; /* warn about obsolete stuff on the device if we aren't in list-only */	high	待判	
+libfdisk-00136	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/context.c	626	fdisk_assign_fd	goto fail; fdisk_probe_labels(cxt);	high	待判	
+libfdisk-00137	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	687	fdisk_assign_device	assert(cxt); if (readonly)	high	待判	
+libfdisk-00138	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	750	fdisk_deassign_device	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00139	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	751	fdisk_deassign_device	assert(cxt->dev_fd >= 0); if (cxt->parent) {	high	待判	
+libfdisk-00140	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	807	fdisk_reassign_device	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00141	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	808	fdisk_reassign_device	assert(cxt->dev_fd >= 0); DBG(CXT, ul_debugobj(cxt, "re-assigning device %s", cxt->dev_path));	high	待判	
+libfdisk-00142	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	846	fdisk_reread_partition_table	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00143	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	847	fdisk_reread_partition_table	assert(cxt->dev_fd >= 0); if (!S_ISBLK(cxt->dev_st.st_mode))	high	待判	
+libfdisk-00144	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/context.c	945	fdisk_reread_changes	goto done; }	high	待判	
+libfdisk-00145	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1018	fdisk_device_is_used	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00146	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1019	fdisk_device_is_used	assert(cxt->dev_fd >= 0); rc = cxt->readonly ? 0 :	high	待判	
+libfdisk-00147	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1039	fdisk_is_readonly	assert(cxt); return cxt->readonly; }	high	待判	
+libfdisk-00148	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1053	fdisk_is_regfile	assert(cxt); return S_ISREG(cxt->dev_st.st_mode); }	high	待判	
+libfdisk-00149	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1107	fdisk_enable_details	assert(cxt); cxt->display_details = enable ? 1 : 0; return 0;	high	待判	
+libfdisk-00150	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1120	fdisk_is_details	assert(cxt); return cxt->display_details == 1; }	high	待判	
+libfdisk-00151	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1135	fdisk_enable_listonly	assert(cxt); cxt->listonly = enable ? 1 : 0; return 0;	high	待判	
+libfdisk-00152	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1148	fdisk_is_listonly	assert(cxt); return cxt->listonly == 1; }	high	待判	
+libfdisk-00153	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1165	fdisk_set_unit	assert(cxt); cxt->display_in_cyl_units = 0;	high	待判	
+libfdisk-00154	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1191	fdisk_get_unit	assert(cxt); if (fdisk_use_cylinders(cxt))	high	待判	
+libfdisk-00155	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1206	fdisk_use_cylinders	assert(cxt); return cxt->display_in_cyl_units == 1; }	high	待判	
+libfdisk-00156	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1220	fdisk_get_units_per_sector	assert(cxt); if (fdisk_use_cylinders(cxt)) {	high	待判	
+libfdisk-00157	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1223	fdisk_get_units_per_sector	assert(cxt->geom.heads); return cxt->geom.heads * cxt->geom.sectors; }	high	待判	
+libfdisk-00158	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1241	fdisk_get_optimal_iosize	assert(cxt); return cxt->optimal_io_size ? cxt->optimal_io_size : cxt->io_size; }	high	待判	
+libfdisk-00159	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1253	fdisk_get_minimal_iosize	assert(cxt); return cxt->min_io_size; }	high	待判	
+libfdisk-00160	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1265	fdisk_get_physector_size	assert(cxt); return cxt->phy_sector_size; }	high	待判	
+libfdisk-00161	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1277	fdisk_get_sector_size	assert(cxt); return cxt->sector_size; }	high	待判	
+libfdisk-00162	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1293	fdisk_get_alignment_offset	assert(cxt); return cxt->alignment_offset; }	high	待判	
+libfdisk-00163	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1305	fdisk_get_grain_size	assert(cxt); return cxt->grain; }	high	待判	
+libfdisk-00164	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1317	fdisk_get_first_lba	assert(cxt); return cxt->first_lba; }	high	待判	
+libfdisk-00165	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1344	fdisk_set_first_lba	assert(cxt); DBG(CXT, ul_debugobj(cxt, "setting first LBA from %ju to %ju", (uintmax_t) cxt->first_lba, (uintmax_t) lba));	high	待判	
+libfdisk-00166	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1381	fdisk_set_last_lba	assert(cxt); if (lba > cxt->total_sectors - 1 || lba < 1)	high	待判	
+libfdisk-00167	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1400	fdisk_set_size_unit	assert(cxt); cxt->sizeunit = unit; return 0;	high	待判	
+libfdisk-00168	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1415	fdisk_get_size_unit	assert(cxt); return cxt->sizeunit; }	high	待判	
+libfdisk-00169	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1427	fdisk_get_nsectors	assert(cxt); return cxt->total_sectors; }	high	待判	
+libfdisk-00170	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1439	fdisk_get_devname	assert(cxt); return cxt->dev_path; }	high	待判	
+libfdisk-00171	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1453	fdisk_get_devno	assert(cxt); return S_ISBLK(cxt->dev_st.st_mode) ? cxt->dev_st.st_rdev : 0; }	high	待判	
+libfdisk-00172	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1468	fdisk_get_devmodel	assert(cxt); if (cxt->dev_model_probed)	high	待判	
+libfdisk-00173	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1499	fdisk_get_devfd	assert(cxt); return cxt->dev_fd; }	high	待判	
+libfdisk-00174	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1511	fdisk_get_geom_heads	assert(cxt); return cxt->geom.heads; }	high	待判	
+libfdisk-00175	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1522	fdisk_get_geom_sectors	assert(cxt); return cxt->geom.sectors;	high	待判	
+libfdisk-00176	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/context.c	1535	fdisk_get_geom_cylinders	assert(cxt); return cxt->geom.cylinders; }	high	待判	
+libfdisk-00177	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	101	self_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00178	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	102	self_label	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00179	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	103	self_label	assert(fdisk_is_label(cxt, DOS)); return (struct fdisk_dos_label *) cxt->label;	high	待判	
+libfdisk-00180	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	130	fdisk_dos_get_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00181	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	131	fdisk_dos_get_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00182	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	132	fdisk_dos_get_partition	assert(fdisk_is_label(cxt, DOS)); return self_partition(cxt, i);	high	待判	
+libfdisk-00183	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	175	get_abs_partition_start	assert(pe); assert(pe->pt_entry);	high	待判	
+libfdisk-00184	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	176	get_abs_partition_start	assert(pe->pt_entry); return pe->offset + dos_partition_get_start(pe->pt_entry);	high	待判	
+libfdisk-00185	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	185	get_abs_partition_end	assert(pe); assert(pe->pt_entry);	high	待判	
+libfdisk-00186	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	186	get_abs_partition_end	assert(pe->pt_entry); size = dos_partition_get_size(pe->pt_entry);	high	待判	
+libfdisk-00187	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	206	get_partition_unused_primary	assert(cxt); assert(cxt->label); assert(partno);	high	待判	
+libfdisk-00188	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	207	get_partition_unused_primary	assert(cxt->label); assert(partno);	high	待判	
+libfdisk-00189	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	208	get_partition_unused_primary	assert(partno); org = cxt->label->nparts_max;	high	待判	
+libfdisk-00190	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	306	dos_init	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00191	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	307	dos_init	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00192	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	308	dos_init	assert(fdisk_is_label(cxt, DOS)); DBG(LABEL, ul_debug("DOS: initialize, first sector buffer %p", cxt->firstsector));	high	待判	
+libfdisk-00193	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	323	dos_init	assert(pe); pe->pt_entry = mbr_get_partition(cxt->firstsector, i); pe->ex_entry = NULL;	high	待判	
+libfdisk-00194	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	364	dos_init	_("The size of this disk is %s (%ju bytes). DOS " "partition table format cannot be used on drives for " "volumes larger than %lu bytes for %lu-byte "	high	待判	
+libfdisk-00195	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	398	reset_pte	assert(pe); if (pe->private_sectorbuffer) {	high	待判	
+libfdisk-00196	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	415	delete_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00197	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	416	delete_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00198	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	417	delete_partition	assert(fdisk_is_label(cxt, DOS)); pe = self_pte(cxt, partnum);	high	待判	
+libfdisk-00199	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	512	dos_delete_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00200	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	513	dos_delete_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00201	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	514	dos_delete_partition	assert(fdisk_is_label(cxt, DOS)); pe = self_pte(cxt, partnum);	high	待判	
+libfdisk-00202	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	577	read_extended	assert(pe->sectorbuffer); q = p = mbr_get_partition(pe->sectorbuffer, 0);	high	待判	
+libfdisk-00203	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	666	dos_create_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00204	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	667	dos_create_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00205	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	668	dos_create_disklabel	assert(fdisk_is_label(cxt, DOS)); DBG(LABEL, ul_debug("DOS: creating new disklabel"));	high	待判	
+libfdisk-00206	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	723	dos_set_disklabel_id	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00207	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	724	dos_set_disklabel_id	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00208	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	725	dos_set_disklabel_id	assert(fdisk_is_label(cxt, DOS)); DBG(LABEL, ul_debug("DOS: setting Id"));	high	待判	
+libfdisk-00209	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	893	dos_reset_alignment	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00210	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	894	dos_reset_alignment	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00211	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	895	dos_reset_alignment	assert(fdisk_is_label(cxt, DOS)); /* overwrite necessary stuff by DOS deprecated stuff */	high	待判	
+libfdisk-00212	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	918	dos_probe_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00213	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	919	dos_probe_label	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00214	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	920	dos_probe_label	assert(fdisk_is_label(cxt, DOS)); /* ignore disks with AIX magic number */	high	待判	
+libfdisk-00215	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	945	dos_probe_label	assert(pe); if (is_used_partition(pe->pt_entry)) cxt->label->nparts_cur++;	high	待判	
+libfdisk-00216	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	963	dos_probe_label	assert(pe); if (!mbr_is_valid_magic(pe->sectorbuffer)) { fdisk_info(cxt, _(	high	待判	
+libfdisk-00217	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	990	set_partition	assert(!FDISK_IS_UNDEF(start)); assert(!FDISK_IS_UNDEF(stop)); assert(pe);	high	待判	
+libfdisk-00218	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	991	set_partition	assert(!FDISK_IS_UNDEF(stop)); assert(pe);	high	待判	
+libfdisk-00219	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	992	set_partition	assert(pe); if (doext) {	high	待判	
+libfdisk-00220	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1026	get_start_from_user	assert(start); /* try to use template from 'pa' */	high	待判	
+libfdisk-00221	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1037	get_start_from_user	fdisk_warnx(cxt, _("Start sector %ju out of range."), (uintmax_t) *start); return -ERANGE;	medium	待判	
+libfdisk-00222	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1088	find_last_free	assert(pe); fdisk_sector_t p_start = get_abs_partition_start(pe); fdisk_sector_t p_end = get_abs_partition_end(pe);	high	待判	
+libfdisk-00223	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1136	find_last_free_sector_in_range	assert(pe); fdisk_sector_t p_start = get_abs_partition_start(pe); fdisk_sector_t p_end = get_abs_partition_end(pe);	high	待判	
+libfdisk-00224	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1185	find_first_free_sector_in_range	assert(pe); fdisk_sector_t p_start = get_abs_partition_start(pe); fdisk_sector_t p_end = get_abs_partition_end(pe);	high	待判	
+libfdisk-00225	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1291	add_partition	fdisk_warnx(cxt, _("No free sectors available.")); if (rc) return rc;	medium	待判	
+libfdisk-00226	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1317	add_partition	fdisk_warnx(cxt, _("No free sectors available.")); if (rc) return rc;	medium	待判	
+libfdisk-00227	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1375	add_partition	fdisk_warnx(cxt, _("No free sectors available.")); return rc; }	medium	待判	
+libfdisk-00228	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1386	add_partition	assert(pe); pe->offset = l->ext_offset; } else if (n > 4) {	high	待判	
+libfdisk-00229	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1392	add_partition	assert(pe); assert(start >= cxt->first_lba);	high	待判	
+libfdisk-00230	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1393	add_partition	assert(start >= cxt->first_lba); pe->offset = start - cxt->first_lba;	high	待判	
+libfdisk-00231	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1407	add_partition	fdisk_warnx(cxt, _("No free sectors available.")); if (rc) return rc;	medium	待判	
+libfdisk-00232	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	1453	add_partition	goto done; stop = fdisk_ask_number_get_result(ask);	high	待判	
+libfdisk-00233	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1465	add_partition	fdisk_warnx(cxt, _("Value out of range.")); } }	medium	待判	
+libfdisk-00234	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1498	add_partition	assert(pe); set_partition(cxt, n - 1, 1, pe->offset, stop, MBR_DOS_EXTENDED_PARTITION, 0);	high	待判	
+libfdisk-00235	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1515	add_partition	assert(pen); l->ext_index = n; l->ext_offset = start;	high	待判	
+libfdisk-00236	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1535	add_logical	assert(cxt); assert(partno); assert(cxt->label);	high	待判	
+libfdisk-00237	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1536	add_logical	assert(partno); assert(cxt->label); assert(self_label(cxt)->ext_offset);	high	待判	
+libfdisk-00238	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1537	add_logical	assert(cxt->label); assert(self_label(cxt)->ext_offset);	high	待判	
+libfdisk-00239	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1538	add_logical	assert(self_label(cxt)->ext_offset); DBG(LABEL, ul_debug("DOS: nparts max: %zu", cxt->label->nparts_max));	high	待判	
+libfdisk-00240	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1542	add_logical	assert(pe); if (!pe->sectorbuffer) {	high	待判	
+libfdisk-00241	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1713	fill_bounds	assert(pe); for (i = 0; i < cxt->label->nparts_max; pe++,i++) { p = pe->pt_entry;	high	待判	
+libfdisk-00242	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1736	dos_verify_disklabel	assert(fdisk_is_label(cxt, DOS)); fill_bounds(cxt, first, last);	high	待判	
+libfdisk-00243	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1745	dos_verify_disklabel	assert(pe); if (get_abs_partition_start(pe) < first[i]) { fdisk_warnx(cxt, _(	high	待判	
+libfdisk-00244	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	1764	dos_verify_disklabel	fdisk_warnx(cxt, _("Partition %zu: " "overlaps partition %zu."), j + 1, i + 1);	medium	待判	
+libfdisk-00245	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1782	dos_verify_disklabel	assert(ext_pe); e_last = get_abs_partition_end(ext_pe);	high	待判	
+libfdisk-00246	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1788	dos_verify_disklabel	assert(p); if (!p->sys_ind) {	high	待判	
+libfdisk-00247	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1842	dos_add_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00248	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1843	dos_add_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00249	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	1844	dos_add_partition	assert(fdisk_is_label(cxt, DOS)); DBG(LABEL, ul_debug("DOS: new partition wanted"));	high	待判	
+libfdisk-00250	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	1873	dos_add_partition	goto done; /* B) template specifies start out of extended partition; add primary */	high	待判	
+libfdisk-00251	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	1890	dos_add_partition	goto done; /* C) template specifies start (or default), partno < 4; add primary */	high	待判	
+libfdisk-00252	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	1905	dos_add_partition	goto done; /* D) template specifies start (or default), partno >= 4; add logical */	high	待判	
+libfdisk-00253	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	1926	dos_add_partition	goto done; }	high	待判	
+libfdisk-00254	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2005	dos_add_partition	goto done; }	high	待判	
+libfdisk-00255	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2038	dos_add_partition	goto done; } else if (c == 'l' && l->ext_offset) { rc = add_logical(cxt, pa, &res);	high	待判	
+libfdisk-00256	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2041	dos_add_partition	goto done; } else if (c == 'e' && !l->ext_offset) { rc = get_partition_unused_primary(cxt, pa, &res);	high	待判	
+libfdisk-00257	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2062	dos_add_partition	goto done; } else fdisk_warnx(cxt, _("Invalid partition type `%c'."), c);	high	待判	
+libfdisk-00258	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	2064	dos_add_partition	fdisk_warnx(cxt, _("Invalid partition type `%c'."), c); } done:	high	待判	
+libfdisk-00259	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	2082	write_sector	fdisk_warn(cxt, _("Cannot write sector %jd: seek failed"), (uintmax_t) secno); return rc;	high	待判	
+libfdisk-00260	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2100	dos_write_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00261	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2101	dos_write_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00262	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2102	dos_write_disklabel	assert(fdisk_is_label(cxt, DOS)); DBG(LABEL, ul_debug("DOS: write PT requested [label-changed: %d, non-pt-changed: %d]",	high	待判	
+libfdisk-00263	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2114	dos_write_disklabel	assert(pe); if (pe->changed) mbr_changed = 1;	high	待判	
+libfdisk-00264	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2124	dos_write_disklabel	goto done; }	high	待判	
+libfdisk-00265	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2144	dos_write_disklabel	assert(pe); if (!pe->changed || !pe->offset || !pe->sectorbuffer) continue;	high	待判	
+libfdisk-00266	libfdisk	2.39.3	T1	mbr	fail-goto	fail-goto	libfdisk/src/dos.c	2151	dos_write_disklabel	goto done; }	high	待判	
+libfdisk-00267	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2161	dos_locate_disklabel	assert(cxt); *name = NULL;	high	待判	
+libfdisk-00268	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2178	dos_locate_disklabel	assert(pe); assert(pe->private_sectorbuffer);	high	待判	
+libfdisk-00269	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2179	dos_locate_disklabel	assert(pe->private_sectorbuffer); *name = "EBR";	high	待判	
+libfdisk-00270	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2207	wrong_p_order	assert(pe); p = pe->pt_entry;	high	待判	
+libfdisk-00271	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2234	dos_get_disklabel_item	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00272	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2235	dos_get_disklabel_item	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00273	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2236	dos_get_disklabel_item	assert(fdisk_is_label(cxt, DOS)); switch (item->id) {	high	待判	
+libfdisk-00274	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2267	dos_get_partition	assert(cxt); assert(pa); assert(cxt->label);	high	待判	
+libfdisk-00275	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2268	dos_get_partition	assert(pa); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00276	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2269	dos_get_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00277	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2270	dos_get_partition	assert(fdisk_is_label(cxt, DOS)); lb = self_label(cxt);	high	待判	
+libfdisk-00278	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2275	dos_get_partition	assert(pe); p = pe->pt_entry;	high	待判	
+libfdisk-00279	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2332	dos_set_partition	assert(cxt); assert(pa); assert(cxt->label);	high	待判	
+libfdisk-00280	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2333	dos_set_partition	assert(pa); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00281	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2334	dos_set_partition	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00282	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2335	dos_set_partition	assert(fdisk_is_label(cxt, DOS)); if (n >= cxt->label->nparts_max)	high	待判	
+libfdisk-00283	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2342	dos_set_partition	assert(p); pe = self_pte(cxt, n);	high	待判	
+libfdisk-00284	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2427	print_chain_of_logicals	assert(pe); fprintf(stderr, "#%02zu EBR [%10ju], " "data[start=%10ju (%10ju), size=%10ju], "	high	待判	
+libfdisk-00285	libfdisk	2.39.3	T1	mbr	error-report	error-report	libfdisk/src/dos.c	2428	print_chain_of_logicals	fprintf(stderr, "#%02zu EBR [%10ju], " "data[start=%10ju (%10ju), size=%10ju], " "link[start=%10ju (%10ju), size=%10ju]\n",	medium	待判	
+libfdisk-00286	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2484	fix_chain_of_logicals	assert(cur); assert(nxt);	high	待判	
+libfdisk-00287	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2485	fix_chain_of_logicals	assert(nxt); if (get_abs_partition_start(cur) >	high	待判	
+libfdisk-00288	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2516	fix_chain_of_logicals	assert(cur); assert(nxt);	high	待判	
+libfdisk-00289	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2517	fix_chain_of_logicals	assert(nxt); fdisk_sector_t noff = nxt->offset - l->ext_offset,	high	待判	
+libfdisk-00290	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2559	dos_reorder	assert(pei); assert(pek);	high	待判	
+libfdisk-00291	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2560	dos_reorder	assert(pek); pe = pei->ex_entry;	high	待判	
+libfdisk-00292	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2606	fdisk_dos_fix_chs	assert(fdisk_is_label(cxt, DOS)); for (i = 0; i < cxt->label->nparts_max; i++) {	high	待判	
+libfdisk-00293	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2674	fdisk_dos_move_begin	assert(cxt); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00294	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2675	fdisk_dos_move_begin	assert(fdisk_is_label(cxt, DOS)); pe = self_pte(cxt, i);	high	待判	
+libfdisk-00295	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2702	fdisk_dos_move_begin	assert(prev_pe); prev_p = prev_pe->pt_entry;	high	待判	
+libfdisk-00296	libfdisk	2.39.3	T1	mbr	refusal	refusal	libfdisk/src/dos.c	2735	fdisk_dos_move_begin	fdisk_info(cxt, _("The new beginning of the partition overlaps the disk " "label area. Be very careful when using the partition. " "You can lose all your partitions on the disk."));	medium	待判	
+libfdisk-00297	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2749	dos_partition_is_used	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00298	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2750	dos_partition_is_used	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00299	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2751	dos_partition_is_used	assert(fdisk_is_label(cxt, DOS)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00300	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2768	dos_toggle_partition_flag	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00301	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2769	dos_toggle_partition_flag	assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	high	待判	
+libfdisk-00302	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2770	dos_toggle_partition_flag	assert(fdisk_is_label(cxt, DOS)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00303	libfdisk	2.39.3	T1	mbr	assert	assert	libfdisk/src/dos.c	2776	dos_toggle_partition_flag	assert(p); switch (flag) {	high	待判	
+libfdisk-00304	libfdisk	2.39.3	T1	gpt	error-report	error-report	libfdisk/src/gpt.c	215	gpt_debug_uuid	fprintf(stderr, "%s: " "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n", mesg,	medium	待判	
+libfdisk-00305	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	541	gpt_fix_alternative_lba	goto failed; b->partition_entry_lba = cpu_to_le64(x);	high	待判	
+libfdisk-00306	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	548	gpt_fix_alternative_lba	goto failed; p->last_usable_lba = cpu_to_le64(x);	high	待判	
+libfdisk-00307	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	567	gpt_calculate_minimal_size	assert(cxt); assert(gpt); assert(gpt->pheader);	high	待判	
+libfdisk-00308	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	568	gpt_calculate_minimal_size	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00309	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	569	gpt_calculate_minimal_size	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00310	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	570	gpt_calculate_minimal_size	assert(gpt->ents); hdr = gpt->pheader;	high	待判	
+libfdisk-00311	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	687	gpt_copy_header	assert(cxt->sector_size >= sizeof(struct gpt_header)); res = calloc(1, cxt->sector_size);	high	待判	
+libfdisk-00312	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	726	get_script_u64	assert(cxt); *num = 0;	high	待判	
+libfdisk-00313	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	753	count_first_last_lba	assert(cxt); assert(first); assert(last);	high	待判	
+libfdisk-00314	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	754	count_first_last_lba	assert(first); assert(last);	high	待判	
+libfdisk-00315	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	755	count_first_last_lba	assert(last); *first = *last = 0;	high	待判	
+libfdisk-00316	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	800	count_first_last_lba	fdisk_warnx(cxt, _("First LBA specified by script is out of range.")); return -ERANGE; }	medium	待判	
+libfdisk-00317	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	812	count_first_last_lba	fdisk_warnx(cxt, _("Last LBA specified by script is out of range.")); return -ERANGE; }	medium	待判	
+libfdisk-00318	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	899	valid_pmbr	goto done; pmbr = (struct gpt_legacy_mbr *) cxt->firstsector;	high	待判	
+libfdisk-00319	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	904	valid_pmbr	goto done; /* seems like a valid MBR was found, check DOS primary partitions */	high	待判	
+libfdisk-00320	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	921	valid_pmbr	goto done;	high	待判	
+libfdisk-00321	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	928	valid_pmbr	goto done; } }	high	待判	
+libfdisk-00322	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	935	valid_pmbr	goto done; /*	high	待判	
+libfdisk-00323	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	988	last_lba	fdisk_warnx(cxt, _("gpt: cannot handle files with mode %o"), s.st_mode); DBG(GPT, ul_debug("last LBA: %"PRIu64"", sectors));	high	待判	
+libfdisk-00324	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1015	gpt_read_entries	assert(cxt); assert(header);	high	待判	
+libfdisk-00325	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1016	gpt_read_entries	assert(header); if (gpt_sizeof_entries(header, &sz))	high	待判	
+libfdisk-00326	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1029	gpt_read_entries	goto fail; ssz = read(cxt->dev_fd, ret, sz);	high	待判	
+libfdisk-00327	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1033	gpt_read_entries	goto fail; return ret;	high	待判	
+libfdisk-00328	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1132	gpt_check_lba_sanity	goto done; }	high	待判	
+libfdisk-00329	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1139	gpt_check_lba_sanity	goto done; }	high	待判	
+libfdisk-00330	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1146	gpt_check_lba_sanity	goto done; }	high	待判	
+libfdisk-00331	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1178	gpt_read_header	assert(cxt->sector_size >= sizeof(struct gpt_header)); header = calloc(1, cxt->sector_size);	high	待判	
+libfdisk-00332	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1235	gpt_locate_disklabel	assert(cxt); *name = NULL;	high	待判	
+libfdisk-00333	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1283	gpt_get_disklabel_item	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00334	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1284	gpt_get_disklabel_item	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00335	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1285	gpt_get_disklabel_item	assert(fdisk_is_label(cxt, GPT)); h = self_label(cxt)->pheader;	high	待判	
+libfdisk-00336	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1350	partitions_in_use	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00337	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1351	partitions_in_use	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00338	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1352	partitions_in_use	assert(gpt->ents); for (i = 0; i < gpt_get_nentries(gpt); i++) {	high	待判	
+libfdisk-00339	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1372	check_too_big_partitions	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00340	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1373	check_too_big_partitions	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00341	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1374	check_too_big_partitions	assert(gpt->ents); for (i = 0; i < gpt_get_nentries(gpt); i++) {	high	待判	
+libfdisk-00342	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1396	check_start_after_end_partitions	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00343	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1397	check_start_after_end_partitions	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00344	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1398	check_start_after_end_partitions	assert(gpt->ents); for (i = 0; i < gpt_get_nentries(gpt); i++) {	high	待判	
+libfdisk-00345	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1432	check_overlap_partitions	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00346	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1433	check_overlap_partitions	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00347	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1434	check_overlap_partitions	assert(gpt->ents); for (i = 0; i < gpt_get_nentries(gpt); i++)	high	待判	
+libfdisk-00348	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1462	find_first_available	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00349	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1463	find_first_available	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00350	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1464	find_first_available	assert(gpt->ents); fu = le64_to_cpu(gpt->pheader->first_usable_lba);	high	待判	
+libfdisk-00351	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1513	find_last_free	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00352	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1514	find_last_free	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00353	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1515	find_last_free	assert(gpt->ents); nearest_start = le64_to_cpu(gpt->pheader->last_usable_lba);	high	待判	
+libfdisk-00354	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1536	find_last_free_sector	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00355	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1537	find_last_free_sector	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00356	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1538	find_last_free_sector	assert(gpt->ents); /* start by assuming the last usable LBA is available */	high	待判	
+libfdisk-00357	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1570	find_first_in_largest	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00358	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1571	find_first_in_largest	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00359	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1572	find_first_in_largest	assert(gpt->ents); do {	high	待判	
+libfdisk-00360	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1606	get_free_sectors	goto done; assert(gpt);	high	待判	
+libfdisk-00361	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1608	get_free_sectors	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00362	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1609	get_free_sectors	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00363	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1610	get_free_sectors	assert(gpt->ents); do {	high	待判	
+libfdisk-00364	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1640	gpt_probe_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00365	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1641	gpt_probe_label	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00366	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1642	gpt_probe_label	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00367	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1650	gpt_probe_label	goto failed; /* primary header */	high	待判	
+libfdisk-00368	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1666	gpt_probe_label	goto failed; /* primary OK, backup corrupted -- recovery */	high	待判	
+libfdisk-00369	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	1670	gpt_probe_label	fdisk_warnx(cxt, _("The backup GPT table is corrupt, but the " "primary appears OK, so that will be used.")); gpt->bheader = gpt_copy_header(cxt, gpt->pheader);	high	待判	
+libfdisk-00370	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1674	gpt_probe_label	goto failed; gpt_recompute_crc(gpt->bheader, gpt->ents); fdisk_label_set_changed(cxt->label, 1);	high	待判	
+libfdisk-00371	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	1680	gpt_probe_label	fdisk_warnx(cxt, _("The primary GPT table is corrupt, but the " "backup appears OK, so that will be used.")); gpt->pheader = gpt_copy_header(cxt, gpt->bheader);	high	待判	
+libfdisk-00372	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1684	gpt_probe_label	goto failed; gpt_recompute_crc(gpt->pheader, gpt->ents); fdisk_label_set_changed(cxt->label, 1);	high	待判	
+libfdisk-00373	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1742	gpt_entry_attrs_to_string	assert(e); assert(res);	high	待判	
+libfdisk-00374	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1743	gpt_entry_attrs_to_string	assert(res); *res = NULL;	high	待判	
+libfdisk-00375	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1805	gpt_entry_attrs_from_string	assert(e); assert(p);	high	待判	
+libfdisk-00376	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1806	gpt_entry_attrs_from_string	assert(p); DBG(GPT, ul_debug("parsing string attributes '%s'", p));	high	待判	
+libfdisk-00377	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	1858	gpt_entry_attrs_from_string	fdisk_warnx(cxt, _("unsupported GPT attribute bit '%s'"), p); return -EINVAL; }	high	待判	
+libfdisk-00378	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1887	gpt_get_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00379	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1888	gpt_get_partition	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00380	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1889	gpt_get_partition	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00381	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1912	gpt_get_partition	goto done; } } else	high	待判	
+libfdisk-00382	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	1919	gpt_get_partition	goto done; pa->name = encode_to_utf8((unsigned char *)e->name, sizeof(e->name));	high	待判	
+libfdisk-00383	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1937	gpt_set_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00384	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1938	gpt_set_partition	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00385	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	1939	gpt_set_partition	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00386	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2094	gpt_write_pmbr	assert(cxt); assert(cxt->firstsector);	high	待判	
+libfdisk-00387	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2095	gpt_write_pmbr	assert(cxt->firstsector); DBG(GPT, ul_debug("(over)writing PMBR"));	high	待判	
+libfdisk-00388	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2155	gpt_write_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00389	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2156	gpt_write_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00390	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2157	gpt_write_disklabel	assert(fdisk_is_label(cxt, GPT)); DBG(GPT, ul_debug("writing..."));	high	待判	
+libfdisk-00391	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2166	gpt_write_disklabel	goto err0; /* check that the backup header is properly placed */	high	待判	
+libfdisk-00392	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2170	gpt_write_disklabel	goto err0; if (check_overlap_partitions(gpt))	high	待判	
+libfdisk-00393	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2173	gpt_write_disklabel	goto err0; if (gpt->minimize)	high	待判	
+libfdisk-00394	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2193	gpt_write_disklabel	goto err1; if (gpt_write_header(cxt, gpt->bheader, le64_to_cpu(gpt->pheader->alternative_lba)) != 0)	high	待判	
+libfdisk-00395	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2196	gpt_write_disklabel	goto err1; if (gpt_write_partitions(cxt, gpt->pheader, gpt->ents) != 0) goto err1;	high	待判	
+libfdisk-00396	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2198	gpt_write_disklabel	goto err1; if (gpt_write_header(cxt, gpt->pheader, GPT_PRIMARY_PARTITION_TABLE_LBA) != 0) goto err1;	high	待判	
+libfdisk-00397	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2200	gpt_write_disklabel	goto err1; if (mbr_type == GPT_MBR_HYBRID)	high	待判	
+libfdisk-00398	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2205	gpt_write_disklabel	goto err1; DBG(GPT, ul_debug("...write success"));	high	待判	
+libfdisk-00399	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2229	gpt_verify_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00400	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2230	gpt_verify_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00401	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2231	gpt_verify_disklabel	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00402	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2244	gpt_verify_disklabel	fdisk_warnx(cxt, _("Invalid primary header CRC checksum.")); } if (gpt->bheader && !gpt_check_header_crc(gpt->bheader, gpt->ents)) {	high	待判	
+libfdisk-00403	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2248	gpt_verify_disklabel	fdisk_warnx(cxt, _("Invalid backup header CRC checksum.")); }	high	待判	
+libfdisk-00404	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2253	gpt_verify_disklabel	fdisk_warnx(cxt, _("Invalid partition entry checksum.")); }	high	待判	
+libfdisk-00405	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2258	gpt_verify_disklabel	fdisk_warnx(cxt, _("Invalid primary header LBA sanity checks.")); } if (gpt->bheader && !gpt_check_lba_sanity(cxt, gpt->bheader)) {	high	待判	
+libfdisk-00406	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2262	gpt_verify_disklabel	fdisk_warnx(cxt, _("Invalid backup header LBA sanity checks.")); }	high	待判	
+libfdisk-00407	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2276	gpt_verify_disklabel	fdisk_warnx(cxt, _("Disk is too small to hold all data.")); }	medium	待判	
+libfdisk-00408	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2292	gpt_verify_disklabel	fdisk_warnx(cxt, _("Partition %u overlaps with partition %u."), ptnum, ptnum+1); }	medium	待判	
+libfdisk-00409	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2347	gpt_delete_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00410	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2348	gpt_delete_partition	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00411	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2349	gpt_delete_partition	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00412	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2388	gpt_add_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00413	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2389	gpt_add_partition	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00414	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2390	gpt_add_partition	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00415	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2394	gpt_add_partition	assert(gpt); assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00416	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2395	gpt_add_partition	assert(gpt->pheader); assert(gpt->ents);	high	待判	
+libfdisk-00417	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2396	gpt_add_partition	assert(gpt->ents); pheader = gpt->pheader;	high	待判	
+libfdisk-00418	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2406	gpt_add_partition	assert(partnum < gpt_get_nentries(gpt)); if (gpt_entry_is_used(gpt_get_entry(gpt, partnum))) {	high	待判	
+libfdisk-00419	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2418	gpt_add_partition	fdisk_warnx(cxt, _("No free sectors available.")); return -ENOSPC; }	medium	待判	
+libfdisk-00420	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2502	gpt_add_partition	goto done; user_f = fdisk_ask_number_get_result(ask);	high	待判	
+libfdisk-00421	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2562	gpt_add_partition	goto done; user_l = fdisk_ask_number_get_result(ask);	high	待判	
+libfdisk-00422	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2574	gpt_add_partition	fdisk_warnx(cxt, _("Value out of range.")); } }	medium	待判	
+libfdisk-00423	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2582	gpt_add_partition	goto done; }	high	待判	
+libfdisk-00424	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2590	gpt_add_partition	goto done; }	high	待判	
+libfdisk-00425	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2597	gpt_add_partition	goto done; }	high	待判	
+libfdisk-00426	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2600	gpt_add_partition	assert(!FDISK_IS_UNDEF(user_l)); assert(!FDISK_IS_UNDEF(user_f)); assert(partnum < gpt_get_nentries(gpt));	high	待判	
+libfdisk-00427	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2601	gpt_add_partition	assert(!FDISK_IS_UNDEF(user_f)); assert(partnum < gpt_get_nentries(gpt));	high	待判	
+libfdisk-00428	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2602	gpt_add_partition	assert(partnum < gpt_get_nentries(gpt)); e = gpt_get_entry(gpt, partnum);	high	待判	
+libfdisk-00429	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2616	gpt_add_partition	goto done; } else { /* Any time a new partition entry is created a new GUID must be	high	待判	
+libfdisk-00430	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2674	gpt_create_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00431	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2675	gpt_create_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00432	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2676	gpt_create_disklabel	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00433	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2681	gpt_create_disklabel	assert(gpt->pheader == NULL); assert(gpt->bheader == NULL);	high	待判	
+libfdisk-00434	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2682	gpt_create_disklabel	assert(gpt->bheader == NULL); /*	high	待判	
+libfdisk-00435	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2691	gpt_create_disklabel	goto done; assert(cxt->sector_size >= sizeof(struct gpt_header));	high	待判	
+libfdisk-00436	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2693	gpt_create_disklabel	assert(cxt->sector_size >= sizeof(struct gpt_header)); /* primary */	high	待判	
+libfdisk-00437	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2699	gpt_create_disklabel	goto done; } rc = gpt_mknew_header(cxt, gpt->pheader, GPT_PRIMARY_PARTITION_TABLE_LBA);	high	待判	
+libfdisk-00438	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2703	gpt_create_disklabel	goto done; /* backup ("copy" primary) */	high	待判	
+libfdisk-00439	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2709	gpt_create_disklabel	goto done; } rc = gpt_mknew_header_from_bkp(cxt, gpt->bheader,	high	待判	
+libfdisk-00440	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2714	gpt_create_disklabel	goto done; rc = gpt_sizeof_entries(gpt->pheader, &esz);	high	待判	
+libfdisk-00441	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2718	gpt_create_disklabel	goto done; gpt->ents = calloc(1, esz); if (!gpt->ents) {	high	待判	
+libfdisk-00442	libfdisk	2.39.3	T1	gpt	fail-goto	fail-goto	libfdisk/src/gpt.c	2722	gpt_create_disklabel	goto done; } gpt_recompute_crc(gpt->pheader, gpt->ents);	high	待判	
+libfdisk-00443	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2749	gpt_set_disklabel_id	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00444	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2750	gpt_set_disklabel_id	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00445	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2751	gpt_set_disklabel_id	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00446	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2800	gpt_check_table_overlap	fdisk_warnx(cxt, _("Not enough space for new partition table!")); return -ENOSPC; }	medium	待判	
+libfdisk-00447	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2811	gpt_check_table_overlap	fdisk_warnx(cxt, _("Partition #%zu out of range (minimal start is %"PRIu64" sectors)"), i + 1, first_usable); rc = -EINVAL;	medium	待判	
+libfdisk-00448	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2816	gpt_check_table_overlap	fdisk_warnx(cxt, _("Partition #%zu out of range (maximal end is %"PRIu64" sectors)"), i + 1, last_usable - (uint64_t) 1); rc = -EINVAL;	medium	待判	
+libfdisk-00449	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2844	fdisk_gpt_set_npartitions	assert(cxt); assert(cxt->label);	high	待判	
+libfdisk-00450	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2845	fdisk_gpt_set_npartitions	assert(cxt->label); if (!fdisk_is_label(cxt, GPT))	high	待判	
+libfdisk-00451	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	2888	fdisk_gpt_set_npartitions	fdisk_warnx(cxt, _("Cannot allocate memory!")); return -ENOMEM; }	high	待判	
+libfdisk-00452	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2929	gpt_part_is_used	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00453	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2930	gpt_part_is_used	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00454	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2931	gpt_part_is_used	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00455	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2961	fdisk_gpt_is_hybrid	assert(cxt); return valid_pmbr(cxt) == GPT_MBR_HYBRID; }	high	待判	
+libfdisk-00456	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2982	fdisk_gpt_get_partition_attrs	assert(cxt); assert(cxt->label);	high	待判	
+libfdisk-00457	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	2983	fdisk_gpt_get_partition_attrs	assert(cxt->label); if (!fdisk_is_label(cxt, GPT))	high	待判	
+libfdisk-00458	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3014	fdisk_gpt_set_partition_attrs	assert(cxt); assert(cxt->label);	high	待判	
+libfdisk-00459	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3015	fdisk_gpt_set_partition_attrs	assert(cxt->label); if (!fdisk_is_label(cxt, GPT))	high	待判	
+libfdisk-00460	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3049	gpt_toggle_partition_flag	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00461	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3050	gpt_toggle_partition_flag	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00462	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3051	gpt_toggle_partition_flag	assert(fdisk_is_label(cxt, GPT)); DBG(GPT, ul_debug("entry attribute change requested partno=%zu", i));	high	待判	
+libfdisk-00463	libfdisk	2.39.3	T1	gpt	refusal	refusal	libfdisk/src/gpt.c	3092	gpt_toggle_partition_flag	fdisk_warnx(cxt, _("failed to toggle unsupported bit %lu"), flag); return -EINVAL; }	high	待判	
+libfdisk-00464	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3143	gpt_reorder	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00465	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3144	gpt_reorder	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00466	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3145	gpt_reorder	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00467	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3173	gpt_reset_alignment	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00468	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3174	gpt_reset_alignment	assert(cxt->label); assert(fdisk_is_label(cxt, GPT));	high	待判	
+libfdisk-00469	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3175	gpt_reset_alignment	assert(fdisk_is_label(cxt, GPT)); gpt = self_label(cxt);	high	待判	
+libfdisk-00470	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3302	fdisk_gpt_disable_relocation	assert(gpt); gpt->no_relocate = disable ? 1 : 0; }	high	待判	
+libfdisk-00471	libfdisk	2.39.3	T1	gpt	assert	assert	libfdisk/src/gpt.c	3320	fdisk_gpt_enable_minimize	assert(gpt); gpt->minimize = enable ? 1 : 0; }	high	待判	
+libfdisk-00472	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/item.c	62	fdisk_ref_labelitem	assert(li->refcount > 0); li->refcount++; }	high	待判	
+libfdisk-00473	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/item.c	106	fdisk_unref_labelitem	assert(li->refcount > 0); li->refcount--;	high	待判	
+libfdisk-00474	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	96	fdisk_label_require_geometry	assert(lb); return lb->flags & FDISK_LABEL_FL_REQUIRE_GEOMETRY ? 1 : 0;	high	待判	
+libfdisk-00475	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	211	fdisk_label_get_field	assert(lb); assert(id > 0);	high	待判	
+libfdisk-00476	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	212	fdisk_label_get_field	assert(id > 0); for (i = 0; i < lb->nfields; i++) {	high	待判	
+libfdisk-00477	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	235	fdisk_label_get_field_by_name	assert(lb); assert(name);	high	待判	
+libfdisk-00478	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	236	fdisk_label_get_field_by_name	assert(name); for (i = 0; i < lb->nfields; i++) {	high	待判	
+libfdisk-00479	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	379	fdisk_create_disklabel	assert(cxt->label == lb); if (haslabel && !cxt->parent)	high	待判	
+libfdisk-00480	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	615	fdisk_deinit_label	assert(lb); /* private label information */	high	待判	
+libfdisk-00481	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	633	fdisk_label_set_changed	assert(lb); lb->changed = changed ? 1 : 0; }	high	待判	
+libfdisk-00482	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	658	fdisk_label_set_disabled	assert(lb); DBG(LABEL, ul_debug("%s label %s",	high	待判	
+libfdisk-00483	libfdisk	2.39.3	T1	label-uuid	assert	assert	libfdisk/src/label.c	674	fdisk_label_is_disabled	assert(lb); return lb ? lb->disabled : 0; }	high	待判	
+libfdisk-00484	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/partition.c	287	fdisk_partition_start_is_default	assert(pa); return pa->start_follow_default; }	high	待判	
+libfdisk-00485	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/partition.c	598	fdisk_partition_end_is_default	assert(pa); return pa->end_follow_default; }	high	待判	
+libfdisk-00486	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/partition.c	791	probe_partition_content	goto done; #ifdef HAVE_LIBBLKID	high	待判	
+libfdisk-00487	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/partition.c	799	probe_partition_content	goto done; DBG(PART, ul_debugobj(pa, "blkid prober: %p", pr));	high	待判	
+libfdisk-00488	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/partition.c	1414	fdisk_set_partition	goto done; } xpa->movestart = 0;	high	待判	
+libfdisk-00489	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/partition.c	1423	fdisk_set_partition	goto done; }	high	待判	
+libfdisk-00490	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	195	fdisk_label_has_code_parttypes	assert(lb); if (lb->parttypes && lb->parttypes[0].typestr)	high	待判	
+libfdisk-00491	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	212	fdisk_label_has_parttypes_shortcuts	assert(lb); return lb->nparttype_cuts ? 1 : 0; }	high	待判	
+libfdisk-00492	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	233	fdisk_label_get_parttype_from_code	assert(lb); if (!lb->nparttypes)	high	待判	
+libfdisk-00493	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	260	fdisk_label_get_parttype_from_string	assert(lb); if (!lb->nparttypes)	high	待判	
+libfdisk-00494	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	330	parttype_from_data	assert(lb); assert(str);	high	待判	
+libfdisk-00495	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	331	parttype_from_data	assert(str); if (xcode)	high	待判	
+libfdisk-00496	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	530	fdisk_parttype_get_string	assert(t); return t->typestr && *t->typestr ? t->typestr : NULL; }	high	待判	
+libfdisk-00497	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	542	fdisk_parttype_get_code	assert(t); return t->code; }	high	待判	
+libfdisk-00498	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/parttype.c	554	fdisk_parttype_get_name	assert(t); return t->name; }	high	待判	
+libfdisk-00499	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	126	fdisk_new_script_from_file	assert(cxt); assert(filename);	high	待判	
+libfdisk-00500	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	127	fdisk_new_script_from_file	assert(filename); DBG(SCRIPT, ul_debug("opening %s", filename));	high	待判	
+libfdisk-00501	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	136	fdisk_new_script_from_file	goto done; rc = fdisk_script_read_file(dp, f);	high	待判	
+libfdisk-00502	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	141	fdisk_new_script_from_file	goto done; }	high	待判	
+libfdisk-00503	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	169	fdisk_reset_script	assert(dp); DBG(SCRIPT, ul_debugobj(dp, "reset"));	high	待判	
+libfdisk-00504	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	217	fdisk_script_set_userdata	assert(dp); dp->userdata = data; return 0;	high	待判	
+libfdisk-00505	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	230	fdisk_script_get_userdata	assert(dp); return dp->userdata; }	high	待判	
+libfdisk-00506	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	260	fdisk_script_get_header	assert(dp); assert(name);	high	待判	
+libfdisk-00507	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	261	fdisk_script_get_header	assert(name); fi = script_get_header(dp, name);	high	待判	
+libfdisk-00508	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	355	fdisk_script_get_table	assert(dp); if (!dp->table)	high	待判	
+libfdisk-00509	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	405	script_get_label	assert(dp); assert(dp->cxt);	high	待判	
+libfdisk-00510	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	406	script_get_label	assert(dp->cxt); if (!dp->label) {	high	待判	
+libfdisk-00511	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	424	fdisk_script_get_nlines	assert(dp); return dp->nlines; }	high	待判	
+libfdisk-00512	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	440	fdisk_script_has_force_label	assert(dp); return dp->force_label; }	high	待判	
+libfdisk-00513	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	545	fdisk_script_enable_json	assert(dp); dp->json = json;	high	待判	
+libfdisk-00514	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	559	write_file_json	assert(dp); assert(f);	high	待判	
+libfdisk-00515	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	560	write_file_json	assert(f); DBG(SCRIPT, ul_debugobj(dp, "writing json dump to file"));	high	待判	
+libfdisk-00516	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	599	write_file_json	goto done; }	high	待判	
+libfdisk-00517	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	668	write_file_sfdisk	assert(dp); assert(f);	high	待判	
+libfdisk-00518	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	669	write_file_sfdisk	assert(f); DBG(SCRIPT, ul_debugobj(dp, "writing sfdisk-like script to file"));	high	待判	
+libfdisk-00519	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	747	fdisk_script_write_file	assert(dp); if (dp->json)	high	待判	
+libfdisk-00520	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	958	next_string	assert(s); assert(str);	high	待判	
+libfdisk-00521	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	959	next_string	assert(str); tk = next_token(s);	high	待判	
+libfdisk-00522	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1008	parse_start_value	assert(str); if (is_default_value(str)) {	high	待判	
+libfdisk-00523	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	1031	parse_start_value	goto done; } num /= dp->cxt->sector_size;	high	待判	
+libfdisk-00524	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	1038	parse_start_value	goto done; } }	high	待判	
+libfdisk-00525	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	1087	parse_size_value	goto done; } num /= dp->cxt->sector_size;	high	待判	
+libfdisk-00526	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	1096	parse_size_value	goto done; } }	high	待判	
+libfdisk-00527	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1134	parse_line_nameval	assert(dp); assert(s); assert(dp->table);	high	待判	
+libfdisk-00528	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1135	parse_line_nameval	assert(s); assert(dp->table);	high	待判	
+libfdisk-00529	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1136	parse_line_nameval	assert(dp->table); DBG(SCRIPT, ul_debugobj(dp, " parse script line: '%s'", s));	high	待判	
+libfdisk-00530	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1245	parse_line_valcommas	assert(dp); assert(s); assert(dp->table);	high	待判	
+libfdisk-00531	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1246	parse_line_valcommas	assert(s); assert(dp->table);	high	待判	
+libfdisk-00532	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1247	parse_line_valcommas	assert(dp->table); pa = fdisk_new_partition();	high	待判	
+libfdisk-00533	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1331	fdisk_script_read_buffer	assert(dp); assert(s);	high	待判	
+libfdisk-00534	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1332	fdisk_script_read_buffer	assert(s); DBG(SCRIPT, ul_debugobj(dp, " parsing buffer"));	high	待判	
+libfdisk-00535	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1375	fdisk_script_set_fgets	assert(dp); dp->fn_fgets = fn_fgets;	high	待判	
+libfdisk-00536	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1397	fdisk_script_read_line	assert(dp); assert(f); assert(bufsz);	high	待判	
+libfdisk-00537	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1398	fdisk_script_read_line	assert(f); assert(bufsz);	high	待判	
+libfdisk-00538	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1399	fdisk_script_read_line	assert(bufsz); DBG(SCRIPT, ul_debugobj(dp, " parsing line %zu", dp->nlines));	high	待判	
+libfdisk-00539	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1451	fdisk_script_read_file	assert(dp); assert(f);	high	待判	
+libfdisk-00540	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1452	fdisk_script_read_file	assert(f); DBG(SCRIPT, ul_debugobj(dp, "parsing file"));	high	待判	
+libfdisk-00541	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1493	fdisk_set_script	assert(cxt); /* unref old */	high	待判	
+libfdisk-00542	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1517	fdisk_get_script	assert(cxt); return cxt->script; }	high	待判	
+libfdisk-00543	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1537	fdisk_apply_script_headers	assert(cxt); assert(dp);	high	待判	
+libfdisk-00544	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1538	fdisk_apply_script_headers	assert(dp); DBG(SCRIPT, ul_debugobj(dp, "applying script headers"));	high	待判	
+libfdisk-00545	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1612	fdisk_apply_script	assert(dp); assert(cxt);	high	待判	
+libfdisk-00546	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/script.c	1613	fdisk_apply_script	assert(cxt); DBG(CXT, ul_debugobj(cxt, "applying script %p", dp));	high	待判	
+libfdisk-00547	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/src/script.c	1647	LLVMFuzzerTestOneInput	err(EXIT_FAILURE, "mkstemp() failed"); if (write_all(fd, data, size) != 0) err(EXIT_FAILURE, "write() failed");	high	待判	
+libfdisk-00548	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	libfdisk/src/script.c	1649	LLVMFuzzerTestOneInput	err(EXIT_FAILURE, "write() failed"); f = fopen(name, "r"); if (!f)	high	待判	
+libfdisk-00549	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	libfdisk/src/script.c	1652	LLVMFuzzerTestOneInput	err(EXIT_FAILURE, "cannot open %s", name); cxt = fdisk_new_context();	high	待判	
+libfdisk-00550	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	libfdisk/src/script.c	1699	test_read	err(EXIT_FAILURE, "%s: cannot open", filename); cxt = fdisk_new_context();	high	待判	
+libfdisk-00551	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/script.c	1768	test_apply	goto done; fdisk_unref_script(dp);	high	待判	
+libfdisk-00552	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	75	self_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00553	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	76	self_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00554	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	77	self_disklabel	assert(fdisk_is_label(cxt, SGI)); return ((struct fdisk_sgi_label *) cxt->label)->header;	high	待判	
+libfdisk-00555	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	85	self_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00556	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	86	self_label	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00557	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	87	self_label	assert(fdisk_is_label(cxt, SGI)); return (struct fdisk_sgi_label *) cxt->label;	high	待判	
+libfdisk-00558	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	239	sgi_probe_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00559	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	240	sgi_probe_label	assert(cxt->label); assert(fdisk_is_label(cxt, SGI)); assert(sizeof(struct sgi_disklabel) <= 512);	high	待判	
+libfdisk-00560	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	241	sgi_probe_label	assert(fdisk_is_label(cxt, SGI)); assert(sizeof(struct sgi_disklabel) <= 512);	high	待判	
+libfdisk-00561	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	242	sgi_probe_label	assert(sizeof(struct sgi_disklabel) <= 512); /* map first sector to header */	high	待判	
+libfdisk-00562	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	272	sgi_get_disklabel_item	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00563	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	273	sgi_get_disklabel_item	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00564	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	274	sgi_get_disklabel_item	assert(fdisk_is_label(cxt, SGI)); sgilabel = self_disklabel(cxt);	high	待判	
+libfdisk-00565	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sgi.c	394	sgi_check_bootfile	fdisk_warnx(cxt, _("Invalid bootfile! The bootfile must " "be an absolute non-zero pathname, " "e.g. \"/unix\" or \"/unix.save\"."));	high	待判	
+libfdisk-00566	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	450	fdisk_sgi_set_bootfile	goto done; }	high	待判	
+libfdisk-00567	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	456	fdisk_sgi_set_bootfile	assert(sz <= sizeof(sgilabel->boot_file)); /* see sgi_check_bootfile() */ memcpy(sgilabel->boot_file, name, sz);	high	待判	
+libfdisk-00568	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	471	sgi_write_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00569	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	472	sgi_write_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00570	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	473	sgi_write_disklabel	assert(fdisk_is_label(cxt, SGI)); sgilabel = self_disklabel(cxt);	high	待判	
+libfdisk-00571	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	479	sgi_write_disklabel	assert(sgi_pt_checksum(sgilabel) == 0); if (lseek(cxt->dev_fd, 0, SEEK_SET) < 0)	high	待判	
+libfdisk-00572	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	482	sgi_write_disklabel	goto err; if (write_all(cxt->dev_fd, sgilabel, DEFAULT_SECTOR_SIZE)) goto err;	high	待判	
+libfdisk-00573	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	484	sgi_write_disklabel	goto err; if (!strncmp((char *) sgilabel->volume[0].name, "sgilabel", 8)) { /*	high	待判	
+libfdisk-00574	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	495	sgi_write_disklabel	goto err; info = sgi_new_info(); if (!info)	high	待判	
+libfdisk-00575	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	498	sgi_write_disklabel	goto err; if (write_all(cxt->dev_fd, info, sizeof(*info))) goto err;	high	待判	
+libfdisk-00576	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/sgi.c	500	sgi_write_disklabel	goto err; }	high	待判	
+libfdisk-00577	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	587	verify_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00578	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	588	verify_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00579	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	589	verify_disklabel	assert(fdisk_is_label(cxt, SGI)); clear_freelist(cxt);	high	待判	
+libfdisk-00580	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sgi.c	655	verify_disklabel	P_("Partitions %d and %d overlap by %d sector.", "Partitions %d and %d overlap by %d sectors.", start - sgi_get_start_sector(cxt, Index[i])),	medium	待判	
+libfdisk-00581	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	750	set_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00582	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	751	set_partition	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00583	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	752	set_partition	assert(fdisk_is_label(cxt, SGI)); sgilabel = self_disklabel(cxt);	high	待判	
+libfdisk-00584	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sgi.c	762	set_partition	fdisk_warnx(cxt, _("Partition overlap on the disk.")); if (length) { struct fdisk_parttype *t =	medium	待判	
+libfdisk-00585	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	802	sgi_delete_partition	assert(cxt); assert(cxt->label);	high	待判	
+libfdisk-00586	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	803	sgi_delete_partition	assert(cxt->label); if (partnum > cxt->label->nparts_max)	high	待判	
+libfdisk-00587	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	827	sgi_add_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00588	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	828	sgi_add_partition	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00589	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	829	sgi_add_partition	assert(fdisk_is_label(cxt, SGI)); rc = fdisk_partition_next_partno(pa, cxt, &n);	high	待判	
+libfdisk-00590	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sgi.c	856	sgi_add_partition	fdisk_warnx(cxt, _("You got a partition overlap on the disk. Fix it first!")); return -EINVAL; }	medium	待判	
+libfdisk-00591	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	970	sgi_create_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00592	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	971	sgi_create_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00593	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	972	sgi_create_disklabel	assert(fdisk_is_label(cxt, SGI)); if (cxt->geom.heads && cxt->geom.sectors) {	high	待判	
+libfdisk-00594	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sgi.c	989	sgi_create_disklabel	_("BLKGETSIZE ioctl failed on %s. " "Using geometry cylinder value of %ju. " "This value may be truncated for devices "	high	待判	
+libfdisk-00595	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	1116	sgi_partition_is_used	assert(cxt); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00596	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	1117	sgi_partition_is_used	assert(fdisk_is_label(cxt, SGI)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00597	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	1127	sgi_toggle_partition_flag	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00598	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	1128	sgi_toggle_partition_flag	assert(cxt->label); assert(fdisk_is_label(cxt, SGI));	high	待判	
+libfdisk-00599	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sgi.c	1129	sgi_toggle_partition_flag	assert(fdisk_is_label(cxt, SGI)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00600	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	61	self_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00601	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	62	self_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00602	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	63	self_disklabel	assert(fdisk_is_label(cxt, SUN)); return ((struct fdisk_sun_label *) cxt->label)->header;	high	待判	
+libfdisk-00603	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	71	self_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00604	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	72	self_label	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00605	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	73	self_label	assert(fdisk_is_label(cxt, SUN)); return (struct fdisk_sun_label *) cxt->label;	high	待判	
+libfdisk-00606	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sun.c	86	set_partition	fdisk_warnx(cxt, _("#%zu: start cylinder overflows Sun label limits"), i+1); if (stop - start > UINT32_MAX)	medium	待判	
+libfdisk-00607	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sun.c	89	set_partition	fdisk_warnx(cxt, _("#%zu: number of sectors overflow Sun label limits"), i+1); sunlabel->vtoc.infos[i].id = cpu_to_be16(sysid);	medium	待判	
+libfdisk-00608	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	106	count_used_partitions	assert(sunlabel); for (i = 0; i < cxt->label->nparts_max; i++) {	high	待判	
+libfdisk-00609	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	121	sun_probe_label	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00610	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	122	sun_probe_label	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00611	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	123	sun_probe_label	assert(fdisk_is_label(cxt, SUN)); /* map first sector to header */	high	待判	
+libfdisk-00612	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	189	ask_geom	assert(cxt); if (fdisk_ask_number(cxt, cxt->label->geom_min.heads, 1,	high	待判	
+libfdisk-00613	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	214	sun_create_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00614	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	215	sun_create_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00615	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	216	sun_create_disklabel	assert(fdisk_is_label(cxt, SUN)); /* map first sector to header */	high	待判	
+libfdisk-00616	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sun.c	248	sun_create_disklabel	_("BLKGETSIZE ioctl failed on %s. " "Using geometry cylinder value of %ju. " "This value may be truncated for devices "	high	待判	
+libfdisk-00617	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	310	sun_toggle_partition_flag	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00618	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	311	sun_toggle_partition_flag	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00619	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	312	sun_toggle_partition_flag	assert(fdisk_is_label(cxt, SUN)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00620	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	347	fetch_sun	assert(cxt); assert(cxt); assert(cxt->label);	high	待判	
+libfdisk-00621	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	348	fetch_sun	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00622	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	349	fetch_sun	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00623	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	350	fetch_sun	assert(fdisk_is_label(cxt, SUN)); sunlabel = self_disklabel(cxt);	high	待判	
+libfdisk-00624	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	416	sun_verify_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00625	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	417	sun_verify_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00626	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	418	sun_verify_disklabel	assert(fdisk_is_label(cxt, SUN)); fetch_sun(cxt, starts, lens, &start, &stop);	high	待判	
+libfdisk-00627	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sun.c	444	sun_verify_disklabel	fdisk_warnx(cxt, _("Partition %u overlaps with others in " "sectors %u-%u."), i+1, starto, endo); }	medium	待判	
+libfdisk-00628	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	736	sun_delete_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00629	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	737	sun_delete_partition	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00630	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	738	sun_delete_partition	assert(fdisk_is_label(cxt, SUN)); sunlabel = self_disklabel(cxt);	high	待判	
+libfdisk-00631	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	765	sun_get_disklabel_item	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00632	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	766	sun_get_disklabel_item	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00633	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	767	sun_get_disklabel_item	assert(fdisk_is_label(cxt, SUN)); sunlabel = self_disklabel(cxt);	high	待判	
+libfdisk-00634	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	842	sun_get_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00635	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	843	sun_get_partition	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00636	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	844	sun_get_partition	assert(fdisk_is_label(cxt, SUN)); if (n >= cxt->label->nparts_max)	high	待判	
+libfdisk-00637	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1004	sun_write_disklabel	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00638	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1005	sun_write_disklabel	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00639	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1006	sun_write_disklabel	assert(fdisk_is_label(cxt, SUN)); sunlabel = self_disklabel(cxt);	high	待判	
+libfdisk-00640	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1040	sun_set_partition	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00641	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1041	sun_set_partition	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00642	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1042	sun_set_partition	assert(fdisk_is_label(cxt, SUN)); sunlabel = self_disklabel(cxt);	high	待判	
+libfdisk-00643	libfdisk	2.39.3	T1	table-edit	refusal	refusal	libfdisk/src/sun.c	1067	sun_set_partition	_("It is highly recommended that the partition at offset 0\n" "is UFS, EXT2FS filesystem or SunOS swap. Putting Linux swap\n" "there may destroy your partition table and bootblock.\n"	high	待判	
+libfdisk-00644	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1116	sun_partition_is_used	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00645	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1117	sun_partition_is_used	assert(cxt->label); assert(fdisk_is_label(cxt, SUN));	high	待判	
+libfdisk-00646	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/sun.c	1118	sun_partition_is_used	assert(fdisk_is_label(cxt, SUN)); if (i >= cxt->label->nparts_max)	high	待判	
+libfdisk-00647	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	252	table_insert_partition	assert(tb); assert(pa);	high	待判	
+libfdisk-00648	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	253	table_insert_partition	assert(pa); fdisk_ref_partition(pa);	high	待判	
+libfdisk-00649	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	409	new_freespace	assert(cxt); assert(pa);	high	待判	
+libfdisk-00650	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	410	new_freespace	assert(pa); *pa = NULL;	high	待判	
+libfdisk-00651	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	417	new_freespace	assert(start >= cxt->first_lba); assert(end); assert(end > start);	high	待判	
+libfdisk-00652	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	418	new_freespace	assert(end); assert(end > start);	high	待判	
+libfdisk-00653	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	419	new_freespace	assert(end > start); aligned_start = fdisk_align_lba_in_range(cxt, start, start, end);	high	待判	
+libfdisk-00654	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	454	table_add_freespace	assert(tb); rc = new_freespace(cxt, start, end, parent, &pa);	high	待判	
+libfdisk-00655	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	462	table_add_freespace	assert(fdisk_partition_has_start(pa)); assert(fdisk_partition_has_end(pa));	high	待判	
+libfdisk-00656	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	463	table_add_freespace	assert(fdisk_partition_has_end(pa)); DBG(TAB, ul_debugobj(tb, "adding freespace"));	high	待判	
+libfdisk-00657	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	520	check_container_freespace	assert(cxt); assert(parts); assert(tb);	high	待判	
+libfdisk-00658	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	521	check_container_freespace	assert(parts); assert(tb); assert(cont);	high	待判	
+libfdisk-00659	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	522	check_container_freespace	assert(tb); assert(cont); assert(fdisk_partition_has_start(cont));	high	待判	
+libfdisk-00660	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	523	check_container_freespace	assert(cont); assert(fdisk_partition_has_start(cont));	high	待判	
+libfdisk-00661	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	524	check_container_freespace	assert(fdisk_partition_has_start(cont)); DBG(TAB, ul_debugobj(tb, "analyze container 0x%p", cont));	high	待判	
+libfdisk-00662	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/table.c	553	check_container_freespace	goto done; last = fdisk_partition_get_end(pa); }	high	待判	
+libfdisk-00663	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/table.c	602	fdisk_get_freespaces	goto done; fdisk_table_sort_partitions(parts, fdisk_partition_cmp_start);	high	待判	
+libfdisk-00664	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	712	fdisk_apply_table	assert(cxt); assert(tb);	high	待判	
+libfdisk-00665	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	713	fdisk_apply_table	assert(tb); DBG(TAB, ul_debugobj(tb, "applying to context %p", cxt));	high	待判	
+libfdisk-00666	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	736	fdisk_diff_tables	assert(itr); assert(res); assert(change);	high	待判	
+libfdisk-00667	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	737	fdisk_diff_tables	assert(res); assert(change);	high	待判	
+libfdisk-00668	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/table.c	738	fdisk_diff_tables	assert(change); DBG(TAB, ul_debugobj(a, "table diff [new table=%p]", b));	high	待判	
+libfdisk-00669	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/test.c	25	fdisk_run_test	assert(tests); assert(argc); assert(argv);	high	待判	
+libfdisk-00670	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/test.c	26	fdisk_run_test	assert(argc); assert(argv);	high	待判	
+libfdisk-00671	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/test.c	27	fdisk_run_test	assert(argv); if (argc < 2 ||	high	待判	
+libfdisk-00672	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/utils.c	20	read_from_device	assert(cxt); DBG(CXT, ul_debugobj(cxt, "reading: offset=%ju, size=%zu",	high	待判	
+libfdisk-00673	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/utils.c	56	fdisk_init_firstsector_buffer	assert(protect_off + protect_size <= cxt->sector_size); if (!cxt->firstsector || cxt->firstsector_bufsz != cxt->sector_size) {	high	待判	
+libfdisk-00674	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/utils.c	96	fdisk_read_firstsector	assert(cxt); assert(cxt->sector_size);	high	待判	
+libfdisk-00675	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/utils.c	97	fdisk_read_firstsector	assert(cxt->sector_size); rc = fdisk_init_firstsector_buffer(cxt, 0, 0);	high	待判	
+libfdisk-00676	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/utils.c	103	fdisk_read_firstsector	assert(cxt->sector_size == cxt->firstsector_bufsz);	high	待判	
+libfdisk-00677	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/utils.c	162	fdisk_partname	goto done; free(res);	high	待判	
+libfdisk-00678	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	libfdisk/src/utils.c	170	fdisk_partname	goto done; free(res);	high	待判	
+libfdisk-00679	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/version.c	38	fdisk_parse_version_string	assert(ver_string); for (cp = ver_string; *cp; cp++) {	high	待判	
+libfdisk-00680	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/wipe.c	112	fdisk_do_wipe	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00681	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/wipe.c	113	fdisk_do_wipe	assert(cxt->dev_fd >= 0); if (list_empty(&cxt->wipes))	high	待判	
+libfdisk-00682	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/wipe.c	171	fdisk_check_collisions	assert(cxt); assert(cxt->dev_fd >= 0);	high	待判	
+libfdisk-00683	libfdisk	2.39.3	T1	table-edit	assert	assert	libfdisk/src/wipe.c	172	fdisk_check_collisions	assert(cxt->dev_fd >= 0); DBG(WIPE, ul_debugobj(cxt, "wipe check: initialize libblkid prober"));	high	待判	
+libfdisk-00684	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	175	ask_callback	assert(ask); switch(fdisk_ask_get_type(ask)) {	high	待判	
+libfdisk-00685	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	187	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); color_fdisable(stderr); fputc('\n', stderr);	medium	待判	
+libfdisk-00686	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	194	ask_callback	fputs(fdisk_ask_print_get_mesg(ask), stderr); errno = fdisk_ask_print_get_errno(ask); fprintf(stderr, ": %m\n");	medium	待判	
+libfdisk-00687	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	196	ask_callback	fprintf(stderr, ": %m\n"); color_fdisable(stderr); break;	medium	待判	
+libfdisk-00688	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	232	sfdisk_init	err(EXIT_FAILURE, _("failed to allocate libfdisk context")); fdisk_set_ask(sf->cxt, ask_callback, (void *) sf);	high	待判	
+libfdisk-00689	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	242	sfdisk_init	err(EXIT_FAILURE, _("failed to allocate nested libfdisk context")); /* the original context is available by fdisk_get_parent() */ sf->cxt = x;	high	待判	
+libfdisk-00690	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	252	sfdisk_deinit	assert(sf); assert(sf->cxt);	high	待判	
+libfdisk-00691	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	253	sfdisk_deinit	assert(sf->cxt); parent = fdisk_get_parent(sf->cxt);	high	待判	
+libfdisk-00692	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	293	backup_sectors	assert(devfd >= 0); xasprintf(&fname, "%s0x%08"PRIx64".bak", tpl, offset);	high	待判	
+libfdisk-00693	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	299	backup_sectors	goto fail; if (lseek(devfd, (off_t) offset, SEEK_SET) == (off_t) -1) {	high	待判	
+libfdisk-00694	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	302	backup_sectors	fdisk_warn(sf->cxt, _("cannot seek %s"), devname); goto fail; } else {	high	待判	
+libfdisk-00695	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	303	backup_sectors	goto fail; } else { unsigned char *buf = xmalloc(size);	high	待判	
+libfdisk-00696	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	308	backup_sectors	fdisk_warn(sf->cxt, _("cannot read %s"), devname); free(buf); goto fail;	high	待判	
+libfdisk-00697	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	310	backup_sectors	goto fail; } if (write_all(fd, buf, size) != 0) {	high	待判	
+libfdisk-00698	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	313	backup_sectors	fdisk_warn(sf->cxt, _("cannot write %s"), fname); free(buf); goto fail;	high	待判	
+libfdisk-00699	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	315	backup_sectors	goto fail; } free(buf);	high	待判	
+libfdisk-00700	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	326	backup_sectors	errx(EXIT_FAILURE, _("%s: failed to create a backup"), devname); }	high	待判	
+libfdisk-00701	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	339	mk_backup_filename_tpl	errx(EXIT_FAILURE, _("failed to create a backup file, $HOME undefined")); xasprintf(&tpl, "%s/sfdisk-%s%s", home, name, suffix); } else	high	待判	
+libfdisk-00702	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	357	backup_partition_table	assert(sf); if (!fdisk_has_label(sf->cxt))	high	待判	
+libfdisk-00703	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	381	assign_device	err(EXIT_FAILURE, _("cannot open %s"), devname); if (!fdisk_is_readonly(cxt)) {	high	待判	
+libfdisk-00704	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/sfdisk.c	386	assign_device	exit(EXIT_FAILURE); } if (sf->backup)	high	待判	
+libfdisk-00705	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	408	move_partition_data	assert(sf->movedata); if (!pa)	high	待判	
+libfdisk-00706	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	411	move_partition_data	warnx(_("failed to read new partition from device; ignoring --move-data")); else if (!fdisk_partition_has_size(pa)) warnx(_("failed to get size of the new partition; ignoring --move-data"));	medium	待判	
+libfdisk-00707	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	413	move_partition_data	warnx(_("failed to get size of the new partition; ignoring --move-data")); else if (!fdisk_partition_has_start(pa)) warnx(_("failed to get start of the new partition; ignoring --move-data"));	medium	待判	
+libfdisk-00708	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	415	move_partition_data	warnx(_("failed to get start of the new partition; ignoring --move-data")); else if (!fdisk_partition_has_size(orig_pa)) warnx(_("failed to get size of the old partition; ignoring --move-data"));	medium	待判	
+libfdisk-00709	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	417	move_partition_data	warnx(_("failed to get size of the old partition; ignoring --move-data")); else if (!fdisk_partition_has_start(orig_pa)) warnx(_("failed to get start of the old partition; ignoring --move-data"));	medium	待判	
+libfdisk-00710	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	419	move_partition_data	warnx(_("failed to get start of the old partition; ignoring --move-data")); else if (fdisk_partition_get_start(pa) == fdisk_partition_get_start(orig_pa)) warnx(_("start of the partition has not been moved; ignoring --move-data"));	medium	待判	
+libfdisk-00711	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	421	move_partition_data	warnx(_("start of the partition has not been moved; ignoring --move-data")); else if (fdisk_partition_get_size(orig_pa) > fdisk_partition_get_size(pa)) warnx(_("new partition is smaller than original; ignoring --move-data"));	medium	待判	
+libfdisk-00712	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	423	move_partition_data	warnx(_("new partition is smaller than original; ignoring --move-data")); else ok = 1;	medium	待判	
+libfdisk-00713	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	502	move_partition_data	fdisk_warn(sf->cxt, _("cannot open %s"), typescript); goto done; }	high	待判	
+libfdisk-00714	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	503	move_partition_data	goto done; }	high	待判	
+libfdisk-00715	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	554	move_partition_data	_("cannot read at offset: %ju; continue"), src); ioerr++; goto next;	high	待判	
+libfdisk-00716	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	565	move_partition_data	_("cannot write at offset: %ju; continue"), dst); ioerr++; goto next;	high	待判	
+libfdisk-00717	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	571	move_partition_data	_("cannot fsync at offset: %ju; continue"), dst); }	high	待判	
+libfdisk-00718	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	642	move_partition_data	warn(_("%s: failed to move data"), devname); free(devname);	medium	待判	
+libfdisk-00719	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	731	command_list_types	assert(sf); assert(sf->cxt);	high	待判	
+libfdisk-00720	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	732	command_list_types	assert(sf->cxt); name = sf->label ? sf->label : "dos";	high	待判	
+libfdisk-00721	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	737	command_list_types	errx(EXIT_FAILURE, _("unsupported label '%s'"), name); codes = fdisk_label_has_code_parttypes(lb);	high	待判	
+libfdisk-00722	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	814	get_size	warn(_("cannot open %s"), dev); return -errno; }	high	待判	
+libfdisk-00723	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	820	get_size	warn(_("Cannot get size of %s"), dev); rc = -errno; }	high	待判	
+libfdisk-00724	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	916	command_activate	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00725	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	926	command_activate	errx(EXIT_FAILURE, _("toggle boot flags is unsupported for Hybrid GPT/MBR")); /* Switch from GPT to PMBR */	high	待判	
+libfdisk-00726	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	931	command_activate	err(EXIT_FAILURE, _("cannot switch to PMBR")); fdisk_info(sf->cxt, _("Activation is unsupported for GPT -- entering nested PMBR."));	high	待判	
+libfdisk-00727	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	932	command_activate	fdisk_info(sf->cxt, _("Activation is unsupported for GPT -- entering nested PMBR.")); } else if (!fdisk_is_label(sf->cxt, DOS))	high	待判	
+libfdisk-00728	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	935	command_activate	errx(EXIT_FAILURE, _("toggle boot flags is supported for MBR or PMBR only")); nparts = fdisk_get_npartitions(sf->cxt);	high	待判	
+libfdisk-00729	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	971	command_activate	errx(EXIT_FAILURE, _("%s: partition %d: failed to toggle bootable flag"), devname, i + 1);	high	待判	
+libfdisk-00730	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	994	command_delete	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00731	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1005	command_delete	errx(EXIT_FAILURE, _("%s: partition %zu: failed to delete"), devname, i + 1); } /* delete specified */	high	待判	
+libfdisk-00732	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1013	command_delete	errx(EXIT_FAILURE, _("%s: partition %zu: failed to delete"), devname, n); } }	high	待判	
+libfdisk-00733	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1031	command_reorder	errx(EXIT_FAILURE, _("no disk device specified")); assign_device(sf, devname, 0); /* read-write */	high	待判	
+libfdisk-00734	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1056	command_dump	errx(EXIT_FAILURE, _("no disk device specified")); assign_device(sf, devname, 1); /* read-only */	high	待判	
+libfdisk-00735	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1061	command_dump	errx(EXIT_FAILURE, _("%s: does not contain a recognized partition table"), devname); dp = fdisk_new_script(sf->cxt);	high	待判	
+libfdisk-00736	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1065	command_dump	err(EXIT_FAILURE, _("failed to allocate dump struct")); rc = fdisk_script_read_context(dp, NULL);	high	待判	
+libfdisk-00737	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1069	command_dump	errx(EXIT_FAILURE, _("%s: failed to dump partition table"), devname); if (sf->json)	high	待判	
+libfdisk-00738	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1090	command_backup_sectors	errx(EXIT_FAILURE, _("no disk device specified")); assign_device(sf, devname, 1); /* read-only */	high	待判	
+libfdisk-00739	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1095	command_backup_sectors	errx(EXIT_FAILURE, _("%s: does not contain a recognized partition table"), devname); backup_partition_table(sf, devname);	high	待判	
+libfdisk-00740	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1112	assign_device_partition	assert(sf); assert(devname);	high	待判	
+libfdisk-00741	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1113	assign_device_partition	assert(devname); /* read-only when a new <type> undefined */	high	待判	
+libfdisk-00742	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1118	assign_device_partition	err(EXIT_FAILURE, _("cannot open %s"), devname); if (!fdisk_is_readonly(sf->cxt)	high	待判	
+libfdisk-00743	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1127	assign_device_partition	errx(EXIT_FAILURE, _("%s: no partition table found"), devname); n = fdisk_get_npartitions(sf->cxt);	high	待判	
+libfdisk-00744	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1131	assign_device_partition	errx(EXIT_FAILURE, _("%s: partition %zu: partition table contains " "only %zu partitions"), devname, partno, n); if (!fdisk_is_partition_used(sf->cxt, partno - 1))	high	待判	
+libfdisk-00745	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1134	assign_device_partition	errx(EXIT_FAILURE, _("%s: partition %zu: partition is unused"), devname, partno); }	high	待判	
+libfdisk-00746	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1149	command_parttype	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00747	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1153	command_parttype	errx(EXIT_FAILURE, _("no partition number specified")); partno = strtou32_or_err(argv[1], _("failed to parse partition number"));	high	待判	
+libfdisk-00748	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1159	command_parttype	errx(EXIT_FAILURE, _("unexpected arguments")); /* read-only when a new <type> undefined */	high	待判	
+libfdisk-00749	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1174	command_parttype	errx(EXIT_FAILURE, _("%s: partition %zu: failed to get partition type"), devname, partno);	high	待判	
+libfdisk-00750	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1197	command_parttype	errx(EXIT_FAILURE, _("failed to parse %s partition type '%s'"), fdisk_label_get_name(lb), typestr);	high	待判	
+libfdisk-00751	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1201	command_parttype	errx(EXIT_FAILURE, _("%s: partition %zu: failed to set partition type"), devname, partno); fdisk_unref_parttype(type);	high	待判	
+libfdisk-00752	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1217	command_partuuid	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00753	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1221	command_partuuid	errx(EXIT_FAILURE, _("no partition number specified")); partno = strtou32_or_err(argv[1], _("failed to parse partition number"));	high	待判	
+libfdisk-00754	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1227	command_partuuid	errx(EXIT_FAILURE, _("unexpected arguments")); /* read-only if uuid not given */	high	待判	
+libfdisk-00755	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1239	command_partuuid	errx(EXIT_FAILURE, _("%s: partition %zu: failed to get partition UUID"), devname, partno); printf("%s\n", str);	high	待判	
+libfdisk-00756	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1252	command_partuuid	err(EXIT_FAILURE, _("failed to allocate partition object")); if (fdisk_partition_set_uuid(pa, uuid) != 0 ||	high	待判	
+libfdisk-00757	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1256	command_partuuid	errx(EXIT_FAILURE, _("%s: partition %zu: failed to set partition UUID"), devname, partno); fdisk_unref_partition(pa);	high	待判	
+libfdisk-00758	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1272	command_partlabel	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00759	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1276	command_partlabel	errx(EXIT_FAILURE, _("no partition number specified")); partno = strtou32_or_err(argv[1], _("failed to parse partition number"));	high	待判	
+libfdisk-00760	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1282	command_partlabel	errx(EXIT_FAILURE, _("unexpected arguments")); /* read-only if name not given */	high	待判	
+libfdisk-00761	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1294	command_partlabel	errx(EXIT_FAILURE, _("%s: partition %zu: failed to get partition name"), devname, partno); printf("%s\n", str);	high	待判	
+libfdisk-00762	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1307	command_partlabel	err(EXIT_FAILURE, _("failed to allocate partition object")); if (fdisk_partition_set_name(pa, name) != 0 ||	high	待判	
+libfdisk-00763	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1311	command_partlabel	errx(EXIT_FAILURE, _("%s: partition %zu: failed to set partition name"), devname, partno);	high	待判	
+libfdisk-00764	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1328	command_partattrs	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00765	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1332	command_partattrs	errx(EXIT_FAILURE, _("no partition number specified")); partno = strtou32_or_err(argv[1], _("failed to parse partition number"));	high	待判	
+libfdisk-00766	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1338	command_partattrs	errx(EXIT_FAILURE, _("unexpected arguments")); /* read-only if name not given */	high	待判	
+libfdisk-00767	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1361	command_partattrs	err(EXIT_FAILURE, _("failed to allocate partition object")); if (fdisk_partition_set_attrs(pa, attrs) != 0 ||	high	待判	
+libfdisk-00768	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1365	command_partattrs	errx(EXIT_FAILURE, _("%s: partition %zu: failed to set partition attributes"), devname, partno);	high	待判	
+libfdisk-00769	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1381	command_diskid	errx(EXIT_FAILURE, _("no disk device specified")); devname = argv[0];	high	待判	
+libfdisk-00770	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1387	command_diskid	errx(EXIT_FAILURE, _("unexpected arguments")); assign_device(sf, devname, !str);	high	待判	
+libfdisk-00771	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1402	command_diskid	errx(EXIT_FAILURE, _("%s: failed to set disklabel ID"), devname); return write_changes(sf);	high	待判	
+libfdisk-00772	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1417	command_relocate	errx(EXIT_FAILURE, _("no relocate operation specified")); if (argc < 2) errx(EXIT_FAILURE, _("no disk device specified"));	high	待判	
+libfdisk-00773	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1419	command_relocate	errx(EXIT_FAILURE, _("no disk device specified")); if (argc > 2) errx(EXIT_FAILURE, _("unexpected arguments"));	high	待判	
+libfdisk-00774	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1421	command_relocate	errx(EXIT_FAILURE, _("unexpected arguments")); oper = argv[0];	high	待判	
+libfdisk-00775	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1431	command_relocate	errx(EXIT_FAILURE, _("unsupported relocation operation")); assign_device(sf, devname, 0);	high	待判	
+libfdisk-00776	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1445	sfdisk_print_partition	assert(sf); if (sf->quiet)	high	待判	
+libfdisk-00777	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	1546	loop_control_commands	fdisk_warnx(sf->cxt, _("unsupported command")); else { fdisk_warnx(sf->cxt, _("line %d: unsupported command"),	high	待判	
+libfdisk-00778	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	1548	loop_control_commands	fdisk_warnx(sf->cxt, _("line %d: unsupported command"), fdisk_script_get_nlines(dp)); rc = -EINVAL;	high	待判	
+libfdisk-00779	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1609	sfdisk_fgets	assert(dp); assert(buf); assert(bufsz > 2);	high	待判	
+libfdisk-00780	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1610	sfdisk_fgets	assert(buf); assert(bufsz > 2);	high	待判	
+libfdisk-00781	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1611	sfdisk_fgets	assert(bufsz > 2); if (sf->interactive) {	high	待判	
+libfdisk-00782	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	1692	wipe_partition	goto done; rc = fdisk_partition_to_string(tmp, sf->cxt, FDISK_FIELD_FSTYPE, &fstype);	high	待判	
+libfdisk-00783	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/sfdisk.c	1696	wipe_partition	goto done; fdisk_warnx(sf->cxt, _("Partition #%zu contains a %s signature."), partno + 1, fstype);	high	待判	
+libfdisk-00784	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1722	refresh_prompt_buffer	err(EXIT_FAILURE, _("failed to allocate partition name")); if (!sf->prompt || !startswith(sf->prompt, partname)) {	high	待判	
+libfdisk-00785	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1755	command_fdisk	errx(EXIT_FAILURE, _("no disk device specified")); assign_device(sf, devname, 0);	high	待判	
+libfdisk-00786	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1761	command_fdisk	err(EXIT_FAILURE, _("failed to allocate script handler")); fdisk_set_script(sf->cxt, dp); #ifdef HAVE_LIBREADLINE	high	待判	
+libfdisk-00787	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1777	command_fdisk	errx(EXIT_FAILURE, _("%s: cannot modify partition %d: " "no partition table was found"), devname, partno + 1);	high	待判	
+libfdisk-00788	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	1782	command_fdisk	errx(EXIT_FAILURE, _("%s: cannot modify partition %d: " "partition table contains only %zu " "partitions"),	high	待判	
+libfdisk-00789	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1825	command_fdisk	errx(EXIT_FAILURE, _("Use the --force flag to overrule all checks.")); } else if (!sf->quiet) fputs(_(" OK\n\n"), stdout);	high	待判	
+libfdisk-00790	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/sfdisk.c	1849	command_fdisk	errx(EXIT_FAILURE, _("failed to set script header")); if (!sf->quiet && sf->interactive) {	high	待判	
+libfdisk-00791	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1862	command_fdisk	assert(tb); do {	high	待判	
+libfdisk-00792	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/sfdisk.c	1920	command_fdisk	assert(pa); if (ignore_partition(pa)) {	high	待判	
+libfdisk-00793	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/sfdisk.c	2034	__attribute__	static void __attribute__((__noreturn__)) usage(void) { FILE *out = stdout;	high	待判	
+libfdisk-00794	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	2078	__attribute__	fputs(_(" --bytes print SIZE in bytes rather than in human readable format\n"), out); fputs(_(" --move-data[=<typescript>] move partition data after relocation (requires -N)\n"), out); fputs(_(" --move-use-fsync use fsync after each write w	medium	待判	
+libfdisk-00795	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	2079	__attribute__	fputs(_(" --move-data[=<typescript>] move partition data after relocation (requires -N)\n"), out); fputs(_(" --move-use-fsync use fsync after each write when move data\n"), out); fputs(_(" -f, --force disable all consistency checking\n"), o	medium	待判	
+libfdisk-00796	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/sfdisk.c	2114	__attribute__	exit(EXIT_SUCCESS); }	high	待判	
+libfdisk-00797	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	2239	main	warnx(_("%s is deprecated in favour of --part-type"), longopts[longidx].name); sf->act = ACT_PARTTYPE;	medium	待判	
+libfdisk-00798	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	2244	main	warnx(_("--id is deprecated in favour of --part-type")); sf->act = ACT_PARTTYPE; break;	medium	待判	
+libfdisk-00799	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	2260	main	warnx(_("--show-pt-geometry is no more implemented. Using --show-geometry.")); /* fallthrough */ case 'g':	medium	待判	
+libfdisk-00800	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/sfdisk.c	2266	main	usage(); break; case 'l':	high	待判	
+libfdisk-00801	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/sfdisk.c	2272	main	warnx(_("--Linux option is unnecessary and deprecated")); break; case 'o':	medium	待判	
+libfdisk-00802	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	2301	main	errx(EXIT_FAILURE, _("unsupported unit '%c'"), *optarg); break; case 'v':	high	待判	
+libfdisk-00803	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	2311	main	errx(EXIT_FAILURE, _("unsupported wipe mode")); break; case 'W':	high	待判	
+libfdisk-00804	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	2316	main	errx(EXIT_FAILURE, _("unsupported wipe mode")); break; case 'X':	high	待判	
+libfdisk-00805	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/sfdisk.c	2350	main	_("unsupported color mode")); break; case OPT_MOVEDATA:	high	待判	
+libfdisk-00806	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/sfdisk.c	2396	main	errx(EXIT_FAILURE, _("--movedata requires -N")); switch (sf->act) {	high	待判	
+libfdisk-00807	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/fdisk.c	132	get_user_reply	goto done; } if (rc == -1 && errno != EAGAIN) { /* error */	high	待判	
+libfdisk-00808	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/fdisk.c	136	get_user_reply	goto done; } #ifdef HAVE_LIBREADLINE	high	待判	
+libfdisk-00809	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/fdisk.c	165	get_user_reply	goto done; }	high	待判	
+libfdisk-00810	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	226	ask_menu	fdisk_warnx(cxt, _("Value out of range.")); } while (1);	medium	待判	
+libfdisk-00811	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	247	ask_number	assert(q); DBG(ASK, ul_debug("asking for number "	high	待判	
+libfdisk-00812	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	300	ask_number	fdisk_warnx(cxt, _("Value out of range.")); } while (1);	medium	待判	
+libfdisk-00813	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	319	ask_offset	assert(q); DBG(ASK, ul_debug("asking for offset ['%s', <%"PRIu64",%"PRIu64">, base=%"PRIu64", default=%"PRIu64", range: %s]",	high	待判	
+libfdisk-00814	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	377	ask_offset	fdisk_warnx(cxt, _("Value out of range.")); } while (1);	medium	待判	
+libfdisk-00815	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	388	fputs_info	assert(ask); msg = fdisk_ask_print_get_mesg(ask);	high	待判	
+libfdisk-00816	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	406	__attribute__	assert(cxt); assert(ask);	high	待判	
+libfdisk-00817	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	407	__attribute__	assert(ask); if (fdisk_ask_get_type(ask) != FDISK_ASKTYPE_INFO)	high	待判	
+libfdisk-00818	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	427	__attribute__	fputs(fdisk_ask_print_get_mesg(ask), stderr); color_fdisable(stderr); fputc('\n', stderr);	medium	待判	
+libfdisk-00819	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	434	__attribute__	fputs(fdisk_ask_print_get_mesg(ask), stderr); errno = fdisk_ask_print_get_errno(ask); fprintf(stderr, ": %m\n");	medium	待判	
+libfdisk-00820	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	436	__attribute__	fprintf(stderr, ": %m\n"); color_fdisable(stderr); break;	medium	待判	
+libfdisk-00821	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	467	__attribute__	warnx(_("internal error: unsupported dialog type %d"), fdisk_ask_get_type(ask)); return -EINVAL; }	high	待判	
+libfdisk-00822	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	478	ask_partition_type	assert(cxt); lb = fdisk_get_label(cxt, NULL);	high	待判	
+libfdisk-00823	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	528	list_partition_types	assert(cxt); lb = fdisk_get_label(cxt, NULL); if (!lb)	high	待判	
+libfdisk-00824	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	647	change_partition_type	assert(cxt); if (fdisk_ask_partnum(cxt, &i, FALSE))	high	待判	
+libfdisk-00825	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	771	dump_blkdev	assert(fd >= 0); if (lseek(fd, (off_t) offset, SEEK_SET) == (off_t) -1)	high	待判	
+libfdisk-00826	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	774	dump_blkdev	fdisk_warn(cxt, _("cannot seek")); else { unsigned char *buf = xmalloc(size);	high	待判	
+libfdisk-00827	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	779	dump_blkdev	fdisk_warn(cxt, _("cannot read")); else dump_buffer(offset, buf, size);	high	待判	
+libfdisk-00828	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	788	dump_firstsector	assert(cxt); dump_blkdev(cxt, _("First sector"), 0, fdisk_get_sector_size(cxt));	high	待判	
+libfdisk-00829	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/fdisk.c	800	dump_disklabel	assert(cxt); while (fdisk_locate_disklabel(cxt, i++, &name, &offset, &size) == 0 && size)	high	待判	
+libfdisk-00830	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	812	get_dev_blocks	err(EXIT_FAILURE, _("cannot open %s"), dev); ret = blkdev_get_sectors(fd, (unsigned long long *) &size); close(fd);	high	待判	
+libfdisk-00831	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/fdisk.c	816	get_dev_blocks	err(EXIT_FAILURE, _("BLKGETSIZE ioctl failed on %s"), dev); return size/2; }	high	待判	
+libfdisk-00832	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/fdisk.c	845	__attribute__	static void __attribute__((__noreturn__)) usage(void) { FILE *out = stdout;	high	待判	
+libfdisk-00833	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/fdisk.c	894	__attribute__	exit(EXIT_SUCCESS); }	high	待判	
+libfdisk-00834	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/fdisk.c	951	main	err(EXIT_FAILURE, _("failed to allocate libfdisk context")); fdisk_set_ask(cxt, ask_callback, NULL);	high	待判	
+libfdisk-00835	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	961	main	_("invalid sector size argument")); if (sz != 512 && sz != 1024 && sz != 2048 && sz != 4096) errx(EXIT_FAILURE, _("invalid sector size argument"));	high	待判	
+libfdisk-00836	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	963	main	errx(EXIT_FAILURE, _("invalid sector size argument")); fdisk_save_user_sector_size(cxt, sz, sz); break;	high	待判	
+libfdisk-00837	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	973	main	_("invalid cylinders argument")), 0, 0); break;	high	待判	
+libfdisk-00838	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/fdisk.c	985	main	err(EXIT_FAILURE, _("not found DOS label driver")); if (strcmp(p, "dos") == 0) fdisk_dos_enable_compatible(lb, TRUE);	high	待判	
+libfdisk-00839	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/fdisk.c	991	main	errx(EXIT_FAILURE, _("unknown compatibility mode '%s'"), p); } /* use default if no optarg specified */	high	待判	
+libfdisk-00840	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	998	main	_("invalid heads argument")), 0); break;	high	待判	
+libfdisk-00841	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	1004	main	_("invalid sectors argument"))); break; case 'l':	high	待判	
+libfdisk-00842	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	1016	main	_("unsupported color mode")); break; case 'n':	high	待判	
+libfdisk-00843	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	1036	main	errx(EXIT_FAILURE, _("unsupported disklabel: %s"), optarg); fdisk_label_set_disabled(lb, 0); break;	high	待判	
+libfdisk-00844	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	1044	main	errx(EXIT_FAILURE, _("unsupported unit")); break; case 'V': /* preferred for util-linux */	high	待判	
+libfdisk-00845	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	1052	main	errx(EXIT_FAILURE, _("unsupported wipe mode")); break; case 'W':	high	待判	
+libfdisk-00846	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	1057	main	errx(EXIT_FAILURE, _("unsupported wipe mode")); break; case 'h':	high	待判	
+libfdisk-00847	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/fdisk.c	1060	main	usage(); case OPT_BYTES: fdisk_set_size_unit(cxt, FDISK_SIZEUNIT_BYTES);	high	待判	
+libfdisk-00848	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	1078	main	warnx(_("The device properties (sector size and geometry) should" " be used with one specified device only."));	medium	待判	
+libfdisk-00849	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	1109	main	warnx(_("bad usage")); errtryhelp(EXIT_FAILURE); }	medium	待判	
+libfdisk-00850	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/fdisk.c	1124	main	warnx(_("bad usage")); errtryhelp(EXIT_FAILURE); }	medium	待判	
+libfdisk-00851	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/fdisk.c	1140	main	fdisk_warnx(cxt, _("Device is open in read-only mode.")); } if (rc)	medium	待判	
+libfdisk-00852	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/fdisk.c	1143	main	err(EXIT_FAILURE, _("cannot open %s"), devname); if (fdisk_device_is_used(cxt))	high	待判	
+libfdisk-00853	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	206	ui_get_size	{ 'h', N_("Help"), N_("Print help screen") }, { 's', N_("Sort"), N_("Fix partitions order") }, { 'W', N_("Write"), N_("Write partition table to disk (this might destroy data)") },	high	待判	
+libfdisk-00854	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	207	ui_get_size	{ 's', N_("Sort"), N_("Fix partitions order") }, { 'W', N_("Write"), N_("Write partition table to disk (this might destroy data)") }, { 'u', N_("Dump"), N_("Dump partition table to sfdisk compatible script file") },	high	待判	
+libfdisk-00855	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	208	ui_get_size	{ 'W', N_("Write"), N_("Write partition table to disk (this might destroy data)") }, { 'u', N_("Dump"), N_("Dump partition table to sfdisk compatible script file") }, { 0, NULL, NULL }	high	待判	
+libfdisk-00856	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	289	cols_init	assert(cf); free(cf->fields);	high	待判	
+libfdisk-00857	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	302	die_on_signal	exit(EXIT_FAILURE); }	high	待判	
+libfdisk-00858	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	362	table_to_string	assert(cf); assert(cf->cxt); assert(cf->fields);	high	待判	
+libfdisk-00859	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	363	table_to_string	assert(cf->cxt); assert(cf->fields); assert(tb);	high	待判	
+libfdisk-00860	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	364	table_to_string	assert(cf->fields); assert(tb);	high	待判	
+libfdisk-00861	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	365	table_to_string	assert(tb); lb = fdisk_get_label(cf->cxt, NULL);	high	待判	
+libfdisk-00862	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	368	table_to_string	assert(lb); itr = fdisk_new_iter(FDISK_ITER_FORWARD);	high	待判	
+libfdisk-00863	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	372	table_to_string	goto done; /* get container (e.g. extended partition) */	high	待判	
+libfdisk-00864	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	385	table_to_string	goto done; scols_table_enable_maxout(table, 1); scols_table_enable_nowrap(table, 1);	high	待判	
+libfdisk-00865	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	411	table_to_string	goto done; }	high	待判	
+libfdisk-00866	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	422	table_to_string	goto done; for (i = 0; i < cf->nfields; i++) { char *cdata = NULL;	high	待判	
+libfdisk-00867	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	439	table_to_string	goto done; scols_table_reduce_termwidth(table, ARROW_CURSOR_WIDTH);	high	待判	
+libfdisk-00868	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	453	table_to_string	goto done; /* add all in the right order (don't forget the output is tree) */	high	待判	
+libfdisk-00869	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	497	lines_refresh	assert(cf); DBG(TABLE, ul_debug("refreshing buffer"));	high	待判	
+libfdisk-00870	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	550	get_current_partition	assert(cf); assert(cf->table);	high	待判	
+libfdisk-00871	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	551	get_current_partition	assert(cf->table); return fdisk_table_get_partition(cf->table, cf->lines_idx);	high	待判	
+libfdisk-00872	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	560	is_freespace	assert(cf); assert(cf->table);	high	待判	
+libfdisk-00873	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	561	is_freespace	assert(cf->table); pa = fdisk_table_get_partition(cf->table, i);	high	待判	
+libfdisk-00874	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	577	ask_menu	assert(ask); assert(cf);	high	待判	
+libfdisk-00875	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	578	ask_menu	assert(cf); /* create cfdisk menu according to libfdisk ask-menu, note that the	high	待判	
+libfdisk-00876	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	638	__attribute__	assert(ask); switch(fdisk_ask_get_type(ask)) {	high	待判	
+libfdisk-00877	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	654	__attribute__	ui_warnx(_("internal error: unsupported dialog type %d"), fdisk_ask_get_type(ask)); return -EINVAL;	high	待判	
+libfdisk-00878	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	730	__attribute__	vfprintf(stderr, fmt, ap); fputc('\n', stderr); }	medium	待判	
+libfdisk-00879	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	750	__attribute__	vfprintf(stderr, fmt_m, ap); fputc('\n', stderr); }	medium	待判	
+libfdisk-00880	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	771	__attribute__	fprintf(stderr, "%s: ", program_invocation_short_name); vfprintf(stderr, fmt, ap); fprintf(stderr, ": %s\n", strerror(errno));	medium	待判	
+libfdisk-00881	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	772	__attribute__	vfprintf(stderr, fmt, ap); fprintf(stderr, ": %s\n", strerror(errno)); va_end(ap);	medium	待判	
+libfdisk-00882	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	773	__attribute__	fprintf(stderr, ": %s\n", strerror(errno)); va_end(ap);	medium	待判	
+libfdisk-00883	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	776	__attribute__	exit(rc); }	high	待判	
+libfdisk-00884	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	787	__attribute__	fprintf(stderr, "%s: ", program_invocation_short_name); vfprintf(stderr, fmt, ap); fputc('\n', stderr);	medium	待判	
+libfdisk-00885	libfdisk	2.39.3	T1	table-edit	error-report	error-report	disk-utils/cfdisk.c	788	__attribute__	vfprintf(stderr, fmt, ap); fputc('\n', stderr); va_end(ap);	medium	待判	
+libfdisk-00886	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	792	__attribute__	exit(rc); }	high	待判	
+libfdisk-00887	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	862	menu_update_ignore	assert(cf); assert(cf->menu); assert(cf->menu->ignore_cb);	high	待判	
+libfdisk-00888	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	863	menu_update_ignore	assert(cf->menu); assert(cf->menu->ignore_cb);	high	待判	
+libfdisk-00889	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	864	menu_update_ignore	assert(cf->menu->ignore_cb); m = cf->menu;	high	待判	
+libfdisk-00890	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	911	menu_push	assert(cf); DBG(MENU, ul_debug("new menu"));	high	待判	
+libfdisk-00891	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	936	menu_pop	assert(cf); DBG(MENU, ul_debug("pop menu"));	high	待判	
+libfdisk-00892	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1188	ui_draw_menu	assert(cf); assert(cf->menu);	high	待判	
+libfdisk-00893	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1189	ui_draw_menu	assert(cf->menu); DBG(MENU, ul_debug("draw start"));	high	待判	
+libfdisk-00894	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1250	extra_insert_pair	assert(l); assert(l->extra);	high	待判	
+libfdisk-00895	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1251	extra_insert_pair	assert(l->extra); if (!data || !*data)	high	待判	
+libfdisk-00896	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1281	get_mountpoint	assert(tagname); assert(tagdata);	high	待判	
+libfdisk-00897	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1282	get_mountpoint	assert(tagdata); DBG(UI, ul_debug("asking for mountpoint [%s=%s]", tagname, tagdata));	high	待判	
+libfdisk-00898	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	1320	get_mountpoint	xasprintf(&target, _("%s (mounted)"), mnt_fs_get_target(fs)); else target = xstrdup(mnt_fs_get_target(fs));	medium	待判	
+libfdisk-00899	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1462	ui_draw_extra	assert(ln->extra); if (cf->act_win) {	high	待判	
+libfdisk-00900	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1564	ui_menu_move	assert(cf); assert(cf->menu);	high	待判	
+libfdisk-00901	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1565	ui_menu_move	assert(cf->menu); if (key == (int) ERR)	high	待判	
+libfdisk-00902	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1781	ui_refresh	assert(lb); clear();	high	待判	
+libfdisk-00903	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1814	ui_get_string	assert(buf); assert(len);	high	待判	
+libfdisk-00904	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	1815	ui_get_string	assert(len); move(ln, 0);	high	待判	
+libfdisk-00905	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	1830	ui_get_string	goto done; mbs_edit_goto(edit, MBS_EDIT_END);	high	待判	
+libfdisk-00906	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	1863	ui_get_string	exit(2); else goto done;	high	待判	
+libfdisk-00907	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	1865	ui_get_string	goto done; }	high	待判	
+libfdisk-00908	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	1878	ui_get_string	goto done; case KEY_LEFT: rc = mbs_edit_goto(edit, MBS_EDIT_LEFT);	high	待判	
+libfdisk-00909	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2069	ui_get_parttype	goto done; case KEY_ESC: case 'q':	high	待判	
+libfdisk-00910	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2073	ui_get_parttype	goto done; } }	high	待判	
+libfdisk-00911	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2108	ui_script_read	ui_warn(_("Cannot open %s"), buf); else if (!sc) ui_warnx(_("Failed to parse script file %s"), buf);	high	待判	
+libfdisk-00912	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2138	ui_script_write	goto done; }	high	待判	
+libfdisk-00913	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2144	ui_script_write	goto done; }	high	待判	
+libfdisk-00914	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2150	ui_script_write	ui_warn(_("Cannot open %s"), buf); rc = -errno; goto done;	high	待判	
+libfdisk-00915	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2152	ui_script_write	goto done; }	high	待判	
+libfdisk-00916	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	2175	ui_create_label	assert(cf); DBG(UI, ul_debug("asking for new disklabe."));	high	待判	
+libfdisk-00917	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2227	ui_create_label	goto done; case KEY_ESC: case 'q':	high	待判	
+libfdisk-00918	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2231	ui_create_label	goto done; case 'l': case 'L':	high	待判	
+libfdisk-00919	libfdisk	2.39.3	T1	table-edit	fail-goto	fail-goto	disk-utils/cfdisk.c	2236	ui_create_label	goto done; refresh_menu = 1; break;	high	待判	
+libfdisk-00920	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2269	ui_help	N_(" u Dump disk layout to sfdisk compatible script file"), N_(" W Write partition table to disk (you must enter uppercase W);"), N_(" since this might destroy data on the disk, you must either"),	high	待判	
+libfdisk-00921	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2270	ui_help	N_(" W Write partition table to disk (you must enter uppercase W);"), N_(" since this might destroy data on the disk, you must either"), N_(" confirm or deny the write by entering 'yes' or 'no'"),	high	待判	
+libfdisk-00922	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2271	ui_help	N_(" since this might destroy data on the disk, you must either"), N_(" confirm or deny the write by entering 'yes' or 'no'"), N_(" x Display/hide extra information about a partition"),	high	待判	
+libfdisk-00923	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	2342	main_menu_action	assert(cf); assert(cf->cxt); assert(cf->menu);	high	待判	
+libfdisk-00924	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	2343	main_menu_action	assert(cf->cxt); assert(cf->menu);	high	待判	
+libfdisk-00925	libfdisk	2.39.3	T1	table-edit	assert	assert	disk-utils/cfdisk.c	2344	main_menu_action	assert(cf->menu); if (key == 0) {	high	待判	
+libfdisk-00926	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2508	main_menu_action	warn = _("Device is open in read-only mode."); break; }	medium	待判	
+libfdisk-00927	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2626	ui_run	ui_warnx(_("Device is open in read-only mode. Changes will remain in memory only.")); else if (cf->device_is_used) ui_warnx(_("Device is currently in use, repartitioning is probably a bad idea."));	medium	待判	
+libfdisk-00928	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	2709	__attribute__	static void __attribute__((__noreturn__)) usage(void) { FILE *out = stdout;	high	待判	
+libfdisk-00929	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2726	__attribute__	_(" --lock[=<mode>] use exclusive device lock (%s, %s or %s)\n"), "yes", "no", "nonblock"); fputs(_(" -r, --read-only forced open cfdisk in read-only mode\n"), out);	medium	待判	
+libfdisk-00930	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2727	__attribute__	fputs(_(" -r, --read-only forced open cfdisk in read-only mode\n"), out); fputs(USAGE_SEPARATOR, out);	medium	待判	
+libfdisk-00931	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	2733	__attribute__	exit(EXIT_SUCCESS); }	high	待判	
+libfdisk-00932	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit	disk-utils/cfdisk.c	2764	main	usage(); break; case 'L':	high	待判	
+libfdisk-00933	libfdisk	2.39.3	T1	table-edit	refusal	refusal	disk-utils/cfdisk.c	2770	main	_("unsupported color mode")); break; case 'r':	high	待判	
+libfdisk-00934	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,error-report	disk-utils/cfdisk.c	2800	main	err(EXIT_FAILURE, _("failed to allocate libfdisk context")); fdisk_set_ask(cf->cxt, ask_callback, (void *) cf);	high	待判	
+libfdisk-00935	libfdisk	2.39.3	T1	table-edit	fatal-exit	fatal-exit,refusal	disk-utils/cfdisk.c	2822	main	err(EXIT_FAILURE, _("cannot open %s"), diskpath); if (!fdisk_is_readonly(cf->cxt)) {	high	待判	

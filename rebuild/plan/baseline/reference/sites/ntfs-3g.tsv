@@ -1,0 +1,278 @@
+site_id	tool	version	layer	area	category	tags	file	line	symbol	finding	risk	disposition	note
+ntfs-3g-00001	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	305	err_exit	exit(1); }	high	待判	
+ntfs-3g-00002	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	327	perr_exit	exit(1); }	high	待判	
+ntfs-3g-00003	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	338	usage	static void usage(int ret) {	high	待判	
+ntfs-3g-00004	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	369	usage	exit(ret); }	high	待判	
+ntfs-3g-00005	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	391	proceed_question	exit(1); } }	high	待判	
+ntfs-3g-00006	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	438	get_new_volume_size	usage(1); /* We follow the SI prefixes:	high	待判	
+ntfs-3g-00007	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	464	get_new_volume_size	usage(1); }	high	待判	
+ntfs-3g-00008	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	585	parse_options	usage(1); } if (opt.expand && opt.infombonly) {	high	待判	
+ntfs-3g-00009	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	590	parse_options	usage(1); } }	high	待判	
+ntfs-3g-00010	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	611	parse_options	usage(err > 0); /* tri-state 0 : done, 1 : error, -1 : proceed */	high	待判	
+ntfs-3g-00011	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	632	print_advise	exit(1); }	high	待判	
+ntfs-3g-00012	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	803	collect_relocation_info	exit(1); } }	high	待判	
+ntfs-3g-00013	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	846	build_lcn_usage_bitmap	exit(1); }	high	待判	
+ntfs-3g-00014	ntfs-3g	2022.10.3	T2	resize	fail-goto	fail-goto	ntfsprogs/ntfsresize.c	961	compare_bitmaps	goto done; if (a->bm[pos] == bm[i])	high	待判	
+ntfs-3g-00015	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	998	compare_bitmaps	exit(1); } }	high	待判	
+ntfs-3g-00016	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	1132	resize_constraints_by_attributes	exit(1); while (!ntfs_attrs_walk(resize->ctx)) {	high	待判	
+ntfs-3g-00017	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	1171	set_resize_constraints	exit(1); } }	high	待判	
+ntfs-3g-00018	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	1910	copy_clusters	exit(1); }	high	待判	
+ntfs-3g-00019	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	1919	copy_clusters	exit(1); }	high	待判	
+ntfs-3g-00020	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2167	relocate_attributes	exit(1); lemref = resize->mrec->base_mft_record;	high	待判	
+ntfs-3g-00021	ntfs-3g	2022.10.3	T2	resize	fail-goto	fail-goto	ntfsprogs/ntfsresize.c	2325	relocate_inodes	goto done; } while (mref);	high	待判	
+ntfs-3g-00022	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2436	truncate_badclust_bad_attr	exit(1); } base_ni = na->ni;	high	待判	
+ntfs-3g-00023	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2441	truncate_badclust_bad_attr	exit(1); } /* Clear the sparse flags, even if there are bad clusters */	high	待判	
+ntfs-3g-00024	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2585	lookup_data_attr	exit(1); if ((ustr = ntfs_str2ucs(aname, &len)) == NULL) {	high	待判	
+ntfs-3g-00025	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2589	lookup_data_attr	exit(1); }	high	待判	
+ntfs-3g-00026	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2625	check_bad_sectors	exit(1); } rl = na->rl;	high	待判	
+ntfs-3g-00027	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2647	check_bad_sectors	exit(1); } else printf("WARNING: Bad sectors can cause reliability "	high	待判	
+ntfs-3g-00028	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2912	check_volume	exit(1); } return myvol;	high	待判	
+ntfs-3g-00029	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	2934	mount_volume	exit(1); } if (mntflag & NTFS_MF_MOUNTED) {	high	待判	
+ntfs-3g-00030	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	3054	check_cluster_allocation	exit(1); if (fsck->outsider || fsck->multi_ref) { err_printf("Filesystem check failed!\n");	high	待判	
+ntfs-3g-00031	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	3064	check_cluster_allocation	exit(1); }	high	待判	
+ntfs-3g-00032	ntfs-3g	2022.10.3	T2	resize	fatal-exit	fatal-exit	ntfsprogs/ntfsresize.c	4574	main	exit(1); return (0); }	high	待判	
+ntfs-3g-00033	ntfs-3g	2022.10.3	T2	label-uuid	fatal-exit	fatal-exit	ntfsprogs/ntfslabel.c	97	usage	static void usage(void) { ntfs_log_info("\nUsage: %s [options] device [label]\n"	high	待判	
+ntfs-3g-00034	ntfs-3g	2022.10.3	T2	label-uuid	fatal-exit	fatal-exit	ntfsprogs/ntfslabel.c	232	parse_options	usage(); /* tri-state 0 : done, 1 : error, -1 : proceed */	high	待判	
+ntfs-3g-00035	ntfs-3g	2022.10.3	T2	probe	fatal-exit	fatal-exit	ntfsprogs/ntfsinfo.c	133	usage	static void usage(void) { printf("\nUsage: %s [options] device\n"	high	待判	
+ntfs-3g-00036	ntfs-3g	2022.10.3	T2	probe	fatal-exit	fatal-exit	ntfsprogs/ntfsinfo.c	305	parse_options	usage(); /* tri-state 0 : done, 1 : error, -1 : proceed */	high	待判	
+ntfs-3g-00037	ntfs-3g	2022.10.3	T2	probe	fail-goto	fail-goto	ntfsprogs/ntfsinfo.c	1952	ntfs_dump_attr_index_allocation	goto out_index_root; }	high	待判	
+ntfs-3g-00038	ntfs-3g	2022.10.3	T2	probe	fail-goto	fail-goto	ntfsprogs/ntfsinfo.c	1959	ntfs_dump_attr_index_allocation	goto out_bitmap; }	high	待判	
+ntfs-3g-00039	ntfs-3g	2022.10.3	T2	probe	fatal-exit	fatal-exit	ntfsprogs/ntfsinfo.c	2463	main	exit(res); utils_set_locale();	high	待判	
+ntfs-3g-00040	ntfs-3g	2022.10.3	T2	probe	fatal-exit	fatal-exit	ntfsprogs/ntfsinfo.c	2471	main	exit(1); }	high	待判	
+ntfs-3g-00041	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	126	usage	static void usage(int ret) { ntfs_log_info("%s v%s (libntfs-3g)\n"	high	待判	
+ntfs-3g-00042	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	143	usage	exit(ret); }	high	待判	
+ntfs-3g-00043	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	188	parse_options	usage(1); } break;	high	待判	
+ntfs-3g-00044	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	201	parse_options	usage(0); case '?': usage(1);	high	待判	
+ntfs-3g-00045	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	203	parse_options	usage(1); /* fall through */ case 'V':	high	待判	
+ntfs-3g-00046	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	209	parse_options	usage(1); } }	high	待判	
+ntfs-3g-00047	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	215	parse_options	usage(1); } }	high	待判	
+ntfs-3g-00048	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	243	OLD_ntfs_volume_set_flags	goto err_exit; } /* Get a pointer to the volume information attribute. */	high	待判	
+ntfs-3g-00049	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	250	OLD_ntfs_volume_set_flags	goto err_exit; } if (ntfs_attr_lookup(AT_VOLUME_INFORMATION, AT_UNNAMED, 0,	high	待判	
+ntfs-3g-00050	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	256	OLD_ntfs_volume_set_flags	goto err_out; } a = ctx->attr;	high	待判	
+ntfs-3g-00051	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	264	OLD_ntfs_volume_set_flags	goto err_out; } /* Get a pointer to the value of the attribute. */	high	待判	
+ntfs-3g-00052	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	276	OLD_ntfs_volume_set_flags	goto err_out; } /* Set the volume flags. */	high	待判	
+ntfs-3g-00053	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	282	OLD_ntfs_volume_set_flags	goto err_out; } ret = 0; /* success */	high	待判	
+ntfs-3g-00054	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	479	fix_mftmirr	goto error_exit; } ntfs_log_info(OK);	high	待判	
+ntfs-3g-00055	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	491	fix_mftmirr	goto error_exit; } ntfs_log_info(OK);	high	待判	
+ntfs-3g-00056	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	538	fix_mftmirr	goto error_exit; } if (!ntfs_is_mft_record(mrec->magic)) {	high	待判	
+ntfs-3g-00057	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	545	fix_mftmirr	goto error_exit; } }	high	待判	
+ntfs-3g-00058	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	555	fix_mftmirr	goto error_exit; } if (!ntfs_is_mft_record(mrec2->magic)) {	high	待判	
+ntfs-3g-00059	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	561	fix_mftmirr	goto error_exit; } /* $MFT is corrupt but $MFTMirr is ok, use $MFTMirr. */	high	待判	
+ntfs-3g-00060	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	582	fix_mftmirr	goto error_exit; } ntfs_log_info(OK);	high	待判	
+ntfs-3g-00061	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	676	fix_upcase	goto error_exit; } /* Get an ntfs attribute for $UpCase/$DATA. */	high	待判	
+ntfs-3g-00062	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	682	fix_upcase	goto error_exit; } /*	high	待判	
+ntfs-3g-00063	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	694	fix_upcase	goto error_exit; } upcase_len = na->data_size >> 1;	high	待判	
+ntfs-3g-00064	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	699	fix_upcase	goto error_exit; /* Read in the $DATA attribute value into the buffer. */ l = ntfs_attr_pread(na, 0, na->data_size, upcase);	high	待判	
+ntfs-3g-00065	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	707	fix_upcase	goto error_exit; } /* Consistency check of $UpCase, restricted to plain ASCII chars */	high	待判	
+ntfs-3g-00066	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1378	check_alternate_boot	goto error_exit; } /* Now read both bootsectors. */	high	待判	
+ntfs-3g-00067	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1460	fix_startup	goto error_exit; }	high	待判	
+ntfs-3g-00068	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1466	fix_startup	goto error_exit; /* Create the default upcase table. */	high	待判	
+ntfs-3g-00069	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1471	fix_startup	goto error_exit; /* Default with no locase table and case sensitive file names */	high	待判	
+ntfs-3g-00070	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1487	fix_startup	goto error_exit; } dev_open = TRUE;	high	待判	
+ntfs-3g-00071	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1498	fix_startup	goto error_exit; /* Now read the bootsector. */ br = ntfs_pread(dev, 0, sector_size, full_bs);	high	待判	
+ntfs-3g-00072	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1508	fix_startup	goto error_exit; } bs = (NTFS_BOOT_SECTOR*)full_bs;	high	待判	
+ntfs-3g-00073	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1519	fix_startup	goto error_exit; } res = 0;	high	待判	
+ntfs-3g-00074	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	1629	main	exit(1); } } else	high	待判	
+ntfs-3g-00075	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	1647	main	exit(1); } vol = ntfs_mount(opt.volume, 0);	high	待判	
+ntfs-3g-00076	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	1652	main	exit(1); } }	high	待判	
+ntfs-3g-00077	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	1657	main	exit(1); } /* So the unmount does not clear it again. */	high	待判	
+ntfs-3g-00078	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1686	main	goto error_exit; } if (opt.clear_bad_sectors && !opt.no_action) {	high	待判	
+ntfs-3g-00079	ntfs-3g	2022.10.3	T2	frontend	fail-goto	fail-goto	ntfsprogs/ntfsfix.c	1691	main	goto error_exit; } }	high	待判	
+ntfs-3g-00080	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfsfix.c	1712	main	exit(ret); return ret; }	high	待判	
+ntfs-3g-00081	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfscluster.c	82	usage	static void usage(void) { ntfs_log_info("\nUsage: %s [options] device\n"	high	待判	
+ntfs-3g-00082	ntfs-3g	2022.10.3	T2	frontend	fatal-exit	fatal-exit	ntfsprogs/ntfscluster.c	269	parse_options	usage(); /* tri-state 0 : done, 1 : error, -1 : proceed */	high	待判	
+ntfs-3g-00083	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	268	ntfs_mft_load	goto error_exit; } vol->mft_ni->mft_no = 0;	high	待判	
+ntfs-3g-00084	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	279	ntfs_mft_load	goto error_exit; }	high	待判	
+ntfs-3g-00085	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	283	ntfs_mft_load	goto error_exit; ctx = ntfs_attr_get_search_ctx(vol->mft_ni, NULL);	high	待判	
+ntfs-3g-00086	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	287	ntfs_mft_load	goto error_exit; /* Find the $ATTRIBUTE_LIST attribute in $MFT if present. */	high	待判	
+ntfs-3g-00087	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	308	ntfs_mft_load	goto error_exit; l = ntfs_get_attribute_value(vol, ctx->attr, vol->mft_ni->attr_list);	high	待判	
+ntfs-3g-00088	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	327	ntfs_mft_load	goto error_exit; /* We now have a fully setup ntfs inode for $MFT in vol->mft_ni. */	high	待判	
+ntfs-3g-00089	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	335	ntfs_mft_load	goto error_exit; } /* Read all extents from the $DATA attribute in $MFT. */	high	待判	
+ntfs-3g-00090	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	368	ntfs_mft_load	goto error_exit; } /* Make sure $DATA is the MFT itself */	high	待判	
+ntfs-3g-00091	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	373	ntfs_mft_load	goto error_exit; } vol->mft_na->rl = nrl;	high	待判	
+ntfs-3g-00092	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	416	ntfs_mft_load	goto error_exit; } return 0;	high	待判	
+ntfs-3g-00093	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	461	ntfs_mftmirr_load	goto error_exit; }	high	待判	
+ntfs-3g-00094	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	466	ntfs_mftmirr_load	goto error_exit; } if (vol->mftmirr_na->rl->lcn != vol->mftmirr_lcn) {	high	待判	
+ntfs-3g-00095	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	472	ntfs_mftmirr_load	goto error_exit; }	high	待判	
+ntfs-3g-00096	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	523	ntfs_volume_startup	goto error_exit; /* Create the default upcase table. */	high	待判	
+ntfs-3g-00097	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	528	ntfs_volume_startup	goto error_exit; /* Default with no locase table and case sensitive file names */	high	待判	
+ntfs-3g-00098	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	553	ntfs_volume_startup	goto error_exit; } else { ntfs_log_info("Error opening '%s' read-write\n",	high	待判	
+ntfs-3g-00099	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	561	ntfs_volume_startup	goto error_exit; } }	high	待判	
+ntfs-3g-00100	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	576	ntfs_volume_startup	goto error_exit; } if (!ntfs_boot_sector_is_ntfs(bs)) {	high	待判	
+ntfs-3g-00101	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	580	ntfs_volume_startup	goto error_exit; } if (ntfs_boot_sector_parse(vol, bs) < 0)	high	待判	
+ntfs-3g-00102	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	583	ntfs_volume_startup	goto error_exit; free(bs);	high	待判	
+ntfs-3g-00103	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	629	ntfs_volume_startup	goto error_exit; } vol->mft_zone_end = vol->mft_lcn + mft_zone_size;	high	待判	
+ntfs-3g-00104	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	654	ntfs_volume_startup	goto error_exit; }	high	待判	
+ntfs-3g-00105	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	660	ntfs_volume_startup	goto error_exit; } return vol;	high	待判	
+ntfs-3g-00106	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	696	ntfs_volume_check_logfile	goto out; }	high	待判	
+ntfs-3g-00107	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	761	ntfs_hiberfile_open	goto out; }	high	待判	
+ntfs-3g-00108	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	767	ntfs_hiberfile_open	goto out; }	high	待判	
+ntfs-3g-00109	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	774	ntfs_hiberfile_open	goto out; } out:	high	待判	
+ntfs-3g-00110	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	812	ntfs_volume_check_hiberfile	goto out; na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);	high	待判	
+ntfs-3g-00111	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	817	ntfs_volume_check_hiberfile	goto out; }	high	待判	
+ntfs-3g-00112	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	823	ntfs_volume_check_hiberfile	goto out; } if (bytes_read < NTFS_HIBERFILE_HEADER_SIZE) {	high	待判	
+ntfs-3g-00113	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	830	ntfs_volume_check_hiberfile	goto out; } if ((memcmp(buf, "hibr", 4) == 0)	high	待判	
+ntfs-3g-00114	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	837	ntfs_volume_check_hiberfile	goto out; } /* All right, all header bytes are zero */	high	待判	
+ntfs-3g-00115	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	964	ntfs_device_mount	goto error_exit; l = ntfs_attr_mst_pread(vol->mft_na, 0, vol->mftmirr_size,	high	待判	
+ntfs-3g-00116	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	977	ntfs_device_mount	goto error_exit; } for (i = 0; (i < l) && (i < FILE_first_user); ++i)	high	待判	
+ntfs-3g-00117	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	982	ntfs_device_mount	goto error_exit; l = ntfs_attr_mst_pread(vol->mftmirr_na, 0, vol->mftmirr_size, vol->mft_record_size, m2);	high	待判	
+ntfs-3g-00118	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	988	ntfs_device_mount	goto error_exit; } vol->mftmirr_size = l;	high	待判	
+ntfs-3g-00119	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	995	ntfs_device_mount	goto error_exit; ntfs_log_debug("Comparing $MFTMirr to $MFT...\n"); /* Windows 10 does not update the full $MFTMirr any more */	high	待判	
+ntfs-3g-00120	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1059	ntfs_device_mount	goto error_exit; }	high	待判	
+ntfs-3g-00121	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1065	ntfs_device_mount	goto error_exit; }	high	待判	
+ntfs-3g-00122	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1080	ntfs_device_mount	goto error_exit; } /* Get an ntfs attribute for $UpCase/$DATA. */	high	待判	
+ntfs-3g-00123	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1087	ntfs_device_mount	goto error_exit; } /*	high	待判	
+ntfs-3g-00124	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1121	ntfs_device_mount	goto error_exit; } /* Consistency check of $UpCase, restricted to plain ASCII chars */	high	待判	
+ntfs-3g-00125	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1143	ntfs_device_mount	goto error_exit; } /* Get a search context for the $Volume/$VOLUME_INFORMATION lookup. */	high	待判	
+ntfs-3g-00126	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1148	ntfs_device_mount	goto error_exit; /* Find the $VOLUME_INFORMATION attribute. */	high	待判	
+ntfs-3g-00127	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1155	ntfs_device_mount	goto error_exit; } a = ctx->attr;	high	待判	
+ntfs-3g-00128	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1163	ntfs_device_mount	goto error_exit; } /* Get a pointer to the value of the attribute. */	high	待判	
+ntfs-3g-00129	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1174	ntfs_device_mount	goto error_exit; } /* Setup vol from the volume information attribute value. */	high	待判	
+ntfs-3g-00130	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1191	ntfs_device_mount	goto error_exit; } /*	high	待判	
+ntfs-3g-00131	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1200	ntfs_device_mount	goto error_exit; vol->vol_name[0] = '\0'; } else {	high	待判	
+ntfs-3g-00132	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1208	ntfs_device_mount	goto error_exit; } /* Get a pointer to the value of the attribute. */	high	待判	
+ntfs-3g-00133	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1225	ntfs_device_mount	goto error_exit; for (j = 0; j < (s32)u; j++) {	high	待判	
+ntfs-3g-00134	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1243	ntfs_device_mount	goto error_exit; } /* Get an ntfs attribute for $AttrDef/$DATA. */	high	待判	
+ntfs-3g-00135	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1249	ntfs_device_mount	goto error_exit; } /* Check we don't overflow 24-bits. */	high	待判	
+ntfs-3g-00136	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1256	ntfs_device_mount	goto error_exit; } vol->attrdef_len = na->data_size;	high	待判	
+ntfs-3g-00137	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1261	ntfs_device_mount	goto error_exit; /* Read in the $DATA attribute value into the buffer. */ l = ntfs_attr_pread(na, 0, na->data_size, vol->attrdef);	high	待判	
+ntfs-3g-00138	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1269	ntfs_device_mount	goto error_exit; } /* Done with the $AttrDef mft record. */	high	待判	
+ntfs-3g-00139	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1275	ntfs_device_mount	goto error_exit; }	high	待判	
+ntfs-3g-00140	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1280	ntfs_device_mount	goto error_exit; /*	high	待判	
+ntfs-3g-00141	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1292	ntfs_device_mount	goto error_exit; } if (ntfs_volume_check_logfile(vol) < 0) {	high	待判	
+ntfs-3g-00142	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1300	ntfs_device_mount	goto error_exit; } else { ntfs_log_info("The file system wasn't safely "	high	待判	
+ntfs-3g-00143	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1305	ntfs_device_mount	goto error_exit; } }	high	待判	
+ntfs-3g-00144	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1311	ntfs_device_mount	goto error_exit; } }	high	待判	
+ntfs-3g-00145	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1323	ntfs_device_mount	goto error_exit; io_error_exit: errno = EIO;	high	待判	
+ntfs-3g-00146	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1710	ntfs_logfile_reset	goto error_exit; }	high	待判	
+ntfs-3g-00147	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1716	ntfs_logfile_reset	goto error_exit; }	high	待判	
+ntfs-3g-00148	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1758	ntfs_volume_write_flags	goto err_out; } a = ctx->attr;	high	待判	
+ntfs-3g-00149	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1766	ntfs_volume_write_flags	goto err_out; } /* Get a pointer to the value of the attribute. */	high	待判	
+ntfs-3g-00150	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1778	ntfs_volume_write_flags	goto err_out; } /* Set the volume flags. */	high	待判	
+ntfs-3g-00151	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1785	ntfs_volume_write_flags	goto err_out; ret = 0; /* success */	high	待判	
+ntfs-3g-00152	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1944	ntfs_volume_rename	goto err_out; }	high	待判	
+ntfs-3g-00153	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1954	ntfs_volume_rename	goto err_out; } }	high	待判	
+ntfs-3g-00154	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1964	ntfs_volume_rename	goto err_out; }	high	待判	
+ntfs-3g-00155	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1972	ntfs_volume_rename	goto err_out; } }	high	待判	
+ntfs-3g-00156	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1982	ntfs_volume_rename	goto err_out; } else if (written != label_len) {	high	待判	
+ntfs-3g-00157	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1988	ntfs_volume_rename	goto err_out; }	high	待判	
+ntfs-3g-00158	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/volume.c	1999	ntfs_volume_rename	goto err_out; }	high	待判	
+ntfs-3g-00159	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	296	ntfs_check_log_client_array	goto err_out; ra = (RESTART_AREA*)((u8*)rp + le16_to_cpu(rp->restart_area_offset)); offset_clients = le16_to_cpu(rp->restart_area_offset)	high	待判	
+ntfs-3g-00160	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	302	ntfs_check_log_client_array	goto err_out; ca = (LOG_CLIENT_RECORD*)((u8*)ra + le16_to_cpu(ra->client_array_offset));	high	待判	
+ntfs-3g-00161	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	320	ntfs_check_log_client_array	goto err_out; /* The client record must be fully within page */ if ((offset_clients + (idx + 1)*sizeof(LOG_CLIENT_RECORD))	high	待判	
+ntfs-3g-00162	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	324	ntfs_check_log_client_array	goto err_out; /* Set @cr to the current log client record. */ cr = ca + idx;	high	待判	
+ntfs-3g-00163	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	330	ntfs_check_log_client_array	goto err_out; idx_is_first = FALSE; }	high	待判	
+ntfs-3g-00164	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	423	ntfs_check_and_load_restart_page	goto err_out; } /*	high	待判	
+ntfs-3g-00165	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	443	ntfs_check_and_load_restart_page	goto err_out; } }	high	待判	
+ntfs-3g-00166	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	456	ntfs_check_and_load_restart_page	goto err_out; } }	high	待判	
+ntfs-3g-00167	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	549	ntfs_check_logfile	goto err_out; }	high	待判	
+ntfs-3g-00168	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/logfile.c	604	ntfs_check_logfile	goto err_out; /* Continue looking. */ if (!pos)	high	待判	
+ntfs-3g-00169	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	424	ntfs_attr_open	goto out; } na = ntfs_calloc(sizeof(ntfs_attr));	high	待判	
+ntfs-3g-00170	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	428	ntfs_attr_open	goto out; if (!name_len) name = (ntfschar*)NULL;	high	待判	
+ntfs-3g-00171	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	436	ntfs_attr_open	goto err_out; } name = ntfs_ucsndup(name, name_len);	high	待判	
+ntfs-3g-00172	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	440	ntfs_attr_open	goto err_out; newname = name; }	high	待判	
+ntfs-3g-00173	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	446	ntfs_attr_open	goto err_out; if (ntfs_attr_lookup(type, name, name_len, 0, 0, NULL, 0, ctx))	high	待判	
+ntfs-3g-00174	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	579	ntfs_attr_open	goto out; }	high	待判	
+ntfs-3g-00175	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	765	ntfs_attr_map_whole_runlist	goto out; } ctx = ntfs_attr_get_search_ctx(na->ni, NULL);	high	待判	
+ntfs-3g-00176	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	769	ntfs_attr_map_whole_runlist	goto out; /* Map all attribute extents one by one. */	high	待判	
+ntfs-3g-00177	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	792	ntfs_attr_map_whole_runlist	goto err_out; na->rl = rl; }	high	待判	
+ntfs-3g-00178	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	803	ntfs_attr_map_whole_runlist	goto err_out; } /* Get the last vcn in the attribute. */	high	待判	
+ntfs-3g-00179	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	825	ntfs_attr_map_whole_runlist	goto err_out; } }	high	待判	
+ntfs-3g-00180	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	830	ntfs_attr_map_whole_runlist	goto err_out; } /*	high	待判	
+ntfs-3g-00181	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	844	ntfs_attr_map_whole_runlist	goto err_out; } if (errno == ENOENT) {	high	待判	
+ntfs-3g-00182	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1254	ntfs_attr_fill_zero	goto err_out; }	high	待判	
+ntfs-3g-00183	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1259	ntfs_attr_fill_zero	goto err_out; rli = na->rl;	high	待判	
+ntfs-3g-00184	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1288	ntfs_attr_fill_zero	goto err_free; } pos += written;	high	待判	
+ntfs-3g-00185	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1321	ntfs_attr_fill_hole	goto err_out; } to_write = min(count, ((*rl)->length << vol->cluster_size_bits) - *ofs);	high	待判	
+ntfs-3g-00186	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1336	ntfs_attr_fill_hole	goto err_out; } else { /* make sure the run ahead of hole is mapped */	high	待判	
+ntfs-3g-00187	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1342	ntfs_attr_fill_hole	goto err_out; } }	high	待判	
+ntfs-3g-00188	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1347	ntfs_attr_fill_hole	goto err_out; #endif	high	待判	
+ntfs-3g-00189	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1356	ntfs_attr_fill_hole	goto err_out; }	high	待判	
+ntfs-3g-00190	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1416	ntfs_attr_fill_hole	goto err_out; } rlc = ntfs_cluster_alloc(vol, alloc_vcn, need,	high	待判	
+ntfs-3g-00191	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1424	ntfs_attr_fill_hole	goto err_out; if (na->data_flags & (ATTR_COMPRESSION_MASK | ATTR_IS_SPARSE)) na->compressed_size += need << vol->cluster_size_bits;	high	待判	
+ntfs-3g-00192	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1448	ntfs_attr_fill_hole	goto err_out; } na->unused_runs = 2;	high	待判	
+ntfs-3g-00193	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1463	ntfs_attr_fill_hole	goto err_out; } /* If leaved part of the hole go to the next run. */	high	待判	
+ntfs-3g-00194	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1473	ntfs_attr_fill_hole	goto err_out; } if (*ofs) {	high	待判	
+ntfs-3g-00195	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1479	ntfs_attr_fill_hole	goto err_out; } if ((*rl)->vcn < cur_vcn) {	high	待判	
+ntfs-3g-00196	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1879	ntfs_attr_pwrite_i	goto errno_set; } /*	high	待判	
+ntfs-3g-00197	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1889	ntfs_attr_pwrite_i	goto errno_set; /* If this is a compressed attribute it needs special treatment. */ wasnonresident = NAttrNonResident(na) != 0;	high	待判	
+ntfs-3g-00198	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1901	ntfs_attr_pwrite_i	goto errno_set; }	high	待判	
+ntfs-3g-00199	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1905	ntfs_attr_pwrite_i	goto out; /* for a compressed file, get prepared to reserve a full block */ fullcount = count;	high	待判	
+ntfs-3g-00200	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1928	ntfs_attr_pwrite_i	goto errno_set; } /*	high	待判	
+ntfs-3g-00201	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1940	ntfs_attr_pwrite_i	goto errno_set; } #endif	high	待判	
+ntfs-3g-00202	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1968	ntfs_attr_pwrite_i	goto err_out; if (ntfs_attr_lookup(na->type, na->name, na->name_len, 0, 0, NULL, 0, ctx)) {	high	待判	
+ntfs-3g-00203	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1972	ntfs_attr_pwrite_i	goto err_out; } val = (char*)ctx->attr + le16_to_cpu(ctx->attr->value_offset);	high	待判	
+ntfs-3g-00204	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1980	ntfs_attr_pwrite_i	goto err_out; } memcpy(val + pos, b, count);	high	待判	
+ntfs-3g-00205	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1993	ntfs_attr_pwrite_i	goto err_out; } ntfs_attr_put_search_ctx(ctx);	high	待判	
+ntfs-3g-00206	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	1997	ntfs_attr_pwrite_i	goto out; }	high	待判	
+ntfs-3g-00207	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2013	ntfs_attr_pwrite_i	goto err_out; } else { VCN block_begin;	high	待判	
+ntfs-3g-00208	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2028	ntfs_attr_pwrite_i	goto err_out; if ((update_from == -1) || (block_begin < update_from)) update_from = block_begin;	high	待判	
+ntfs-3g-00209	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2034	ntfs_attr_pwrite_i	goto err_out; #endif /*	high	待判	
+ntfs-3g-00210	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2045	ntfs_attr_pwrite_i	goto err_out; na->unused_runs = 2; }	high	待判	
+ntfs-3g-00211	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2051	ntfs_attr_pwrite_i	goto err_out; if (ntfs_attr_lookup(na->type, na->name, na->name_len, 0, 0, NULL, 0, ctx))	high	待判	
+ntfs-3g-00212	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2054	ntfs_attr_pwrite_i	goto err_out; /* If write starts beyond initialized_size, zero the gap. */	high	待判	
+ntfs-3g-00213	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2060	ntfs_attr_pwrite_i	goto err_out; ctx->attr->initialized_size = cpu_to_sle64(pos + count);	high	待判	
+ntfs-3g-00214	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2078	ntfs_attr_pwrite_i	goto err_out; } na->initialized_size = pos + count;	high	待判	
+ntfs-3g-00215	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2116	ntfs_attr_pwrite_i	goto err_out; } /*	high	待判	
+ntfs-3g-00216	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2169	ntfs_attr_pwrite_i	goto err_out; /* just making non-resident, so not yet compressed */	high	待判	
+ntfs-3g-00217	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2213	ntfs_attr_pwrite_i	goto err_out; } if (compressed) {	high	待判	
+ntfs-3g-00218	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2255	ntfs_attr_pwrite_i	goto err_out; memcpy(cb, b, to_write);	high	待判	
+ntfs-3g-00219	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2320	ntfs_attr_pwrite_i	goto out; } if (!wasnonresident)	high	待判	
+ntfs-3g-00220	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2333	ntfs_attr_pwrite_i	goto done; /* * TODO: Need to try to change initialized_size. If it	high	待判	
+ntfs-3g-00221	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2338	ntfs_attr_pwrite_i	goto err_out; } goto done;	high	待判	
+ntfs-3g-00222	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2340	ntfs_attr_pwrite_i	goto done; } errno = eo;	high	待判	
+ntfs-3g-00223	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2390	ntfs_attr_pwrite_i	goto out; }	high	待判	
+ntfs-3g-00224	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2407	ntfs_attr_pwrite	goto out; }	high	待判	
+ntfs-3g-00225	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2446	ntfs_attr_pclose	goto errno_set; } vol = na->ni->vol;	high	待判	
+ntfs-3g-00226	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2458	ntfs_attr_pclose	goto errno_set; } /* If this is not a compressed attribute get out */	high	待判	
+ntfs-3g-00227	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2463	ntfs_attr_pclose	goto out; /* safety check : no recursion on close */	high	待判	
+ntfs-3g-00228	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2471	ntfs_attr_pclose	goto out; } NAttrSetComprClosing(na);	high	待判	
+ntfs-3g-00229	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2479	ntfs_attr_pclose	goto err_out; na->rl = ntfs_rl_extend(na,na->rl,2); if (!na->rl)	high	待判	
+ntfs-3g-00230	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2482	ntfs_attr_pclose	goto err_out; na->unused_runs = 2; /* Find the runlist element containing the terminal vcn. */	high	待判	
+ntfs-3g-00231	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2496	ntfs_attr_pclose	goto err_out; } /*	high	待判	
+ntfs-3g-00232	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2525	ntfs_attr_pclose	goto out; ofs = na->initialized_size - (rl->vcn << vol->cluster_size_bits);	high	待判	
+ntfs-3g-00233	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2557	ntfs_attr_pclose	goto err_out; } while (rl->length	high	待判	
+ntfs-3g-00234	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2597	ntfs_attr_pclose	goto out; } out:	high	待判	
+ntfs-3g-00235	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	2620	ntfs_attr_pclose	goto out; }	high	待判	
+ntfs-3g-00236	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	3691	ntfs_attr_lookup	goto out; }	high	待判	
+ntfs-3g-00237	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4548	ntfs_attr_add	goto err_out; } /* @val is mandatory. */	high	待判	
+ntfs-3g-00238	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4575	ntfs_attr_add	goto err_out; } is_resident = FALSE;	high	待判	
+ntfs-3g-00239	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4602	ntfs_attr_add	goto err_out; } for (i = 0; i < ni->nr_extents; i++) {	high	待判	
+ntfs-3g-00240	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4618	ntfs_attr_add	goto err_out; } return ntfs_attr_add(ni, type, name, name_len, val, size);	high	待判	
+ntfs-3g-00241	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4627	ntfs_attr_add	goto err_out; }	high	待判	
+ntfs-3g-00242	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	4683	ntfs_attr_add	goto err_out; } ntfs_attr_close(na);	high	待判	
+ntfs-3g-00243	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5781	ntfs_attr_update_meta	goto out; a->allocated_size = cpu_to_sle64(na->allocated_size);	high	待判	
+ntfs-3g-00244	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5792	ntfs_attr_update_meta	goto error; } }	high	待判	
+ntfs-3g-00245	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5818	ntfs_attr_update_meta	goto error; } ntfs_attr_put_search_ctx(ctx);	high	待判	
+ntfs-3g-00246	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5827	ntfs_attr_update_meta	goto error; }	high	待判	
+ntfs-3g-00247	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5873	ntfs_attr_update_meta	goto error; na->compressed_size = new_compr_size;	high	待判	
+ntfs-3g-00248	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5891	ntfs_attr_update_meta	leave: ret = -1; goto out; /* return -1 */ retry: ret = -2; goto out; error: ret = -3; goto out;	high	待判	
+ntfs-3g-00249	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5892	ntfs_attr_update_meta	retry: ret = -2; goto out; error: ret = -3; goto out; }	high	待判	
+ntfs-3g-00250	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	5893	ntfs_attr_update_meta	error: ret = -3; goto out; }	high	待判	
+ntfs-3g-00251	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	6293	ntfs_attr_update_mapping_pairs_i	goto out; } #undef NTFS_VCN_DELETE_MARK	high	待判	
+ntfs-3g-00252	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	6788	ntfs_attr_truncate_i	goto out; } /*	high	待判	
+ntfs-3g-00253	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	6797	ntfs_attr_truncate_i	goto out; } /*	high	待判	
+ntfs-3g-00254	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	6813	ntfs_attr_truncate_i	goto out; } if (NAttrNonResident(na)) {	high	待判	
+ntfs-3g-00255	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	6986	ntfs_attr_readall	goto err_exit; } /*	high	待判	
+ntfs-3g-00256	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	7000	ntfs_attr_readall	goto out; } data = ntfs_malloc(na->data_size);	high	待判	
+ntfs-3g-00257	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	7004	ntfs_attr_readall	goto out; size = ntfs_attr_pread(na, 0, na->data_size, data);	high	待判	
+ntfs-3g-00258	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	7010	ntfs_attr_readall	goto out; } ret = data;	high	待判	
+ntfs-3g-00259	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/attrib.c	7226	ntfs_attr_get_free_bits	goto out; while (1) {	high	待判	
+ntfs-3g-00260	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	169	ntfs_inode_real_open	goto out; } ni = __ntfs_inode_allocate(vol);	high	待判	
+ntfs-3g-00261	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	173	ntfs_inode_real_open	goto out; if (ntfs_file_record_read(vol, mref, &ni->mrec, NULL)) goto err_out;	high	待判	
+ntfs-3g-00262	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	175	ntfs_inode_real_open	goto err_out; if (!(ni->mrec->flags & MFT_RECORD_IN_USE)) { errno = ENOENT;	high	待判	
+ntfs-3g-00263	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	178	ntfs_inode_real_open	goto err_out; } ni->mft_no = MREF(mref);	high	待判	
+ntfs-3g-00264	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	183	ntfs_inode_real_open	goto err_out; /* Receive some basic information about inode. */ if (ntfs_attr_lookup(AT_STANDARD_INFORMATION, AT_UNNAMED,	high	待判	
+ntfs-3g-00265	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	289	ntfs_inode_real_open	goto out; }	high	待判	
+ntfs-3g-00266	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	331	ntfs_inode_real_close	goto err; } }	high	待判	
+ntfs-3g-00267	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	340	ntfs_inode_real_close	goto err; } }	high	待判	
+ntfs-3g-00268	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	624	ntfs_extent_inode_open	goto out; } }	high	待判	
+ntfs-3g-00269	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	645	ntfs_extent_inode_open	goto out; } goto out;	high	待判	
+ntfs-3g-00270	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	647	ntfs_extent_inode_open	goto out; } }	high	待判	
+ntfs-3g-00271	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	653	ntfs_extent_inode_open	goto out; if (ntfs_file_record_read(base_ni->vol, le64_to_cpu(mref), &ni->mrec, NULL)) goto err_out;	high	待判	
+ntfs-3g-00272	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	655	ntfs_extent_inode_open	goto err_out; ni->mft_no = mft_no; ni->nr_extents = -1;	high	待判	
+ntfs-3g-00273	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	665	ntfs_extent_inode_open	goto err_out; if (base_ni->nr_extents) { memcpy(extent_nis, base_ni->extent_nis,	high	待判	
+ntfs-3g-00274	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	680	ntfs_extent_inode_open	goto out; }	high	待判	
+ntfs-3g-00275	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	810	ntfs_inode_sync_file_name	goto err_out; } /* Collect the reparse tag, if any */	high	待判	
+ntfs-3g-00276	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	916	ntfs_inode_sync_file_name	goto err_out; } ntfs_attr_put_search_ctx(ctx);	high	待判	
+ntfs-3g-00277	ntfs-3g	2022.10.3	T2	misc	fail-goto	fail-goto	libntfs-3g/inode.c	1138	ntfs_inode_add_attrlist	goto err_out; } /* Walk through all attributes. */	high	待判	

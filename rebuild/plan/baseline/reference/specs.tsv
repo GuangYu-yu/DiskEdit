@@ -1,0 +1,30 @@
+spec_id	spec	version	section	clause	finding	risk	disposition	note
+GPT-001	UEFI	2.10	5.1	64-bit LBA	Logical Block Addresses (LBAs) are 64 bits rather than 32 bits	medium	待判	大于 2 TiB 的盘必须走 64 位 LBA
+GPT-002	UEFI	2.10	5.1	primary+backup	Provides both a primary and backup partition table for redundancy	high	待判	写表必须同时维护两份；只写主表是破坏性降级
+GPT-003	UEFI	2.10	5.1	version/size	Uses version number and size fields for future expansion	medium	待判	未知 revision/size 不得按已知布局强解
+GPT-004	UEFI	2.10	5.1	CRC32	Uses CRC32 fields for improved data integrity	high	待判	头 CRC 与条目数组 CRC 分离
+GPT-005	UEFI	2.10	5.1	partition identity	Defines a GUID for uniquely identifying each partition; uses a GUID and attributes to define partition content type	high	待判	类型 GUID、唯一 GUID、属性三者独立
+GPT-006	UEFI	2.10	5.1	partition name	Each partition contains a 36 character human readable name	medium	待判	名字是 36 个 UTF-16 码元，不是字节
+GPT-007	UEFI	2.10	5.2.1	legacy MBR signature	Signature is 0xAA55: byte 510 contains 0x55 and byte 511 contains 0xAA; four 16-byte partition records; the rest of the logical block is reserved	high	待判	注意字节序：文档按字节描述，Microsoft 按字写成 0x55AA
+GPT-008	UEFI	2.10	5.2.1	legacy MBR validity	The Signature must be 0xaa55; a record with OSType zero or SizeInLBA zero may be ignored; otherwise each partition must reside on the disk and must not overlap	high	待判	这是“可忽略项”的规范来源；修复逻辑不得把空记录当有效分区
+GPT-009	UEFI	2.10	5.2.1	legacy MBR fields	BootIndicator and CHS fields shall not be used by UEFI firmware; StartingLBA and SizeInLBA are used to determine start and size	medium	待判	CHS 只影响旧系统兼容，不参与本实现的几何判定
+GPT-010	UEFI	2.10	5.2.3	protective MBR record	BootIndicator 0x00; StartingCHS 0x000200; OSType 0xEE; EndingCHS last logical block or 0xFFFFFF; StartingLBA 1; SizeInLBA disk size minus one or 0xFFFFFFFF; remaining records zero	high	待判	保护 MBR 的六字段全部是硬约束
+GPT-011	UEFI	2.10	5.2.3	protective MBR zeroing	Unique MBR Disk Signature and Unknown fields unused and set to zero; Reserved set to zero; Signature 0xAA55	high	待判	与“保留旧 MBR 磁盘签名”的常见做法冲突，需明确策略
+GPT-012	UEFI	2.10	5.3.1	header placement	Primary GPT Header must be in LBA 1; backup GPT Header must be in the last LBA; MyLBA is the header's own LBA and AlternateLBA is the other header's LBA	high	待判	最后 LBA 随盘容量变化，重写备份表前必须重新计算
+GPT-013	UEFI	2.10	5.3.1	usable range	First Usable LBA through Last Usable LBA is inclusive; all data on the volume must be stored between them; only GPT management structures may reside outside	high	待判	分区条目落在可用区间外即非法
+GPT-014	UEFI	2.10	5.3.1	header size	The GPT Header's size may increase in the future but it cannot span more than one logical block	medium	待判	解析时以 HeaderSize 为准，但必须小于等于扇区大小
+GPT-015	UEFI	2.10	5.3.1	entry array location/size	Entry array starts at Partition Entry LBA; element size is Size Of Partition Entry; count is Number Of Partition Entries	high	待判	三者与扇区大小共同决定数组跨度
+GPT-016	UEFI	2.10	5.3.1	entry array CRC coverage	If the array size is not an even multiple of the logical block size, leftover space in the last block is reserved and not covered by the array CRC32	high	待判	CRC 只覆盖 size*count；多算尾部保留区会导致校验失败
+GPT-017	UEFI	2.10	5.3.1	CRC update order	When an entry is updated, the Partition Entry Array CRC32 must be updated; when that CRC is updated, the GPT Header CRC must also be updated	high	待判	顺序不可颠倒：先数组 CRC，后头 CRC
+GPT-018	UEFI	2.10	5.3.1	entry array placement	Primary entry array is after the primary header and ends before First Usable LBA; backup entry array is after Last Usable LBA and ends before the backup header	high	待判	备份数组位置取决于盘尾几何
+GPT-019	UEFI	2.10	5.3.1	non-overlap / unused entry	Each defined partition must not overlap with any other defined partition; if all fields of an entry are zero, the entry is not in use	high	待判	全零条目是唯一合法的“空闲”表示
+GPT-020	UEFI	2.10	5.3.1	minimum array reservation	A minimum of 16,384 bytes of space must be reserved for the GPT Partition Entry Array	high	待判	128 条目 × 128 字节是下限，不是上限
+GPT-021	UEFI	2.10	5.3.1	first usable lower bound	With 512-byte blocks First Usable LBA must be at least 34 (1 MBR + 1 header + 32 array blocks); with 4096-byte blocks at least 6 (1 + 1 + 4)	high	待判	新表起点不得早于该下界
+GPT-022	UEFI	2.10	5.3.1	alignment	GPT partitions should be aligned to the larger of the physical block boundary and the optimal transfer length granularity; examples show 512-byte logical / 4096-byte physical → multiples of 8	medium	待判	“should”不是 must；对齐策略需与旧工具默认 grain 对照
+GPT-023	UEFI	2.10	5.3.1	disk identity	The value of Disk GUID is a GUID that uniquely identifies the entire GPT Header and all its associated storage	medium	待判	磁盘身份用于多盘识别，不等同于任何分区 GUID
+MBR-001	Microsoft	Win2000	Partition Table	MBR contents	MBR contains master boot code, disk signature at 0x01B8, a 64-byte partition table at 0x01BE with four 16-byte entries, and a 2-byte signature word always 0x55AA	high	待判	Windows 视角的偏移量与 UEFI 表一致，但签名按字描述
+MBR-002	Microsoft	Win2000	Partition Table	unused entries	When there are fewer than four partitions, the remaining partition table fields are set to zero	medium	待判	与本实现的“全零即空闲”一致
+MBR-003	Microsoft	Win2000	Partition Table	System ID	System ID 0x05 and 0x0F identify an extended partition; 0x0F is the BIOS INT 13h extensions form	medium	待判	扩展分区类型码是识别 EBR 链的入口
+EBR-001	Microsoft	Win2003	Master Boot Record	EBR definition	An extended boot record consists of an extended partition table and the signature word for the sector; it exists for each logical drive in the extended partition	high	待判	EBR 是链式结构，不是单一表
+EBR-002	Microsoft	Win2003	Master Boot Record	EBR placement	The EBR contains the only information on the first side of the first cylinder of each logical drive; the boot sector is usually at relative sector 32 or 63; if there is no extended partition there are no EBRs	medium	待判	CHS 位置只在旧系统有意义，但“每逻辑盘一个 EBR”是链长依据
+EBR-003	Microsoft	Win2000	Master Boot Record	EBR signature	A signature word also marks the end of an extended boot record (EBR) and the boot sector	high	待判	EBR 缺签名即不可继续沿链解析

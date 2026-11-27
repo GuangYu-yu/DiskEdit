@@ -1,0 +1,181 @@
+site_id	tool	version	layer	area	category	tags	file	line	symbol	finding	risk	disposition	note
+gdisk-00001	gdisk	1.0.10	T1	misc	error-report	error-report	attributes.cc	164	OperateOnAttributes	cerr << "Unknown attributes operator: " << attributeOperator << endl; return false; } // else	medium	待判	
+gdisk-00002	gdisk	1.0.10	T1	misc	error-report	error-report	attributes.cc	172	OperateOnAttributes	cerr << "Could not convert hex attribute mask" << endl; return false; } // if	medium	待判	
+gdisk-00003	gdisk	1.0.10	T1	misc	error-report	error-report	attributes.cc	180	OperateOnAttributes	cerr << "Could not convert bit number" << endl; return false; } // if	medium	待判	
+gdisk-00004	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	64	BasicMBRData	cerr << "Unable to allocate memory in BasicMBRData copy constructor! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00005	gdisk	1.0.10	T1	mbr	fatal-exit	fatal-exit	basicmbr.cc	65	BasicMBRData	exit(1); } // if if (orig.myDisk != NULL)	high	待判	
+gdisk-00006	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	121	BasicMBRData	cerr << "Unable to allocate memory in BasicMBRData::operator=()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00007	gdisk	1.0.10	T1	mbr	fatal-exit	fatal-exit	basicmbr.cc	122	BasicMBRData	exit(1); } // if if (orig.myDisk != NULL)	high	待判	
+gdisk-00008	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	148	ReadMBRData	cerr << "Unable to allocate memory in BasicMBRData::ReadMBRData()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00009	gdisk	1.0.10	T1	mbr	fatal-exit	fatal-exit	basicmbr.cc	149	ReadMBRData	exit(1); } // if canDeleteMyDisk = 1;	high	待判	
+gdisk-00010	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	189	ReadMBRData	cerr << "Problem reading disk in BasicMBRData::ReadMBRData()!\n"; } else { for (i = 0; i < 440; i++)	medium	待判	
+gdisk-00011	gdisk	1.0.10	T1	mbr	refusal	refusal	basicmbr.cc	234	ReadMBRData	cerr << "Error reading logical partitions! List may be truncated!\n"; } // if maxLogicals valid DeletePartition(i);	high	待判	
+gdisk-00012	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	263	ReadMBRData	cerr << "Warning! MBR Logical partitions found on a hybrid MBR disk! This is an\n" << "EXTREMELY dangerous configuration!\n\a"; } // for	medium	待判	
+gdisk-00013	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	291	ReadLogicalParts	cerr << "Logical partition infinite loop detected! This is being corrected.\n"; allOK = -1; if (partNum > 0) //don't go negative	medium	待判	
+gdisk-00014	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	299	ReadLogicalParts	cerr << "Unable to seek to " << offset << "! Aborting!\n"; allOK = -1; }	medium	待判	
+gdisk-00015	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	303	ReadLogicalParts	cerr << "Error seeking to or reading logical partition data from " << offset << "!\nSome logical partitions may be missing!\n"; allOK = -1;	medium	待判	
+gdisk-00016	gdisk	1.0.10	T1	mbr	refusal	refusal	basicmbr.cc	316	ReadLogicalParts	cerr << "EBR signature for logical partition invalid; read 0x"; cerr.fill('0'); cerr.width(4);	high	待判	
+gdisk-00017	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	320	ReadLogicalParts	cerr << hex << ebr.MBRSignature << ", but should be 0x"; cerr.width(4); cerr << MBR_SIGNATURE << dec << "\n";	medium	待判	
+gdisk-00018	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	322	ReadLogicalParts	cerr << MBR_SIGNATURE << dec << "\n"; cerr.fill(' '); } // if	medium	待判	
+gdisk-00019	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	466	WriteMBRData	cerr << "Error " << errno << " when saving MBR!\n"; } // if } else {	medium	待判	
+gdisk-00020	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	470	WriteMBRData	cerr << "Error " << errno << " when seeking to MBR to write it!\n"; } // if/else theDisk->Close();	medium	待判	
+gdisk-00021	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	1136	SetInclusionwChecks	cerr << "Specified change is not legal! Aborting change!\n"; } // if } else {	medium	待判	
+gdisk-00022	gdisk	1.0.10	T1	mbr	refusal	refusal	basicmbr.cc	1139	SetInclusionwChecks	cerr << "Invalid partition inclusion code in BasicMBRData::SetInclusionwChecks()!\n"; } // if/else } else {	high	待判	
+gdisk-00023	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	1142	SetInclusionwChecks	cerr << "Partition table is not currently in a valid state. Aborting change!\n"; allOK = 0; } // if/else	medium	待判	
+gdisk-00024	gdisk	1.0.10	T1	mbr	error-report	error-report	basicmbr.cc	1176	DeleteOversizedParts	cerr << "\aWarning: Deleting oversized partition #" << i + 1 << "! Start = " << partitions[i].GetStartLBA() << ", length = " << partitions[i].GetLengthLBA() << "\n"; partitions[i].Empty();	medium	待判	
+gdisk-00025	gdisk	1.0.10	T1	mbr	refusal	refusal	basicmbr.cc	1329	RemoveLogicalsFromFirstFour	cerr << "Warning! Too many partitions in BasicMBRData::RemoveLogicalsFromFirstFour()!\n"; } // if } // for i...	medium	待判	
+gdisk-00026	gdisk	1.0.10	T1	mbr	refusal	refusal	basicmbr.cc	1390	CreateExtended	cerr << "Could not create extended partition; no room in primary table!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00027	gdisk	1.0.10	T1	misc	error-report	error-report	bsd.cc	138	ReadBSDData	cerr << "Unable to allocate memory in BSDData::ReadBSDData()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00028	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	bsd.cc	139	ReadBSDData	exit(1); } // if for (i = 0; i < numParts; i++) {	high	待判	
+gdisk-00029	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	cgdisk.cc	35	main	exit(1); switch (argc) {	high	待判	
+gdisk-00030	gdisk	1.0.10	T1	table-edit	error-report	error-report	cgdisk.cc	53	main	cerr << "Usage: " << argv[0] << " [-a] device_file\n"; exit(1); } // if/elseif/else	medium	待判	
+gdisk-00031	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	cgdisk.cc	54	main	exit(1); } // if/elseif/else displayType = USE_ARROW;	high	待判	
+gdisk-00032	gdisk	1.0.10	T1	table-edit	error-report	error-report	cgdisk.cc	59	main	cerr << "Usage: " << argv[0] << " [-a] device_file\n"; exit(1); break;	medium	待判	
+gdisk-00033	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	cgdisk.cc	60	main	exit(1); break; } // switch	high	待判	
+gdisk-00034	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	72	OpenForRead	cerr << "Problem opening " << realFilename << " for reading! Error is " << errno << ".\n"; if (errno == EACCES) // User is probably not running as root cerr << "You must run this program as root or use sudo!\n";	medium	待判	
+gdisk-00035	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	74	OpenForRead	cerr << "You must run this program as root or use sudo!\n"; if (errno == ENOENT) cerr << "The specified file does not exist!\n";	medium	待判	
+gdisk-00036	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	76	OpenForRead	cerr << "The specified file does not exist!\n"; realFilename = ""; userFilename = "";	medium	待判	
+gdisk-00037	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	87	OpenForRead	cerr << "The specified path is a directory!\n"; #if !(defined(__FreeBSD__) || defined(__FreeBSD_kernel__)) \ && !defined(__APPLE__)	medium	待判	
+gdisk-00038	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	91	OpenForRead	cerr << "The specified path is a character device!\n"; #endif else if (S_ISFIFO(st.st_mode))	medium	待判	
+gdisk-00039	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	94	OpenForRead	cerr << "The specified path is a FIFO!\n"; else if (S_ISSOCK(st.st_mode)) cerr << "The specified path is a socket!\n";	medium	待判	
+gdisk-00040	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	96	OpenForRead	cerr << "The specified path is a socket!\n"; else isOpen = 1;	medium	待判	
+gdisk-00041	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	130	OpenForWrite	cerr << "Warning: Devices opened with shared lock will not have their\npartition table automatically reloaded!\n"; fd = open(realFilename.c_str(), O_WRONLY | O_SHLOCK); } // if	medium	待判	
+gdisk-00042	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	149	Close	cerr << "Warning! Problem closing file!\n"; isOpen = 0; openForWrite = 0;	medium	待判	
+gdisk-00043	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	191	GetBlockSize	cerr << "\aError " << errno << " when determining sector size! Setting sector size to " << SECTOR_SIZE << "\n"; cout << "Disk device is " << realFilename << "\n";	medium	待判	
+gdisk-00044	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	307	DiskSync	cerr << "Warning: Platform not recognized!\n"; if (platformFound > 1) cerr << "\nWarning: We seem to be running on multiple platforms!\n";	medium	待判	
+gdisk-00045	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	309	DiskSync	cerr << "\nWarning: We seem to be running on multiple platforms!\n"; } // if (isOpen) return retval;	medium	待判	
+gdisk-00046	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	361	Read	cerr << "Unable to allocate memory in DiskIO::Read()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00047	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	diskio-unix.cc	362	Read	exit(1); } // if	high	待判	
+gdisk-00048	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	403	Write	cerr << "Unable to allocate memory in DiskIO::Write()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00049	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	diskio-unix.cc	404	Write	exit(1); } // if	high	待判	
+gdisk-00050	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	489	DiskSize	cerr << "Warning! We seem to be running on no known platform!\n"; // The above methods have failed, so let's assume it's a regular	medium	待判	
+gdisk-00051	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-unix.cc	498	DiskSize	cerr << "Warning: File size is not a multiple of 512 bytes!" << " Misbehavior is likely!\n\a"; sectors = bytes / UINT64_C(512);	medium	待判	
+gdisk-00052	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-windows.cc	66	OpenForRead	cerr << "Problem opening " << realFilename << " for reading!\n"; realFilename = ""; userFilename = "";	medium	待判	
+gdisk-00053	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-windows.cc	210	Seek	cerr << "Error when seeking to " << seekTo.QuadPart << "! Error is " << errno << "\n"; retval = 0; } // if	medium	待判	
+gdisk-00054	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-windows.cc	244	Read	cerr << "Unable to allocate memory in DiskIO::Read()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00055	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	diskio-windows.cc	245	Read	exit(1); } // if	high	待判	
+gdisk-00056	gdisk	1.0.10	T1	table-edit	error-report	error-report	diskio-windows.cc	287	Write	cerr << "Unable to allocate memory in DiskIO::Write()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00057	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	diskio-windows.cc	288	Write	exit(1); } // if	high	待判	
+gdisk-00058	gdisk	1.0.10	T1	misc	error-report	error-report	fixparts.cc	42	main	cerr << "Usage: " << argv[0] << " device_filename\n"; exit(1); } // switch	medium	待判	
+gdisk-00059	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	fixparts.cc	43	main	exit(1); } // switch	high	待判	
+gdisk-00060	gdisk	1.0.10	T1	misc	error-report	error-report	fixparts.cc	48	main	cerr << "\nUnable to read MBR data from '" << device << "'! Exiting!\n\n"; exit(1); } // if	medium	待判	
+gdisk-00061	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	fixparts.cc	49	main	exit(1); } // if	high	待判	
+gdisk-00062	gdisk	1.0.10	T1	misc	error-report	error-report	fixparts.cc	56	main	cerr << "\nThis disk appears to be a GPT disk. Use GNU Parted or GPT fdisk on it!\n"; cerr << "Exiting!\n\n"; exit(1);	medium	待判	
+gdisk-00063	gdisk	1.0.10	T1	misc	error-report	error-report	fixparts.cc	57	main	cerr << "Exiting!\n\n"; exit(1); break;	medium	待判	
+gdisk-00064	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	fixparts.cc	58	main	exit(1); break; case invalid:	high	待判	
+gdisk-00065	gdisk	1.0.10	T1	misc	refusal	refusal	fixparts.cc	61	main	cerr << "\nCannot find valid MBR data on '" << device << "'! Exiting!\n\n"; exit(1); break;	high	待判	
+gdisk-00066	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	fixparts.cc	62	main	exit(1); break; case mbr:	high	待判	
+gdisk-00067	gdisk	1.0.10	T1	misc	refusal	refusal	fixparts.cc	68	main	cerr << "\nCannot determine the validity of the disk on '" << device << "'! Exiting!\n\n"; exit(1);	high	待判	
+gdisk-00068	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	fixparts.cc	70	main	exit(1); break; } // switch()	high	待判	
+gdisk-00069	gdisk	1.0.10	T1	misc	error-report	error-report	fixparts.cc	95	DoMBR	cerr << "GPT signature erasure failed!\n"; } // if } // if	medium	待判	
+gdisk-00070	gdisk	1.0.10	T1	table-edit	fatal-exit	fatal-exit	gdisk.cc	27	main	exit(1); switch (argc) {	high	待判	
+gdisk-00071	gdisk	1.0.10	T1	table-edit	error-report	error-report	gdisk.cc	54	main	cerr << "Usage: " << argv[0] << " [-l] device_file\n"; isError = 1; } // if/elseif/else	medium	待判	
+gdisk-00072	gdisk	1.0.10	T1	table-edit	error-report	error-report	gdisk.cc	66	main	cerr << "Usage: " << argv[0] << " [-l] device_file\n"; isError = 1; break;	medium	待判	
+gdisk-00073	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	120	GPTData	cerr << "Error! Could not allocate memory for partitions in GPTData::operator=()!\n" << "Terminating!\n"; exit(1);	medium	待判	
+gdisk-00074	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	122	GPTData	exit(1); } // if for (i = 0; i < numParts; i++) {	high	待判	
+gdisk-00075	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	153	GPTData	exit(2); } // GPTData(string filename) constructor	high	待判	
+gdisk-00076	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	191	GPTData	cerr << "Error! Could not allocate memory for partitions in GPTData::operator=()!\n" << "Terminating!\n"; exit(1);	medium	待判	
+gdisk-00077	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	193	GPTData	exit(1); } // if for (i = 0; i < numParts; i++) {	high	待判	
+gdisk-00078	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	566	CheckHeaderCRC	cerr << "\aWarning! Header size is specified as " << hSize << ", which is invalid.\n"; cerr << "Setting the header size for CRC computation to " << HEADER_SIZE << "\n"; } // if	high	待判	
+gdisk-00079	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	567	CheckHeaderCRC	cerr << "Setting the header size for CRC computation to " << HEADER_SIZE << "\n"; } // if hSize = HEADER_SIZE;	medium	待判	
+gdisk-00080	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	586	CheckHeaderCRC	cerr << "Could not allocate memory in GPTData::CheckHeaderCRC()! Aborting!\n"; exit(1); }	medium	待判	
+gdisk-00081	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	587	CheckHeaderCRC	exit(1); } if (IsLittleEndian() == 0)	high	待判	
+gdisk-00082	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	814	PartitionScan	cerr << "\aThe protective MBR's 0xEE partition is oversized! Auto-repairing.\n\n"; } // if protectiveMBR.MakeProtectiveMBR();	medium	待判	
+gdisk-00083	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	897	LoadPartitions	cerr << "Invalid partition data!\n"; break; } // switch	high	待判	
+gdisk-00084	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	954	ForceLoadGPTData	cerr << "\aCaution: invalid backup GPT header, but valid main header; regenerating\n" << "backup header from main header.\n\n"; RebuildSecondHeader();	high	待判	
+gdisk-00085	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	960	ForceLoadGPTData	cerr << "\aCaution: invalid main GPT header, but valid backup; regenerating main header\n" << "from backup!\n\n"; RebuildMainHeader();	high	待判	
+gdisk-00086	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	976	ForceLoadGPTData	cerr << "\aWarning: Invalid CRC on main header data; loaded backup partition table.\n"; } else { // backup table bad, bad main header CRC, but try main table in desperation.... if (LoadMainTable() == 0) {	high	待判	
+gdisk-00087	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	981	ForceLoadGPTData	cerr << "\a\aWarning! Unable to load either main or backup partition table!\n"; } // if } // if/else (LoadSecondTableAsMain())	medium	待判	
+gdisk-00088	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	998	ForceLoadGPTData	cerr << "\aWarning! Main partition table CRC mismatch! Loaded backup " << "partition table\ninstead of main partition table!\n\n"; } // if */	medium	待判	
+gdisk-00089	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1005	ForceLoadGPTData	cerr << "Warning! One or more CRCs don't match. You should repair the disk!\n"; // Show detail status of header and table if (validHeaders & 0x1)	medium	待判	
+gdisk-00090	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1008	ForceLoadGPTData	cerr << "Main header: OK\n"; else cerr << "Main header: ERROR\n";	medium	待判	
+gdisk-00091	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1010	ForceLoadGPTData	cerr << "Main header: ERROR\n"; if (validHeaders & 0x2) cerr << "Backup header: OK\n";	medium	待判	
+gdisk-00092	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1012	ForceLoadGPTData	cerr << "Backup header: OK\n"; else cerr << "Backup header: ERROR\n";	medium	待判	
+gdisk-00093	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1014	ForceLoadGPTData	cerr << "Backup header: ERROR\n"; if (mainPartsCrcOk) cerr << "Main partition table: OK\n";	medium	待判	
+gdisk-00094	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1016	ForceLoadGPTData	cerr << "Main partition table: OK\n"; else cerr << "Main partition table: ERROR\n";	medium	待判	
+gdisk-00095	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1018	ForceLoadGPTData	cerr << "Main partition table: ERROR\n"; if (secondPartsCrcOk) cerr << "Backup partition table: OK\n";	medium	待判	
+gdisk-00096	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1020	ForceLoadGPTData	cerr << "Backup partition table: OK\n"; else cerr << "Backup partition table: ERROR\n";	medium	待判	
+gdisk-00097	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1022	ForceLoadGPTData	cerr << "Backup partition table: ERROR\n"; cerr << "\n"; state = gpt_corrupt;	high	待判	
+gdisk-00098	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1023	ForceLoadGPTData	cerr << "\n"; state = gpt_corrupt; } // if	high	待判	
+gdisk-00099	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1059	LoadHeader	cerr << "Warning! Read error " << errno << "; strange behavior now likely!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00100	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1077	LoadHeader	cerr << "Warning: Partition table header claims that the size of partition table\n"; cerr << "entries is " << tempHeader.sizeOfPartitionEntries << " bytes, but this program "; cerr << " supports only " << sizeof(GPTPart) << "-byte entries.\	medium	待判	
+gdisk-00101	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1078	LoadHeader	cerr << "entries is " << tempHeader.sizeOfPartitionEntries << " bytes, but this program "; cerr << " supports only " << sizeof(GPTPart) << "-byte entries.\n"; cerr << "Adjusting accordingly, but partition table may be garbage.\n";	medium	待判	
+gdisk-00102	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1079	LoadHeader	cerr << " supports only " << sizeof(GPTPart) << "-byte entries.\n"; cerr << "Adjusting accordingly, but partition table may be garbage.\n"; }	medium	待判	
+gdisk-00103	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1080	LoadHeader	cerr << "Adjusting accordingly, but partition table may be garbage.\n"; } tempHeader.sizeOfPartitionEntries = sizeof(GPTPart);	medium	待判	
+gdisk-00104	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1103	LoadPartitionTable	cerr << "Error! GPT header contains invalid partition entry size!\n"; retval = 0; } else if (disk.OpenForRead()) {	high	待判	
+gdisk-00105	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1116	LoadPartitionTable	cerr << "Warning! Read error " << errno << "! Misbehavior now likely!\n"; retval = 0; } // if	medium	待判	
+gdisk-00106	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1127	LoadPartitionTable	cerr << "Error! Couldn't seek to partition table!\n"; } // if/else } else {	medium	待判	
+gdisk-00107	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1130	LoadPartitionTable	cerr << "Error! Couldn't open device " << device << " when reading partition table!\n"; retval = 0;	medium	待判	
+gdisk-00108	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1154	CheckTable	cerr << "Could not allocate memory in GPTData::CheckTable()! Terminating!\n"; exit(1); } // if	medium	待判	
+gdisk-00109	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	1155	CheckTable	exit(1); } // if if (myDisk.Read(partsToCheck, sizeOfParts) != (int) sizeOfParts) {	high	待判	
+gdisk-00110	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1158	CheckTable	cerr << "Warning! Error " << errno << " reading partition table for CRC check!\n"; } else { newCRC = chksum_crc32((unsigned char*) partsToCheck, sizeOfParts);	medium	待判	
+gdisk-00111	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1167	CheckTable	cerr << "Warning! Main and backup partition tables differ! Use the 'c' and 'e' options\n" << "on the recovery & transformation menu to examine the two tables.\n\n"; allOK = 0;	medium	待判	
+gdisk-00112	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1197	SaveGPTData	cerr << "Caution! Secondary header was placed beyond the disk's limits! Moving the\n" << "header, but other problems may occur!\n"; MoveSecondHeaderToEnd();	medium	待判	
+gdisk-00113	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1243	SaveGPTData	cerr << "Aborting write operation!\n"; } // if	medium	待判	
+gdisk-00114	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1248	SaveGPTData	cerr << "\nPartition(s) in the protective MBR are too big for the disk! Creating a\n" << "fresh protective or hybrid MBR is recommended.\n"; }	medium	待判	
+gdisk-00115	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1275	SaveGPTData	cerr << "Unable to save backup partition table! Perhaps the 'e' option on the experts'\n" << "menu will resolve this problem.\n"; syncIt = 0;	medium	待判	
+gdisk-00116	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1306	SaveGPTData	cerr << "Warning! An error was reported when writing the partition table! This error\n" << "MIGHT be harmless, or the disk might be damaged! Checking it is advisable.\n"; } // if/else	medium	待判	
+gdisk-00117	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1312	SaveGPTData	cerr << "Unable to open device '" << myDisk.GetName() << "' for writing! Errno is " << errno << "! Aborting write!\n"; allOK = 0;	medium	待判	
+gdisk-00118	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1358	SaveGPTBackup	cerr << "Warning! An error was reported when writing the backup file.\n" << "It may not be usable!\n"; } // if/else	medium	待判	
+gdisk-00119	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1363	SaveGPTBackup	cerr << "Unable to open file '" << filename << "' for writing! Aborting!\n"; allOK = 0; } // if/else	medium	待判	
+gdisk-00120	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1457	LoadGPTBackup	cerr << "Warning! Read error " << errno << " loading partition table; strange behavior now likely!\n"; } else {	medium	待判	
+gdisk-00121	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1464	LoadGPTBackup	cerr << "Improper backup file! Clearing all partition data!\n"; ClearGPTData(); protectiveMBR.MakeProtectiveMBR();	medium	待判	
+gdisk-00122	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1470	LoadGPTBackup	cerr << "Unable to open file '" << filename << "' for reading! Aborting!\n"; } // if/else	medium	待判	
+gdisk-00123	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1495	DestroyGPT	cerr << "Warning! GPT main header not overwritten! Error is " << errno << "\n"; allOK = 0; } // if	high	待判	
+gdisk-00124	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1503	DestroyGPT	cerr << "Could not allocate memory in GPTData::DestroyGPT()! Terminating!\n"; exit(1); } // if	high	待判	
+gdisk-00125	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	1504	DestroyGPT	exit(1); } // if memset(emptyTable, 0, tableSize);	high	待判	
+gdisk-00126	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1510	DestroyGPT	cerr << "Warning! GPT main partition table not overwritten! Error is " << errno << "\n"; allOK = 0; } // if write failed	high	待判	
+gdisk-00127	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1519	DestroyGPT	cerr << "Warning! GPT backup partition table not overwritten! Error is " << errno << "\n"; allOK = 0;	high	待判	
+gdisk-00128	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1528	DestroyGPT	cerr << "Warning! GPT backup header not overwritten! Error is " << errno << "\n"; allOK = 0; } // if	high	待判	
+gdisk-00129	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1538	DestroyGPT	cerr << "Problem opening '" << device << "' for writing! Program will now terminate.\n"; } // if/else (fd != -1) return (allOK);	medium	待判	
+gdisk-00130	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1554	DestroyMBR	cerr << "Warning! MBR not overwritten! Error is " << errno << "!\n"; return allOK; } // GPTData::DestroyMBR(void)	high	待判	
+gdisk-00131	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1785	XFormDisklabel	cerr << "Warning! Too many partitions to convert!\n"; } // if	medium	待判	
+gdisk-00132	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1898	SetGPTSize	cerr << "Error allocating memory for partition table! Size is unchanged!\n"; allOK = 0; } // if/else	medium	待判	
+gdisk-00133	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1918	MoveMainTable	cerr << "Unable to set the main partition table's location to " << pteSector << "!\n"; retval = 0; } // if/else	medium	待判	
+gdisk-00134	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	1935	MoveSecondTable	cerr << "Unable to set the secondary partition table's location to " << pteSector << "!\n"; retval = 0; } // if/else	medium	待判	
+gdisk-00135	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	1968	DeletePartition	cerr << "Partition number " << partNum + 1 << " out of range!\n"; retval = 0; } // if/else	medium	待判	
+gdisk-00136	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2507	SetAlignment	cerr << "Attempt to set partition alignment to 0!\n"; } // if/else } // GPTData::SetAlignment()	medium	待判	
+gdisk-00137	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	2585	ValidPartNum	cerr << "Partition number out of range: " << partNum << "\n"; return false; } // if	medium	待判	
+gdisk-00138	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	2595	ValidPartNum	cerr << "Partition number out of range (" << partNum << " requested, but only " << numParts << " available)\n"; exit(1);	medium	待判	
+gdisk-00139	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	2597	ValidPartNum	exit(1); } // if if (partitions == NULL) {	high	待判	
+gdisk-00140	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2600	ValidPartNum	cerr << "No partitions defined in GPTData::operator[]; fatal error!\n"; exit(1); } // if	medium	待判	
+gdisk-00141	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpt.cc	2601	ValidPartNum	exit(1); } // if return partitions[partNum];	high	待判	
+gdisk-00142	gdisk	1.0.10	T1	gpt	refusal	refusal	gpt.cc	2620	ManageAttributes	cerr << "Invalid partition number (" << partNum + 1 << ")\n"; retval = -1; } else {	high	待判	
+gdisk-00143	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2668	SizesOK	cerr << "uint8_t is " << sizeof(uint8_t) << " bytes, should be 1 byte; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00144	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2672	SizesOK	cerr << "uint16_t is " << sizeof(uint16_t) << " bytes, should be 2 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00145	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2676	SizesOK	cerr << "uint32_t is " << sizeof(uint32_t) << " bytes, should be 4 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00146	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2680	SizesOK	cerr << "uint64_t is " << sizeof(uint64_t) << " bytes, should be 8 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00147	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2684	SizesOK	cerr << "MBRRecord is " << sizeof(MBRRecord) << " bytes, should be 16 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00148	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2688	SizesOK	cerr << "TempMBR is " << sizeof(TempMBR) << " bytes, should be 512 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00149	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2692	SizesOK	cerr << "GPTHeader is " << sizeof(GPTHeader) << " bytes, should be 512 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00150	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2696	SizesOK	cerr << "GPTPart is " << sizeof(GPTPart) << " bytes, should be 128 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00151	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2700	SizesOK	cerr << "GUIDData is " << sizeof(GUIDData) << " bytes, should be 16 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00152	gdisk	1.0.10	T1	gpt	error-report	error-report	gpt.cc	2704	SizesOK	cerr << "PartType is " << sizeof(PartType) << " bytes, should be 16 bytes; aborting!\n"; allOK = 0; } // if	medium	待判	
+gdisk-00153	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	53	LoadBackupFile	cerr << "Error loading backup file!\n"; } // else } // GPTDataCL::LoadBackupFile()	medium	待判	
+gdisk-00154	gdisk	1.0.10	T1	gpt	refusal	refusal	gptcl.cc	193	DoOptions	cerr << "Error: Invalid partition number " << partNum + 1 << "\n"; saveData = 0; neverSaveData = 1;	high	待判	
+gdisk-00155	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	226	DoOptions	cerr << "Unable to set partition " << partNum + 1 << "'s name to '" << GetString(partName, 2) << "'!\n"; neverSaveData = 1;	medium	待判	
+gdisk-00156	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	241	DoOptions	cerr << "Error " << errno << " deleting partition!\n"; neverSaveData = 1; } else saveData = 1;	medium	待判	
+gdisk-00157	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	314	DoOptions	cerr << "Problem saving MBR!\n"; } // if saveNonGPT = 0;	medium	待判	
+gdisk-00158	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	334	DoOptions	cerr << "Could not create partition " << newPartNum + 1 << " from " << startSector << " to " << endSector << "\n"; neverSaveData = 1;	medium	待判	
+gdisk-00159	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	352	DoOptions	cerr << "Could not create partition " << largestPartNum << " from " << startSector << " to " << endSector << "\n"; neverSaveData = 1;	medium	待判	
+gdisk-00160	gdisk	1.0.10	T1	gpt	refusal	refusal	gptcl.cc	378	DoOptions	cerr << "Cannot swap partitions " << p1 + 1 << " and " << p2 + 1 << "\n"; } else saveData = 1; break;	high	待判	
+gdisk-00161	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	411	DoOptions	cerr << "Could not change partition " << partNum + 1 << "'s type code to " << GetString(typeCode, 2) << "!\n"; neverSaveData = 1;	medium	待判	
+gdisk-00162	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	457	DoOptions	cerr << "Unknown option (-" << opt << ")!\n"; break; } // switch	medium	待判	
+gdisk-00163	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	511	DoOptions	cerr << "Error encountered; not saving changes.\n"; retval = 4; } // if	medium	待判	
+gdisk-00164	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	549	BuildMBR	cerr << "Original partition " << origPartNum + 1 << " does not exist or is too big! Aborting operation!\n"; allOK = 0; } // if/else	medium	待判	
+gdisk-00165	gdisk	1.0.10	T1	gpt	error-report	error-report	gptcl.cc	570	BuildMBR	cerr << "Problem creating MBR!\n"; return allOK; } // GPTDataCL::BuildMBR()	medium	待判	
+gdisk-00166	gdisk	1.0.10	T1	gpt	error-report	error-report	gptpart.cc	186	SetName	cerr << "Bogus UTF-16 name found in GPTPart::SetName()! Name not changed!\n"; } else { memset(name, 0, NAME_SIZE * sizeof(name[0]) );	medium	待判	
+gdisk-00167	gdisk	1.0.10	T1	gpt	refusal	refusal	gpttext.cc	359	SetName	cerr << "Invalid partition number (" << partNum << ")\n"; retval = 0; } // if/else	high	待判	
+gdisk-00168	gdisk	1.0.10	T1	gpt	error-report	error-report	gpttext.cc	506	MakeHybrid	cerr << "\nGPT partition #" << j + 1 << " does not exist or is too big; skipping.\n"; } // if/else hybridMBR.AddPart(mbrNum, hybridPart);	medium	待判	
+gdisk-00169	gdisk	1.0.10	T1	gpt	fatal-exit	fatal-exit	gpttext.cc	589	GetSectorNum	exit(5); response = IeeeToInt(line, blockSize, low, high, sectorAlignment, def); } while ((response < low) || (response > high));	high	待判	
+gdisk-00170	gdisk	1.0.10	T1	misc	error-report	error-report	guid.cc	160	Randomize	cerr << "Warning! Unable to generate a proper UUID! Creating an improper one as a last\n" << "resort! Windows 7 may crash if you save this partition table!\a\n"; for (i = 0; i < 16; i++)	medium	待判	
+gdisk-00171	gdisk	1.0.10	T1	mbr	refusal	refusal	mbrpart.cc	161	SetStartLBA	cerr << "Partition start out of range! Continuing, but problems now likely!\n"; firstLBA = (uint32_t) start; RecomputeCHS();	medium	待判	
+gdisk-00172	gdisk	1.0.10	T1	mbr	refusal	refusal	mbrpart.cc	168	SetLengthLBA	cerr << "Partition length out of range! Continuing, but problems now likely!\n"; lengthLBA = (uint32_t) length; RecomputeCHS();	medium	待判	
+gdisk-00173	gdisk	1.0.10	T1	mbr	refusal	refusal	mbrpart.cc	180	SetLocation	cerr << "Partition values out of range in MBRPart::SetLocation()!\n" << "Continuing, but strange problems are now likely!\n"; } // if	medium	待判	
+gdisk-00174	gdisk	1.0.10	T1	misc	error-report	error-report	parttypes.cc	556	AddType	cerr << "Unable to allocate memory in PartType::AddType()! Partition type list will\n"; cerr << "be incomplete!\n"; allOK = 0;	medium	待判	
+gdisk-00175	gdisk	1.0.10	T1	misc	error-report	error-report	parttypes.cc	557	AddType	cerr << "be incomplete!\n"; allOK = 0; } // if/else	medium	待判	
+gdisk-00176	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	support.cc	65	ReadString	exit(5); return inString; } // ReadString()	high	待判	
+gdisk-00177	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	support.cc	84	GetNumber	exit(5); num = sscanf(line, "%" PRIu64, &response); if (num == 1) { // user provided a response	high	待判	
+gdisk-00178	gdisk	1.0.10	T1	misc	refusal	refusal	support.cc	144	IeeeToInt	cerr << "Bug: Sector size invalid in IeeeToInt()!\n"; } // if	high	待判	
+gdisk-00179	gdisk	1.0.10	T1	misc	error-report	error-report	support.cc	333	ReverseBytes	cerr << "Could not allocate memory in ReverseBytes()! Terminating\n"; exit(1); } // if/else	medium	待判	
+gdisk-00180	gdisk	1.0.10	T1	misc	fatal-exit	fatal-exit	support.cc	334	ReverseBytes	exit(1); } // if/else } // ReverseBytes()	high	待判	
