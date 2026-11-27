@@ -106,6 +106,22 @@ pub(super) fn execute_plan(
     plan: &ConfirmedPlan,
 ) -> Result<(), (ExecError, bool)> {
     let (action, region) = action(plan.steps()).map_err(|error| (error, false))?;
+    // 决策层只产出变大的 PV 尺寸；new < old 说明计划自相矛盾。差值不能按 0 处理
+    // 后照常放大/改写 PV 元数据——那会把 PV 静默缩小。
+    if let Action::Grow {
+        old_bytes,
+        new_bytes,
+        ..
+    } = &action
+        && new_bytes < old_bytes
+    {
+        return Err((
+            ExecError::InvalidPlan(format!(
+                "the grow target {new_bytes} bytes is smaller than the recorded PV size {old_bytes} bytes"
+            )),
+            false,
+        ));
+    }
     super::filesystem::ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
     let mut session =
@@ -162,7 +178,7 @@ pub(super) fn execute_plan(
             &GrowChain {
                 part_dev: device.device(),
                 expected_bytes: *new_bytes,
-                delta_bytes: new_bytes.saturating_sub(*old_bytes),
+                delta_bytes: new_bytes - old_bytes,
                 grow_lv: *grow_lv,
                 want_lv: lv.as_deref(),
             },
