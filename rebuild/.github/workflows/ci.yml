@@ -1,15 +1,20 @@
 name: rebuild
 
+# 主流程：PR → main 必须过四道（编译纪律 / clippy / fmt / 测试 / 仪器纪律）。
+# 发布：推送 v* 标签时构建 release 二进制并挂到 GitHub Release。
 on:
-  push:
-    paths:
-      - "rebuild/**"
   pull_request:
+    branches: [main]
     paths:
       - "rebuild/**"
+      - ".github/workflows/ci.yml"
+  push:
+    branches: [main]
+    tags: ["v*"]
 
 jobs:
   compile:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -19,11 +24,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
       - run: cargo check --all-targets
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
 
   test:
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,10 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
       - run: cargo test
 
   discipline:
     # 两条守卫都要完整历史：足迹需要 diff <基线>..HEAD，提交信息需要逐条主题。
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -47,3 +60,39 @@ jobs:
         run: python3 plan/instruments/footprint.py
       - name: 提交信息（前缀 + 范围 + 说明，禁用词）
         run: python3 plan/instruments/commits.py
+
+  release:
+    # 只在 v* 标签触发：构建 release 产物并挂到 GitHub Release。
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
+      - name: 构建 release
+        run: cargo build --release
+      - name: 打包产物（二进制 + 版本说明头）
+        run: |
+          mkdir -p dist
+          cp target/release/DiskEdit dist/DiskEdit-x86_64-linux
+          {
+            echo "DiskEdit $(git describe --tags --always)"
+            echo
+            echo "构建：cargo build --release（rust stable，ubuntu-latest）"
+          } > dist/README.txt
+          tar czf DiskEdit-x86_64-linux.tar.gz -C dist DiskEdit-x86_64-linux README.txt
+          sha256sum DiskEdit-x86_64-linux.tar.gz > DiskEdit-x86_64-linux.tar.gz.sha256
+      - name: 挂到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rebuild/DiskEdit-x86_64-linux.tar.gz
+            rebuild/DiskEdit-x86_64-linux.tar.gz.sha256
+          generate_release_notes: true
