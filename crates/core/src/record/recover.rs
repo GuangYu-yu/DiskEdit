@@ -75,6 +75,11 @@ pub fn recover(bytes: &[u8], current: Fingerprint) -> RecoveryPlan {
         None => RecoveryPlan::RollBack { frames },
         Some(frame) if frame.kind == FrameKind::Committed => RecoveryPlan::Committed,
         Some(frame) if frame.kind == FrameKind::Aborted => RecoveryPlan::RollBack { frames },
+        // 不可逆步骤没有原像可回滚：末帧仍未完成，说明外部动作可能已发生也可能没有，
+        // 自动判成回滚会掩盖它，必须交人工。
+        Some(frame) if frame.irreversible && !frame.completed => needs_manual(
+            "an irreversible step has no completion frame; it cannot be rolled back automatically",
+        ),
         Some(frame) if frame.completed => RecoveryPlan::Replay { frames },
         Some(_) => RecoveryPlan::RollBack { frames },
     }

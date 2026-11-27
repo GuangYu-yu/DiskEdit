@@ -288,6 +288,37 @@ fn recovered(outcome: &Outcome) -> bool {
     )
 }
 
+// covers: F2
+#[test]
+fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
+    // 不可逆步骤（建卷、改数据区）没有原像可回滚。若在外部动作之后、终态帧之前中断，
+    // 记录末帧是未完成的不可逆意图：恢复不得报告"已回滚"并删掉记录，必须交人工判定。
+    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
+    memory.put(
+        &record_path(),
+        record_bytes(&[Frame {
+            seq: 0,
+            kind: FrameKind::Intent,
+            completed: false,
+            irreversible: true,
+            intent: b"make-filesystem".to_vec(),
+            regions: Vec::new(),
+        }]),
+    );
+    let outcome = run_mode(&memory, RecoverMode::Undo);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert!(
+        memory.get(&record_path()).is_some(),
+        "未完成的不可逆记录必须保留，不得当作已回滚清理"
+    );
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
+}
+
 // covers: B7, B9
 #[test]
 fn rollback_verifies_the_preimage_and_cleans_the_record() {
