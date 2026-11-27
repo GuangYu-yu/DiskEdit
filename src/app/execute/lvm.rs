@@ -111,9 +111,6 @@ pub(super) fn execute_plan(
     let mut session =
         RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
-    session
-        .begin_irreversible(plan.request_digest(), LVM_INTENT)
-        .map_err(|error| (error, false))?;
 
     let partition = match &action {
         Action::Shrink { partition, .. } | Action::Grow { partition, .. } => *partition,
@@ -126,6 +123,31 @@ pub(super) fn execute_plan(
         region.len(),
     )
     .map_err(|error| (error, false))?;
+
+    // 缩 PV 前在边界重核已分配 extent 的末端：计划与执行之间的窗口里分配区可能
+    // 长过新的 PV 尺寸，此前的计划结论不能替代这一次现场核对。
+    if let Action::Shrink { bytes, .. } = &action {
+        let dev = device.device().to_str().ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the partition device path is not valid UTF-8".to_owned()),
+                false,
+            )
+        })?;
+        let allocated = lvm::pv_allocated_end_bytes(platform, dev)
+            .map_err(|error| (lvm_exec_error(error), false))?;
+        if allocated > *bytes {
+            return Err((
+                ExecError::InvalidPlan(format!(
+                    "the PV's allocated extents end at {allocated} bytes, past the shrink target {bytes} bytes"
+                )),
+                false,
+            ));
+        }
+    }
+
+    session
+        .begin_irreversible(plan.request_digest(), LVM_INTENT)
+        .map_err(|error| (error, false))?;
 
     let result = match &action {
         Action::Shrink { bytes, .. } => lvm::shrink_pv(platform, device.device(), *bytes),

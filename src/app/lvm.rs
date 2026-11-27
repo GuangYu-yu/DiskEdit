@@ -758,7 +758,15 @@ pub fn grow_chain(platform: &dyn Platform, chain: &GrowChain<'_>) -> Result<(), 
     let Some(selection) = selection else {
         return Ok(());
     };
-    let free = report.pv_pe_count.saturating_sub(report.pv_pe_alloc_count);
+    let free = report
+        .pv_pe_count
+        .checked_sub(report.pv_pe_alloc_count)
+        .ok_or_else(|| {
+            LvmError::Failed(format!(
+                "{dev} reports {} allocated extents out of {} — the PV report is inconsistent",
+                report.pv_pe_alloc_count, report.pv_pe_count
+            ))
+        })?;
     if chain.delta_bytes == 0 {
         if free == 0 {
             return Ok(());
@@ -807,7 +815,7 @@ pub fn grow_chain(platform: &dyn Platform, chain: &GrowChain<'_>) -> Result<(), 
     Ok(())
 }
 
-/// 缩容方向的 PV 链：把 PV 元数据缩到 `bytes` 字节（调用方先证明已分配 extent 都在其内）。
+/// 缩容方向的 PV 链：把 PV 元数据缩到 `bytes` 字节。
 pub fn shrink_pv(platform: &dyn Platform, part_dev: &Path, bytes: u64) -> Result<(), LvmError> {
     let dev = part_dev.to_str().ok_or_else(|| {
         LvmError::Failed("the partition device path is not valid UTF-8".to_string())
