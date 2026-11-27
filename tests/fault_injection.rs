@@ -127,6 +127,10 @@ struct Memory {
     kind: TargetKind,
     /// 目标自身能否给出 Strong 身份；块设备无 WWN/EUI/可重复序列号时为 `false`。
     strong_identity: bool,
+    /// `list_files` 回报的条目，用于驱动记录目录扫描。
+    scan_files: Vec<PathBuf>,
+    /// 让 `read_file` 以读故障结束，用于记录读取失败的语义。
+    read_failure: bool,
 }
 
 impl Memory {
@@ -139,6 +143,8 @@ impl Memory {
             sector: Some(SECTOR),
             kind: TargetKind::File,
             strong_identity: true,
+            scan_files: Vec::new(),
+            read_failure: false,
         }
     }
 
@@ -216,9 +222,15 @@ impl Platform for Memory {
         self.kind == TargetKind::File
     }
     fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        Ok(Vec::new())
+        Ok(self.scan_files.clone())
     }
     fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
+        if self.read_failure {
+            return Err(PlatformError::io(
+                path,
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            ));
+        }
         Ok(self.files.lock().unwrap().get(path).cloned())
     }
     fn run(
@@ -572,6 +584,18 @@ fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
     let memory = Memory::with_sector_size(vec![0u8; 8192], 520, Faults::default());
     let code = dispatch(&memory, &["diskedit", "add", "memory", "1M", "--yes"]);
     assert_eq!(code, UNSUPPORTED, "集合外扇区尺寸应按 unsupported 拒绝");
+}
+
+// covers: I15
+#[test]
+fn a_record_that_cannot_be_read_is_an_environment_failure() {
+    // 记录目录里有一条以记录文件命名的条目，但读取失败：不能当作"没有记录"
+    // 跳过并报告扫描完整，必须让失败上行。
+    let mut memory = Memory::new(vec![0u8; 4096], Faults::default());
+    memory.scan_files = vec![PathBuf::from("/root/images/key").join(RECORD_FILE)];
+    memory.read_failure = true;
+    let code = dispatch(&memory, &["diskedit", "records", "list", "--root", "/root"]);
+    assert_eq!(code, ENVIRONMENT, "读取记录失败必须按环境失败上报");
 }
 
 // covers: D10
