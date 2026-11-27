@@ -163,9 +163,7 @@ jobs:
 
   wsl-suite:
     name: tests/wsl 全量回归（root）
-    # apt 包清单按 24.04 的工具集写；ubuntu-latest 将于 2026-11 切到 26.04，
-    # 固定镜像避免装包名或工具版本变化把用例变成失败
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
