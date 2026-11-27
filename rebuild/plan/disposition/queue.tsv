@@ -1,261 +1,261 @@
-batch	rows	state	evidence_md
-01-specs/specs-microsoft	6	待判	01-specs/specs-microsoft.md
-01-specs/specs-uefi	23	待判	01-specs/specs-uefi.md
-02-incidents/inc-btrfs-progs	67	待判	02-incidents/inc-btrfs-progs.md
-02-incidents/inc-dosfstools	64	待判	02-incidents/inc-dosfstools.md
-02-incidents/inc-e2fsprogs	275	待判	02-incidents/inc-e2fsprogs.md
-02-incidents/inc-gdisk	40	待判	02-incidents/inc-gdisk.md
-02-incidents/inc-libfdisk	41	待判	02-incidents/inc-libfdisk.md
-02-incidents/inc-lvm2	87	待判	02-incidents/inc-lvm2.md
-02-incidents/inc-parted	22	待判	02-incidents/inc-parted.md
-02-incidents/inc-testdisk	61	待判	02-incidents/inc-testdisk.md
-02-incidents/inc-xfsprogs	93	待判	02-incidents/inc-xfsprogs.md
-03-docs/docs-btrfs-progs	138	待判	03-docs/docs-btrfs-progs.md
-03-docs/docs-dosfstools	4	待判	03-docs/docs-dosfstools.md
-03-docs/docs-e2fsprogs	17	待判	03-docs/docs-e2fsprogs.md
-03-docs/docs-f2fs-tools	1	待判	03-docs/docs-f2fs-tools.md
-03-docs/docs-gdisk	38	待判	03-docs/docs-gdisk.md
-03-docs/docs-libfdisk	2	待判	03-docs/docs-libfdisk.md
-03-docs/docs-lvm2	33	待判	03-docs/docs-lvm2.md
-03-docs/docs-ntfs-3g	17	待判	03-docs/docs-ntfs-3g.md
-03-docs/docs-parted	26	待判	03-docs/docs-parted.md
-03-docs/docs-xfsprogs	2	待判	03-docs/docs-xfsprogs.md
-04-implicit/imp-btrfs-progs-confirm	62	待判	04-implicit/imp-btrfs-progs-confirm.md
-04-implicit/imp-btrfs-progs-default	1	待判	04-implicit/imp-btrfs-progs-default.md
-04-implicit/imp-btrfs-progs-lock	3	待判	04-implicit/imp-btrfs-progs-lock.md
-04-implicit/imp-btrfs-progs-sync	1	待判	04-implicit/imp-btrfs-progs-sync.md
-04-implicit/imp-dosfstools-confirm	11	待判	04-implicit/imp-dosfstools-confirm.md
-04-implicit/imp-dosfstools-default	12	待判	04-implicit/imp-dosfstools-default.md
-04-implicit/imp-dosfstools-lock	2	待判	04-implicit/imp-dosfstools-lock.md
-04-implicit/imp-dosfstools-sync	1	待判	04-implicit/imp-dosfstools-sync.md
-04-implicit/imp-e2fsprogs-confirm	39	待判	04-implicit/imp-e2fsprogs-confirm.md
-04-implicit/imp-e2fsprogs-default	46	待判	04-implicit/imp-e2fsprogs-default.md
-04-implicit/imp-e2fsprogs-prompt	264	待判	04-implicit/imp-e2fsprogs-prompt.md
-04-implicit/imp-f2fs-tools-confirm	35	待判	04-implicit/imp-f2fs-tools-confirm.md
-04-implicit/imp-f2fs-tools-default	11	待判	04-implicit/imp-f2fs-tools-default.md
-04-implicit/imp-f2fs-tools-lock	3	待判	04-implicit/imp-f2fs-tools-lock.md
-04-implicit/imp-f2fs-tools-sync	2	待判	04-implicit/imp-f2fs-tools-sync.md
-04-implicit/imp-gdisk-confirm	3	待判	04-implicit/imp-gdisk-confirm.md
-04-implicit/imp-gdisk-default	24	待判	04-implicit/imp-gdisk-default.md
-04-implicit/imp-gdisk-kernel-reload	1	待判	04-implicit/imp-gdisk-kernel-reload.md
-04-implicit/imp-gdisk-sync	1	待判	04-implicit/imp-gdisk-sync.md
-04-implicit/imp-libfdisk-confirm	28	待判	04-implicit/imp-libfdisk-confirm.md
-04-implicit/imp-libfdisk-default	11	待判	04-implicit/imp-libfdisk-default.md
-04-implicit/imp-libfdisk-kernel-reload	5	待判	04-implicit/imp-libfdisk-kernel-reload.md
-04-implicit/imp-libfdisk-lock	4	待判	04-implicit/imp-libfdisk-lock.md
-04-implicit/imp-libfdisk-sync	3	待判	04-implicit/imp-libfdisk-sync.md
-04-implicit/imp-lvm2-confirm	75	待判	04-implicit/imp-lvm2-confirm.md
-04-implicit/imp-lvm2-default	4	待判	04-implicit/imp-lvm2-default.md
-04-implicit/imp-lvm2-lock	9	待判	04-implicit/imp-lvm2-lock.md
-04-implicit/imp-lvm2-sync	1	待判	04-implicit/imp-lvm2-sync.md
-04-implicit/imp-ntfs-3g-confirm	28	待判	04-implicit/imp-ntfs-3g-confirm.md
-04-implicit/imp-ntfs-3g-default	2	待判	04-implicit/imp-ntfs-3g-default.md
-04-implicit/imp-parted-confirm	4	待判	04-implicit/imp-parted-confirm.md
-04-implicit/imp-parted-default	71	待判	04-implicit/imp-parted-default.md
-04-implicit/imp-parted-kernel-reload	15	待判	04-implicit/imp-parted-kernel-reload.md
-04-implicit/imp-parted-lock	1	待判	04-implicit/imp-parted-lock.md
-04-implicit/imp-parted-sync	3	待判	04-implicit/imp-parted-sync.md
-04-implicit/imp-testdisk-confirm	1	待判	04-implicit/imp-testdisk-confirm.md
-04-implicit/imp-xfsprogs-confirm	14	待判	04-implicit/imp-xfsprogs-confirm.md
-04-implicit/imp-xfsprogs-default	5	待判	04-implicit/imp-xfsprogs-default.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-abort	3	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-abort.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-assert	49	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-assert.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-error-report	132	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-error-report.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-fail-goto	332	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-fail-goto.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-fatal-exit	12	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-fatal-exit.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-refusal	250	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-refusal.md
-05-sites-btrfs-progs/sites-btrfs-progs-check-string-channel	3	待判	05-sites-btrfs-progs/sites-btrfs-progs-check-string-channel.md
-05-sites-btrfs-progs/sites-btrfs-progs-frontend-fail-goto	68	待判	05-sites-btrfs-progs/sites-btrfs-progs-frontend-fail-goto.md
-05-sites-btrfs-progs/sites-btrfs-progs-frontend-fatal-exit	5	待判	05-sites-btrfs-progs/sites-btrfs-progs-frontend-fatal-exit.md
-05-sites-btrfs-progs/sites-btrfs-progs-frontend-refusal	84	待判	05-sites-btrfs-progs/sites-btrfs-progs-frontend-refusal.md
-05-sites-btrfs-progs/sites-btrfs-progs-frontend-string-channel	1	待判	05-sites-btrfs-progs/sites-btrfs-progs-frontend-string-channel.md
-05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-fail-goto	13	待判	05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-fail-goto.md
-05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-refusal	7	待判	05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-refusal.md
-05-sites-btrfs-progs/sites-btrfs-progs-misc-assert	9	待判	05-sites-btrfs-progs/sites-btrfs-progs-misc-assert.md
-05-sites-btrfs-progs/sites-btrfs-progs-misc-fail-goto	55	待判	05-sites-btrfs-progs/sites-btrfs-progs-misc-fail-goto.md
-05-sites-btrfs-progs/sites-btrfs-progs-misc-fatal-exit	3	待判	05-sites-btrfs-progs/sites-btrfs-progs-misc-fatal-exit.md
-05-sites-btrfs-progs/sites-btrfs-progs-misc-refusal	89	待判	05-sites-btrfs-progs/sites-btrfs-progs-misc-refusal.md
-05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fail-goto	132	待判	05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fail-goto.md
-05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fatal-exit	14	待判	05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fatal-exit.md
-05-sites-btrfs-progs/sites-btrfs-progs-mkfs-refusal	113	待判	05-sites-btrfs-progs/sites-btrfs-progs-mkfs-refusal.md
-05-sites-dosfstools/sites-dosfstools-check-error-report	20	待判	05-sites-dosfstools/sites-dosfstools-check-error-report.md
-05-sites-dosfstools/sites-dosfstools-check-fatal-exit	29	待判	05-sites-dosfstools/sites-dosfstools-check-fatal-exit.md
-05-sites-dosfstools/sites-dosfstools-check-refusal	11	待判	05-sites-dosfstools/sites-dosfstools-check-refusal.md
-05-sites-dosfstools/sites-dosfstools-check-string-channel	13	待判	05-sites-dosfstools/sites-dosfstools-check-string-channel.md
-05-sites-dosfstools/sites-dosfstools-frontend-error-report	11	待判	05-sites-dosfstools/sites-dosfstools-frontend-error-report.md
-05-sites-dosfstools/sites-dosfstools-frontend-fatal-exit	56	待判	05-sites-dosfstools/sites-dosfstools-frontend-fatal-exit.md
-05-sites-dosfstools/sites-dosfstools-frontend-refusal	22	待判	05-sites-dosfstools/sites-dosfstools-frontend-refusal.md
-05-sites-dosfstools/sites-dosfstools-frontend-string-channel	7	待判	05-sites-dosfstools/sites-dosfstools-frontend-string-channel.md
-05-sites-dosfstools/sites-dosfstools-label-uuid-error-report	8	待判	05-sites-dosfstools/sites-dosfstools-label-uuid-error-report.md
-05-sites-dosfstools/sites-dosfstools-label-uuid-fatal-exit	21	待判	05-sites-dosfstools/sites-dosfstools-label-uuid-fatal-exit.md
-05-sites-dosfstools/sites-dosfstools-label-uuid-refusal	5	待判	05-sites-dosfstools/sites-dosfstools-label-uuid-refusal.md
-05-sites-dosfstools/sites-dosfstools-mkfs-error-report	34	待判	05-sites-dosfstools/sites-dosfstools-mkfs-error-report.md
-05-sites-dosfstools/sites-dosfstools-mkfs-fatal-exit	75	待判	05-sites-dosfstools/sites-dosfstools-mkfs-fatal-exit.md
-05-sites-dosfstools/sites-dosfstools-mkfs-refusal	20	待判	05-sites-dosfstools/sites-dosfstools-mkfs-refusal.md
-05-sites-dosfstools/sites-dosfstools-mkfs-string-channel	29	待判	05-sites-dosfstools/sites-dosfstools-mkfs-string-channel.md
-05-sites-dosfstools/sites-dosfstools-probe-error-report	1	待判	05-sites-dosfstools/sites-dosfstools-probe-error-report.md
-05-sites-dosfstools/sites-dosfstools-probe-refusal	1	待判	05-sites-dosfstools/sites-dosfstools-probe-refusal.md
-05-sites-dosfstools/sites-dosfstools-probe-string-channel	10	待判	05-sites-dosfstools/sites-dosfstools-probe-string-channel.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-abort	1	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-abort.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-error-report	486	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-error-report.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-fail-goto	130	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-fatal-exit	54	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-message-entry	311	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-message-entry.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-refusal	271	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-check-string-channel	7	待判	05-sites-e2fsprogs/sites-e2fsprogs-check-string-channel.md
-05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-error-report	60	待判	05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-error-report.md
-05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fail-goto	32	待判	05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fatal-exit	33	待判	05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-refusal	103	待判	05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-string-channel	1	待判	05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-string-channel.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-assert	1	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-assert.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-error-report	27	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-error-report.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-fail-goto	85	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-fatal-exit	8	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-refusal	3	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-misc-string-channel	6	待判	05-sites-e2fsprogs/sites-e2fsprogs-misc-string-channel.md
-05-sites-e2fsprogs/sites-e2fsprogs-mkfs-error-report	85	待判	05-sites-e2fsprogs/sites-e2fsprogs-mkfs-error-report.md
-05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fail-goto	28	待判	05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fatal-exit	116	待判	05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-mkfs-refusal	124	待判	05-sites-e2fsprogs/sites-e2fsprogs-mkfs-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-probe-error-report	18	待判	05-sites-e2fsprogs/sites-e2fsprogs-probe-error-report.md
-05-sites-e2fsprogs/sites-e2fsprogs-probe-fail-goto	3	待判	05-sites-e2fsprogs/sites-e2fsprogs-probe-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-probe-fatal-exit	13	待判	05-sites-e2fsprogs/sites-e2fsprogs-probe-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-probe-refusal	12	待判	05-sites-e2fsprogs/sites-e2fsprogs-probe-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-resize-fail-goto	95	待判	05-sites-e2fsprogs/sites-e2fsprogs-resize-fail-goto.md
-05-sites-e2fsprogs/sites-e2fsprogs-resize-fatal-exit	3	待判	05-sites-e2fsprogs/sites-e2fsprogs-resize-fatal-exit.md
-05-sites-e2fsprogs/sites-e2fsprogs-resize-refusal	3	待判	05-sites-e2fsprogs/sites-e2fsprogs-resize-refusal.md
-05-sites-e2fsprogs/sites-e2fsprogs-resize-string-channel	2	待判	05-sites-e2fsprogs/sites-e2fsprogs-resize-string-channel.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-assert	299	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-assert.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-error-report	3	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-error-report.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-fail-goto	62	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-fail-goto.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-fatal-exit	7	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-fatal-exit.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-refusal	2	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-refusal.md
-05-sites-f2fs-tools/sites-f2fs-tools-check-string-channel	8	待判	05-sites-f2fs-tools/sites-f2fs-tools-check-string-channel.md
-05-sites-f2fs-tools/sites-f2fs-tools-misc-assert	12	待判	05-sites-f2fs-tools/sites-f2fs-tools-misc-assert.md
-05-sites-f2fs-tools/sites-f2fs-tools-misc-fail-goto	13	待判	05-sites-f2fs-tools/sites-f2fs-tools-misc-fail-goto.md
-05-sites-f2fs-tools/sites-f2fs-tools-misc-refusal	1	待判	05-sites-f2fs-tools/sites-f2fs-tools-misc-refusal.md
-05-sites-f2fs-tools/sites-f2fs-tools-mkfs-assert	2	待判	05-sites-f2fs-tools/sites-f2fs-tools-mkfs-assert.md
-05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fail-goto	14	待判	05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fail-goto.md
-05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fatal-exit	6	待判	05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fatal-exit.md
-05-sites-f2fs-tools/sites-f2fs-tools-resize-assert	28	待判	05-sites-f2fs-tools/sites-f2fs-tools-resize-assert.md
-05-sites-gdisk/sites-gdisk-gpt-error-report	49	待判	05-sites-gdisk/sites-gdisk-gpt-error-report.md
-05-sites-gdisk/sites-gdisk-gpt-fatal-exit	9	待判	05-sites-gdisk/sites-gdisk-gpt-fatal-exit.md
-05-sites-gdisk/sites-gdisk-gpt-refusal	48	待判	05-sites-gdisk/sites-gdisk-gpt-refusal.md
-05-sites-gdisk/sites-gdisk-gpt-string-channel	1	待判	05-sites-gdisk/sites-gdisk-gpt-string-channel.md
-05-sites-gdisk/sites-gdisk-mbr-error-report	12	待判	05-sites-gdisk/sites-gdisk-mbr-error-report.md
-05-sites-gdisk/sites-gdisk-mbr-fatal-exit	3	待判	05-sites-gdisk/sites-gdisk-mbr-fatal-exit.md
-05-sites-gdisk/sites-gdisk-mbr-refusal	11	待判	05-sites-gdisk/sites-gdisk-mbr-refusal.md
-05-sites-gdisk/sites-gdisk-misc-error-report	11	待判	05-sites-gdisk/sites-gdisk-misc-error-report.md
-05-sites-gdisk/sites-gdisk-misc-fatal-exit	9	待判	05-sites-gdisk/sites-gdisk-misc-fatal-exit.md
-05-sites-gdisk/sites-gdisk-misc-refusal	5	待判	05-sites-gdisk/sites-gdisk-misc-refusal.md
-05-sites-gdisk/sites-gdisk-table-edit-error-report	23	待判	05-sites-gdisk/sites-gdisk-table-edit-error-report.md
-05-sites-gdisk/sites-gdisk-table-edit-fatal-exit	8	待判	05-sites-gdisk/sites-gdisk-table-edit-fatal-exit.md
-05-sites-gdisk/sites-gdisk-table-edit-refusal	3	待判	05-sites-gdisk/sites-gdisk-table-edit-refusal.md
-05-sites-libfdisk/sites-libfdisk-align-assert	5	待判	05-sites-libfdisk/sites-libfdisk-align-assert.md
-05-sites-libfdisk/sites-libfdisk-align-fail-goto	1	待判	05-sites-libfdisk/sites-libfdisk-align-fail-goto.md
-05-sites-libfdisk/sites-libfdisk-gpt-assert	107	待判	05-sites-libfdisk/sites-libfdisk-gpt-assert.md
-05-sites-libfdisk/sites-libfdisk-gpt-error-report	23	待判	05-sites-libfdisk/sites-libfdisk-gpt-error-report.md
-05-sites-libfdisk/sites-libfdisk-gpt-fail-goto	40	待判	05-sites-libfdisk/sites-libfdisk-gpt-fail-goto.md
-05-sites-libfdisk/sites-libfdisk-gpt-refusal	28	待判	05-sites-libfdisk/sites-libfdisk-gpt-refusal.md
-05-sites-libfdisk/sites-libfdisk-label-uuid-assert	10	待判	05-sites-libfdisk/sites-libfdisk-label-uuid-assert.md
-05-sites-libfdisk/sites-libfdisk-label-uuid-refusal	1	待判	05-sites-libfdisk/sites-libfdisk-label-uuid-refusal.md
-05-sites-libfdisk/sites-libfdisk-mbr-assert	104	待判	05-sites-libfdisk/sites-libfdisk-mbr-assert.md
-05-sites-libfdisk/sites-libfdisk-mbr-error-report	29	待判	05-sites-libfdisk/sites-libfdisk-mbr-error-report.md
-05-sites-libfdisk/sites-libfdisk-mbr-fail-goto	11	待判	05-sites-libfdisk/sites-libfdisk-mbr-fail-goto.md
-05-sites-libfdisk/sites-libfdisk-mbr-refusal	19	待判	05-sites-libfdisk/sites-libfdisk-mbr-refusal.md
-05-sites-libfdisk/sites-libfdisk-table-edit-assert-disk-utils	62	待判	05-sites-libfdisk/sites-libfdisk-table-edit-assert-disk-utils.md
-05-sites-libfdisk/sites-libfdisk-table-edit-assert-libfdisk	301	待判	05-sites-libfdisk/sites-libfdisk-table-edit-assert-libfdisk.md
-05-sites-libfdisk/sites-libfdisk-table-edit-error-report	62	待判	05-sites-libfdisk/sites-libfdisk-table-edit-error-report.md
-05-sites-libfdisk/sites-libfdisk-table-edit-fail-goto	59	待判	05-sites-libfdisk/sites-libfdisk-table-edit-fail-goto.md
-05-sites-libfdisk/sites-libfdisk-table-edit-fatal-exit	109	待判	05-sites-libfdisk/sites-libfdisk-table-edit-fatal-exit.md
-05-sites-libfdisk/sites-libfdisk-table-edit-refusal	115	待判	05-sites-libfdisk/sites-libfdisk-table-edit-refusal.md
-05-sites-libfdisk/sites-libfdisk-table-edit-string-channel	3	待判	05-sites-libfdisk/sites-libfdisk-table-edit-string-channel.md
-05-sites-lvm2/sites-lvm2-frontend-error-report	100	待判	05-sites-lvm2/sites-lvm2-frontend-error-report.md
-05-sites-lvm2/sites-lvm2-frontend-fail-goto	33	待判	05-sites-lvm2/sites-lvm2-frontend-fail-goto.md
-05-sites-lvm2/sites-lvm2-frontend-fatal-exit	3	待判	05-sites-lvm2/sites-lvm2-frontend-fatal-exit.md
-05-sites-lvm2/sites-lvm2-frontend-refusal	192	待判	05-sites-lvm2/sites-lvm2-frontend-refusal.md
-05-sites-lvm2/sites-lvm2-lvm-error-report-lib	269	待判	05-sites-lvm2/sites-lvm2-lvm-error-report-lib.md
-05-sites-lvm2/sites-lvm2-lvm-error-report-tools	52	待判	05-sites-lvm2/sites-lvm2-lvm-error-report-tools.md
-05-sites-lvm2/sites-lvm2-lvm-fail-goto	51	待判	05-sites-lvm2/sites-lvm2-lvm-fail-goto.md
-05-sites-lvm2/sites-lvm2-lvm-refusal-lib	316	待判	05-sites-lvm2/sites-lvm2-lvm-refusal-lib.md
-05-sites-lvm2/sites-lvm2-lvm-refusal-tools	38	待判	05-sites-lvm2/sites-lvm2-lvm-refusal-tools.md
-05-sites-lvm2/sites-lvm2-misc-error-report	3	待判	05-sites-lvm2/sites-lvm2-misc-error-report.md
-05-sites-lvm2/sites-lvm2-misc-refusal	4	待判	05-sites-lvm2/sites-lvm2-misc-refusal.md
-05-sites-lvm2/sites-lvm2-resize-error-report	9	待判	05-sites-lvm2/sites-lvm2-resize-error-report.md
-05-sites-lvm2/sites-lvm2-resize-fail-goto	4	待判	05-sites-lvm2/sites-lvm2-resize-fail-goto.md
-05-sites-lvm2/sites-lvm2-resize-refusal	7	待判	05-sites-lvm2/sites-lvm2-resize-refusal.md
-05-sites-ntfs-3g/sites-ntfs-3g-frontend-error-report	7	待判	05-sites-ntfs-3g/sites-ntfs-3g-frontend-error-report.md
-05-sites-ntfs-3g/sites-ntfs-3g-frontend-fail-goto	28	待判	05-sites-ntfs-3g/sites-ntfs-3g-frontend-fail-goto.md
-05-sites-ntfs-3g/sites-ntfs-3g-frontend-fatal-exit	14	待判	05-sites-ntfs-3g/sites-ntfs-3g-frontend-fatal-exit.md
-05-sites-ntfs-3g/sites-ntfs-3g-frontend-refusal	54	待判	05-sites-ntfs-3g/sites-ntfs-3g-frontend-refusal.md
-05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-error-report	3	待判	05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-error-report.md
-05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-fatal-exit	2	待判	05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-fatal-exit.md
-05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-refusal	6	待判	05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-refusal.md
-05-sites-ntfs-3g/sites-ntfs-3g-misc-error-report	125	待判	05-sites-ntfs-3g/sites-ntfs-3g-misc-error-report.md
-05-sites-ntfs-3g/sites-ntfs-3g-misc-fail-goto	195	待判	05-sites-ntfs-3g/sites-ntfs-3g-misc-fail-goto.md
-05-sites-ntfs-3g/sites-ntfs-3g-misc-refusal	234	待判	05-sites-ntfs-3g/sites-ntfs-3g-misc-refusal.md
-05-sites-ntfs-3g/sites-ntfs-3g-probe-error-report	7	待判	05-sites-ntfs-3g/sites-ntfs-3g-probe-error-report.md
-05-sites-ntfs-3g/sites-ntfs-3g-probe-fail-goto	2	待判	05-sites-ntfs-3g/sites-ntfs-3g-probe-fail-goto.md
-05-sites-ntfs-3g/sites-ntfs-3g-probe-fatal-exit	4	待判	05-sites-ntfs-3g/sites-ntfs-3g-probe-fatal-exit.md
-05-sites-ntfs-3g/sites-ntfs-3g-probe-refusal	22	待判	05-sites-ntfs-3g/sites-ntfs-3g-probe-refusal.md
-05-sites-ntfs-3g/sites-ntfs-3g-probe-string-channel	10	待判	05-sites-ntfs-3g/sites-ntfs-3g-probe-string-channel.md
-05-sites-ntfs-3g/sites-ntfs-3g-resize-fail-goto	2	待判	05-sites-ntfs-3g/sites-ntfs-3g-resize-fail-goto.md
-05-sites-ntfs-3g/sites-ntfs-3g-resize-fatal-exit	30	待判	05-sites-ntfs-3g/sites-ntfs-3g-resize-fatal-exit.md
-05-sites-ntfs-3g/sites-ntfs-3g-resize-string-channel	35	待判	05-sites-ntfs-3g/sites-ntfs-3g-resize-string-channel.md
-05-sites-parted/sites-parted-align-assert	26	待判	05-sites-parted/sites-parted-align-assert.md
-05-sites-parted/sites-parted-align-fail-goto	4	待判	05-sites-parted/sites-parted-align-fail-goto.md
-05-sites-parted/sites-parted-frontend-abort	7	待判	05-sites-parted/sites-parted-frontend-abort.md
-05-sites-parted/sites-parted-frontend-assert-libparted	241	待判	05-sites-parted/sites-parted-frontend-assert-libparted.md
-05-sites-parted/sites-parted-frontend-assert-parted	29	待判	05-sites-parted/sites-parted-frontend-assert-parted.md
-05-sites-parted/sites-parted-frontend-error-report	11	待判	05-sites-parted/sites-parted-frontend-error-report.md
-05-sites-parted/sites-parted-frontend-exception-libparted	184	待判	05-sites-parted/sites-parted-frontend-exception-libparted.md
-05-sites-parted/sites-parted-frontend-exception-parted	24	待判	05-sites-parted/sites-parted-frontend-exception-parted.md
-05-sites-parted/sites-parted-frontend-fail-goto-libparted	209	待判	05-sites-parted/sites-parted-frontend-fail-goto-libparted.md
-05-sites-parted/sites-parted-frontend-fail-goto-parted	83	待判	05-sites-parted/sites-parted-frontend-fail-goto-parted.md
-05-sites-parted/sites-parted-frontend-fatal-exit	9	待判	05-sites-parted/sites-parted-frontend-fatal-exit.md
-05-sites-parted/sites-parted-frontend-refusal-libparted	86	待判	05-sites-parted/sites-parted-frontend-refusal-libparted.md
-05-sites-parted/sites-parted-frontend-refusal-parted	44	待判	05-sites-parted/sites-parted-frontend-refusal-parted.md
-05-sites-parted/sites-parted-label-uuid-assert	359	待判	05-sites-parted/sites-parted-label-uuid-assert.md
-05-sites-parted/sites-parted-label-uuid-error-report	5	待判	05-sites-parted/sites-parted-label-uuid-error-report.md
-05-sites-parted/sites-parted-label-uuid-exception	98	待判	05-sites-parted/sites-parted-label-uuid-exception.md
-05-sites-parted/sites-parted-label-uuid-fail-goto	198	待判	05-sites-parted/sites-parted-label-uuid-fail-goto.md
-05-sites-parted/sites-parted-label-uuid-fatal-exit	9	待判	05-sites-parted/sites-parted-label-uuid-fatal-exit.md
-05-sites-parted/sites-parted-label-uuid-refusal	69	待判	05-sites-parted/sites-parted-label-uuid-refusal.md
-05-sites-parted/sites-parted-label-uuid-string-channel	6	待判	05-sites-parted/sites-parted-label-uuid-string-channel.md
-05-sites-parted/sites-parted-probe-assert	11	待判	05-sites-parted/sites-parted-probe-assert.md
-05-sites-parted/sites-parted-probe-exception	2	待判	05-sites-parted/sites-parted-probe-exception.md
-05-sites-parted/sites-parted-resize-assert	12	待判	05-sites-parted/sites-parted-resize-assert.md
-05-sites-parted/sites-parted-resize-exception	6	待判	05-sites-parted/sites-parted-resize-exception.md
-05-sites-parted/sites-parted-resize-fail-goto	14	待判	05-sites-parted/sites-parted-resize-fail-goto.md
-05-sites-parted/sites-parted-resize-refusal	3	待判	05-sites-parted/sites-parted-resize-refusal.md
-05-sites-parted/sites-parted-swap-exception	3	待判	05-sites-parted/sites-parted-swap-exception.md
-05-sites-parted/sites-parted-swap-fail-goto	17	待判	05-sites-parted/sites-parted-swap-fail-goto.md
-05-sites-parted/sites-parted-table-edit-assert-libparted	166	待判	05-sites-parted/sites-parted-table-edit-assert-libparted.md
-05-sites-parted/sites-parted-table-edit-assert-parted	9	待判	05-sites-parted/sites-parted-table-edit-assert-parted.md
-05-sites-parted/sites-parted-table-edit-error-report	1	待判	05-sites-parted/sites-parted-table-edit-error-report.md
-05-sites-parted/sites-parted-table-edit-exception	27	待判	05-sites-parted/sites-parted-table-edit-exception.md
-05-sites-parted/sites-parted-table-edit-fail-goto	45	待判	05-sites-parted/sites-parted-table-edit-fail-goto.md
-05-sites-parted/sites-parted-table-edit-fatal-exit	1	待判	05-sites-parted/sites-parted-table-edit-fatal-exit.md
-05-sites-parted/sites-parted-table-edit-refusal	7	待判	05-sites-parted/sites-parted-table-edit-refusal.md
-05-sites-testdisk/sites-testdisk-frontend-assert	8	待判	05-sites-testdisk/sites-testdisk-frontend-assert.md
-05-sites-testdisk/sites-testdisk-frontend-error-report	34	待判	05-sites-testdisk/sites-testdisk-frontend-error-report.md
-05-sites-testdisk/sites-testdisk-frontend-refusal	29	待判	05-sites-testdisk/sites-testdisk-frontend-refusal.md
-05-sites-testdisk/sites-testdisk-mbr-error-report	3	待判	05-sites-testdisk/sites-testdisk-mbr-error-report.md
-05-sites-testdisk/sites-testdisk-mbr-refusal	2	待判	05-sites-testdisk/sites-testdisk-mbr-refusal.md
-05-sites-testdisk/sites-testdisk-recovery-assert	1	待判	05-sites-testdisk/sites-testdisk-recovery-assert.md
-05-sites-testdisk/sites-testdisk-recovery-error-report	8	待判	05-sites-testdisk/sites-testdisk-recovery-error-report.md
-05-sites-testdisk/sites-testdisk-recovery-refusal	15	待判	05-sites-testdisk/sites-testdisk-recovery-refusal.md
-05-sites-testdisk/sites-testdisk-recovery-string-channel	1	待判	05-sites-testdisk/sites-testdisk-recovery-string-channel.md
-05-sites-xfsprogs/sites-xfsprogs-misc-assert	1	待判	05-sites-xfsprogs/sites-xfsprogs-misc-assert.md
-05-sites-xfsprogs/sites-xfsprogs-misc-error-report	3	待判	05-sites-xfsprogs/sites-xfsprogs-misc-error-report.md
-05-sites-xfsprogs/sites-xfsprogs-misc-fatal-exit	8	待判	05-sites-xfsprogs/sites-xfsprogs-misc-fatal-exit.md
-05-sites-xfsprogs/sites-xfsprogs-misc-refusal	25	待判	05-sites-xfsprogs/sites-xfsprogs-misc-refusal.md
-05-sites-xfsprogs/sites-xfsprogs-mkfs-assert	6	待判	05-sites-xfsprogs/sites-xfsprogs-mkfs-assert.md
-05-sites-xfsprogs/sites-xfsprogs-mkfs-error-report	65	待判	05-sites-xfsprogs/sites-xfsprogs-mkfs-error-report.md
-05-sites-xfsprogs/sites-xfsprogs-mkfs-fail-goto	7	待判	05-sites-xfsprogs/sites-xfsprogs-mkfs-fail-goto.md
-05-sites-xfsprogs/sites-xfsprogs-mkfs-fatal-exit	125	待判	05-sites-xfsprogs/sites-xfsprogs-mkfs-fatal-exit.md
-05-sites-xfsprogs/sites-xfsprogs-mkfs-refusal	177	待判	05-sites-xfsprogs/sites-xfsprogs-mkfs-refusal.md
-05-sites-xfsprogs/sites-xfsprogs-resize-error-report	10	待判	05-sites-xfsprogs/sites-xfsprogs-resize-error-report.md
-05-sites-xfsprogs/sites-xfsprogs-resize-fatal-exit	13	待判	05-sites-xfsprogs/sites-xfsprogs-resize-fatal-exit.md
-05-sites-xfsprogs/sites-xfsprogs-resize-refusal	22	待判	05-sites-xfsprogs/sites-xfsprogs-resize-refusal.md
+batch	rows	state	scope	sample	evidence_md
+01-specs/specs-microsoft	6	待判	规范条款 MBR:3/EBR:3	MBR contains master boot code, disk signature at 0x01B8, a 64-byte parti	
+01-specs/specs-uefi	23	待判	规范条款 GPT:23	Logical Block Addresses (LBAs) are 64 bits rather than 32 bits	
+02-incidents/inc-btrfs-progs	67	待判	btrfs-progs -/incidents; 文件: CHANGES(67); 风险 high:34/medium:33	* qgroup show: fix crash when attempting to print path of stale qgroups	
+02-incidents/inc-dosfstools	64	待判	dosfstools -/incidents; 文件: ChangeLog(57),doc(7); 风险 medium:47/high:17	HDIO_GETGEO which provides start member is not supported for loop block 	
+02-incidents/inc-e2fsprogs	275	待判	e2fsprogs -/incidents; 文件: doc(274),RELEASE-NOTES(1); 风险 high:195/medium:80	Add support for the orphan_file feature, which speeds up workloads that 	
+02-incidents/inc-gdisk	40	待判	gdisk -/incidents; 文件: NEWS(40); 风险 medium:22/high:18	- Fixed problem that caused sgdisk to crash with errors about being unab	
+02-incidents/inc-libfdisk	41	待判	libfdisk -/incidents; 文件: Documentation(25),NEWS(16); 风险 medium:38/high:3	* cfdisk: fix a segfault with ReiserFS partitions	
+02-incidents/inc-lvm2	87	待判	lvm2 -/incidents; 文件: WHATS_NEW(87); 风险 medium:54/high:33	Fix segfault when handling selection with historical LVs. Add support --	
+02-incidents/inc-parted	22	待判	parted -/incidents; 文件: NEWS(22); 风险 high:13/medium:9	Fix set and disk_set to not crash when there are no flags to set.	
+02-incidents/inc-testdisk	61	待判	testdisk -/incidents; 文件: ChangeLog(53),NEWS(8); 风险 medium:41/high:20	* Denis Andzakovic from Security Assessment for reporting an exploitable	
+02-incidents/inc-xfsprogs	93	待判	xfsprogs -/incidents; 文件: doc(93); 风险 medium:47/high:46	xfsprogs-6.4.0 (19 Jul 2023) xfs_db: expose the flag in rmapbt keys (Dar	
+03-docs/docs-btrfs-progs	138	待判	btrfs-progs -/docs; 文件: Documentation(138); 风险 medium:132/high:6	Defragmenting with Linux kernel versions < 3.9 or ≥ 3.14-rc2 as well as 	
+03-docs/docs-dosfstools	4	待判	dosfstools -/docs; 文件: manpages(4); 风险 medium:4	Does not remove entirely empty directories.	
+03-docs/docs-e2fsprogs	17	待判	e2fsprogs -/docs; 文件: misc(16),resize(1); 风险 medium:17	The minimum size of the file system as estimated by resize2fs may be inc	
+03-docs/docs-f2fs-tools	1	待判	f2fs-tools -/docs; 文件: man(1); 风险 medium:1	If neither i nor x is used, all files will be compressed. Obviously, opt	
+03-docs/docs-gdisk	38	待判	gdisk -/docs; 文件: gdisk.8(11),cgdisk.8(10),sgdisk.8(10); 风险 medium:37/high:1	Known bugs and limitations include:	
+03-docs/docs-libfdisk	2	待判	libfdisk -/docs; 文件: disk-utils(2); 风险 medium:2	Since version 2.26 sfdisk no longer provides the R or reread option to f	
+03-docs/docs-lvm2	33	待判	lvm2 -/docs; 文件: man(33); 风险 medium:33	pvresize will refuse to shrink a PV if it has allocated extents beyond t	
+03-docs/docs-ntfs-3g	17	待判	ntfs-3g -/docs; 文件: ntfsprogs(17); 风险 medium:16/high:1	No reliability problem is known. If you find a bug please send an email 	
+03-docs/docs-parted	26	待判	parted -/docs; 文件: doc(26); 风险 medium:25/high:1	GNU Parted was designed to minimize the chance of data loss. For example	
+03-docs/docs-xfsprogs	2	待判	xfsprogs -/docs; 文件: man(2); 风险 medium:2	Filesystems normally occupy all of the space on the device where they re	
+04-implicit/imp-btrfs-progs-confirm	62	待判	btrfs-progs -/implicit; 文件: cmds(32),check(12),mkfs(11); 风险 medium:62	Force a sync on a filesystem,	
+04-implicit/imp-btrfs-progs-default	1	待判	btrfs-progs -/implicit; 文件: cmds(1); 风险 medium:1	#define MIN_UNALOCATED_THRESH SZ_16M	
+04-implicit/imp-btrfs-progs-lock	3	待判	btrfs-progs -/implicit; 文件: mkfs(2),cmds(1); 风险 medium:3	fd = open(fname, O_RDWR | O_CREAT | O_EXCL, 0600);	
+04-implicit/imp-btrfs-progs-sync	1	待判	btrfs-progs -/implicit; 文件: mkfs(1); 风险 medium:1	ret = fsync(fd);	
+04-implicit/imp-dosfstools-confirm	11	待判	dosfstools -/implicit; 文件: src(11); 风险 medium:11	int interactive;	
+04-implicit/imp-dosfstools-default	12	待判	dosfstools -/implicit; 文件: src(12); 风险 medium:12	#define GET_UNALIGNED_W(f) \	
+04-implicit/imp-dosfstools-lock	2	待判	dosfstools -/implicit; 文件: src(2); 风险 medium:2	dev = open(device_name, O_EXCL | O_RDWR);	
+04-implicit/imp-dosfstools-sync	1	待判	dosfstools -/implicit; 文件: src(1); 风险 medium:1	if (fsync(dev) < 0)	
+04-implicit/imp-e2fsprogs-confirm	39	待判	e2fsprogs -/implicit; 文件: misc(20),e2fsck(19); 风险 medium:39	"fputs(_(""WARNING: Could not confirm kernel support for """	
+04-implicit/imp-e2fsprogs-default	46	待判	e2fsprogs -/implicit; 文件: lib(38),e2fsck(5),misc(3); 风险 medium:46	#define _DEFAULT_SOURCE	
+04-implicit/imp-e2fsprogs-prompt	264	待判	e2fsprogs -/implicit; 文件: e2fsck(264); 风险 medium:264	#define PROMPT_NONE 0	
+04-implicit/imp-f2fs-tools-confirm	35	待判	f2fs-tools -/implicit; 文件: fsck(27),mkfs(6),lib(2); 风险 medium:35	static int force_overwrite = 0;	
+04-implicit/imp-f2fs-tools-default	11	待判	f2fs-tools -/implicit; 文件: lib(6),fsck(3),mkfs(2); 风险 medium:11	#define last_zone(cur) ((cur - 1) * c.segs_per_zone)	
+04-implicit/imp-f2fs-tools-lock	3	待判	f2fs-tools -/implicit; 文件: lib(3); 风险 medium:3	int fd = open(path, O_RDONLY | O_EXCL);	
+04-implicit/imp-f2fs-tools-sync	2	待判	f2fs-tools -/implicit; 文件: lib(2); 风险 medium:2	if (fsync(c.devices[i].fd) < 0) {	
+04-implicit/imp-gdisk-confirm	3	待判	gdisk -/implicit; 文件: gpt.cc(2),gpt.h(1); 风险 medium:3	ForceLoadGPTData();	
+04-implicit/imp-gdisk-default	24	待判	gdisk -/implicit; 文件: support.h(7),mbrpart.h(4),basicmbr.h(3); 风险 medium:24	#define MAX_OPTIONS 50	
+04-implicit/imp-gdisk-kernel-reload	1	待判	gdisk -/implicit; 文件: diskio-unix.cc(1); 风险 medium:1	i = ioctl(fd, BLKRRPART);	
+04-implicit/imp-gdisk-sync	1	待判	gdisk -/implicit; 文件: diskio-unix.cc(1); 风险 medium:1	fsync(fd);	
+04-implicit/imp-libfdisk-confirm	28	待判	libfdisk -/implicit; 文件: disk-utils(23),libfdisk(5); 风险 medium:28	force_label : 1;	
+04-implicit/imp-libfdisk-default	11	待判	libfdisk -/implicit; 文件: libfdisk(11); 风险 medium:11	#define is_number_ask(a) (fdisk_is_ask(a, NUMBER) || fdisk_is_ask(a, OFF	
+04-implicit/imp-libfdisk-kernel-reload	5	待判	libfdisk -/implicit; 文件: libfdisk(5); 风险 medium:5	#ifdef BLKRRPART	
+04-implicit/imp-libfdisk-lock	4	待判	libfdisk -/implicit; 文件: libfdisk(4); 风险 medium:4	flags |= (O_RDWR | O_EXCL);	
+04-implicit/imp-libfdisk-sync	3	待判	libfdisk -/implicit; 文件: libfdisk(2),disk-utils(1); 风险 medium:3	if (fsync(cxt->dev_fd)) {	
+04-implicit/imp-lvm2-confirm	75	待判	lvm2 -/implicit; 文件: lib(43),tools(32); 风险 medium:75	.force = arg_is_set(cmd, force_ARG),	
+04-implicit/imp-lvm2-default	4	待判	lvm2 -/implicit; 文件: tools(2),lib(2); 风险 medium:4	#define MAX_UNUSED_COUNT 8	
+04-implicit/imp-lvm2-lock	9	待判	lvm2 -/implicit; 文件: lib(8),tools(1); 风险 medium:9	"log_debug(""O_DIRECT will be used"");"	
+04-implicit/imp-lvm2-sync	1	待判	lvm2 -/implicit; 文件: lib(1); 风险 medium:1	if (fsync(dev->fd) >= 0)	
+04-implicit/imp-ntfs-3g-confirm	28	待判	ntfs-3g -/implicit; 文件: ntfsprogs(26),libntfs-3g(2); 风险 medium:28	int force;	
+04-implicit/imp-ntfs-3g-default	2	待判	ntfs-3g -/implicit; 文件: ntfsprogs(2); 风险 medium:2	#define NTFS_MBYTE (1000 * 1000)	
+04-implicit/imp-parted-confirm	4	待判	parted -/implicit; 文件: parted(4); 风险 medium:4	status = interactive_mode (&dev, &diskp, commands);	
+04-implicit/imp-parted-default	71	待判	parted -/implicit; 文件: libparted(69),parted(2); 风险 medium:71	#define BLKGETLASTSECT _IO(0x12,108)	
+04-implicit/imp-parted-kernel-reload	15	待判	parted -/implicit; 文件: libparted(15); 风险 medium:15	#define BLKRRPART 0x125F	
+04-implicit/imp-parted-lock	1	待判	parted -/implicit; 文件: libparted(1); 风险 medium:1	int fd = open (part_name, O_RDONLY | O_EXCL);	
+04-implicit/imp-parted-sync	3	待判	parted -/implicit; 文件: libparted(3); 风险 medium:3	if (fsync (fd) < 0 || close (fd) < 0)	
+04-implicit/imp-testdisk-confirm	1	待判	testdisk -/implicit; 文件: src(1); 风险 medium:1	"if(ask_YN(stdscr)!=0 && ask_confirmation(""Write a new copy of MBR code, "	
+04-implicit/imp-xfsprogs-confirm	14	待判	xfsprogs -/implicit; 文件: mkfs(10),db(4); 风险 medium:14	bool force_overwrite)	
+04-implicit/imp-xfsprogs-default	5	待判	xfsprogs -/implicit; 文件: mkfs(5); 风险 medium:5	#define XFS_MIN_REALISTIC_LOG_BLOCKS(blog) (MEGABYTES(64, (blog)))	
+05-sites-btrfs-progs/sites-btrfs-progs-check-abort	3	待判	btrfs-progs check/abort; 文件: check(3); 风险 high:3	abort(); }	
+05-sites-btrfs-progs/sites-btrfs-progs-check-assert	49	待判	btrfs-progs check/assert; 文件: check(49); 风险 high:49	BUG_ON(rec->refs != 1); if (can_free_inode_rec(rec)) { cache = lookup_ca	
+05-sites-btrfs-progs/sites-btrfs-progs-check-error-report	132	待判	btrfs-progs check/error-report; 文件: check(132); 风险 medium:132	"fprintf(stderr, ""reloc""); } fprintf(stderr, ""root %llu inode %llu errors"	
+05-sites-btrfs-progs/sites-btrfs-progs-check-fail-goto	332	待判	btrfs-progs check/fail-goto; 文件: check(332); 风险 high:332	goto cleanup; } memcpy(backref, orig, size);	
+05-sites-btrfs-progs/sites-btrfs-progs-check-fatal-exit	12	待判	btrfs-progs check/fatal-exit; 文件: check(12); 风险 high:12	exit(-1); }	
+05-sites-btrfs-progs/sites-btrfs-progs-check-refusal	250	待判	btrfs-progs check/refusal; 文件: check(250); 风险 medium:216/high:34	"fprintf(stderr, "", odd file extent""); if (errors & I_ERR_BAD_FILE_EXTENT"	
+05-sites-btrfs-progs/sites-btrfs-progs-check-string-channel	3	待判	btrfs-progs check/string-channel; 文件: check(3); 风险 high:2/medium:1	"printf(""The following tree block(s) is corrupted in tree %llu:\n"", root-"	
+05-sites-btrfs-progs/sites-btrfs-progs-frontend-fail-goto	68	待判	btrfs-progs frontend/fail-goto; 文件: cmds(68); 风险 high:68	goto out; /* skip all fs already shown as mounted fs */	
+05-sites-btrfs-progs/sites-btrfs-progs-frontend-fatal-exit	5	待判	btrfs-progs frontend/fatal-exit; 文件: cmds(5); 风险 high:5	usage(cmd, 1); type = check_arg_type(search);	
+05-sites-btrfs-progs/sites-btrfs-progs-frontend-refusal	84	待判	btrfs-progs frontend/refusal; 文件: cmds(84); 风险 medium:65/high:19	"error(""get_df failed: %m""); }"	
+05-sites-btrfs-progs/sites-btrfs-progs-frontend-string-channel	1	待判	btrfs-progs frontend/string-channel; 文件: cmds(1); 风险 high:1	"table_printf(table, 5,0, ""<Corruption errors""); table_printf(table, 6,0,"	
+05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-fail-goto	13	待判	btrfs-progs label-uuid/fail-goto; 文件: tune(13); 风险 high:13	goto out; while (1) {	
+05-sites-btrfs-progs/sites-btrfs-progs-label-uuid-refusal	7	待判	btrfs-progs label-uuid/refusal; 文件: tune(7); 风险 medium:6/high:1	"error(""cannot set metadata UUID on a seed device""); return 1; }"	
+05-sites-btrfs-progs/sites-btrfs-progs-misc-assert	9	待判	btrfs-progs misc/assert; 文件: tune(9); 风险 high:9	assert(ret > 0); ret = btrfs_previous_item(csum_root, &path, BTRFS_EXTEN	
+05-sites-btrfs-progs/sites-btrfs-progs-misc-fail-goto	55	待判	btrfs-progs misc/fail-goto; 文件: tune(55); 风险 high:55	goto out; } /* Calculate new csum and insert it into the csum tree. */	
+05-sites-btrfs-progs/sites-btrfs-progs-misc-fatal-exit	3	待判	btrfs-progs misc/fatal-exit; 文件: tune(3); 风险 high:3	usage(&tune_cmd, c != GETOPT_VAL_HELP); } }	
+05-sites-btrfs-progs/sites-btrfs-progs-misc-refusal	89	待判	btrfs-progs misc/refusal; 文件: tune(89); 风险 medium:85/high:4	"error(""dirty log tree detected, please replay the log or zero it.""); ret"	
+05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fail-goto	132	待判	btrfs-progs mkfs/fail-goto; 文件: mkfs(132); 风险 high:132	goto out; /* create the items for the extent tree */	
+05-sites-btrfs-progs/sites-btrfs-progs-mkfs-fatal-exit	14	待判	btrfs-progs mkfs/fatal-exit; 文件: mkfs(14); 风险 high:14	exit(1); } if (ret)	
+05-sites-btrfs-progs/sites-btrfs-progs-mkfs-refusal	113	待判	btrfs-progs mkfs/refusal; 文件: mkfs(113); 风险 medium:102/high:11	"error(""block[%d] below first free: %llu < %llu"", i, cfg->blocks[blk], fi"	
+05-sites-dosfstools/sites-dosfstools-check-error-report	20	待判	dosfstools check/error-report; 文件: src(20); 风险 medium:20	"fprintf(stderr, ""Usage: %s [OPTIONS] DEVICE\n"", name); fprintf(stderr, """	
+05-sites-dosfstools/sites-dosfstools-check-fatal-exit	29	待判	dosfstools check/fatal-exit; 文件: src(29); 风险 high:29	"if (!__v) die(""Oops, deleting FAT32 root dir!""); \ fs->root_cluster = __"	
+05-sites-dosfstools/sites-dosfstools-check-refusal	11	待判	dosfstools check/refusal; 文件: src(11); 风险 medium:9/high:2	"fprintf(stderr, "" -a automatically repair the filesystem\n""); fprintf(st"	
+05-sites-dosfstools/sites-dosfstools-check-string-channel	13	待判	dosfstools check/string-channel; 文件: src(13); 风险 medium:8/high:5	"printf(""Cannot rename FAT32 root dir\n""); return; /* cannot rename FAT32"	
+05-sites-dosfstools/sites-dosfstools-frontend-error-report	11	待判	dosfstools frontend/error-report; 文件: src(11); 风险 medium:11	"fprintf(stderr, ""Warning: FAT32 root dir not in cluster chain! "" ""Compat"	
+05-sites-dosfstools/sites-dosfstools-frontend-fatal-exit	56	待判	dosfstools frontend/fatal-exit; 文件: src(56); 风险 high:56	"die(""Root directory has no cluster allocated!""); for (clu_num = prev + 1"	
+05-sites-dosfstools/sites-dosfstools-frontend-refusal	22	待判	dosfstools frontend/refusal; 文件: src(22); 风险 high:19/medium:3	"fprintf(stderr, ""Warning: FAT32 root dir is in a cluster chain, but "" ""a"	
+05-sites-dosfstools/sites-dosfstools-frontend-string-channel	7	待判	dosfstools frontend/string-channel; 文件: src(7); 风险 medium:6/high:1	"printf(""And there is no space for creating one!\n""); return; }"	
+05-sites-dosfstools/sites-dosfstools-label-uuid-error-report	8	待判	dosfstools label-uuid/error-report; 文件: src(8); 风险 medium:8	"fprintf(stderr, ""fatlabel: labels can be no longer than 11 characters\n"""	
+05-sites-dosfstools/sites-dosfstools-label-uuid-fatal-exit	21	待判	dosfstools label-uuid/fatal-exit; 文件: src(21); 风险 high:21	exit(1); }	
+05-sites-dosfstools/sites-dosfstools-label-uuid-refusal	5	待判	dosfstools label-uuid/refusal; 文件: src(5); 风险 medium:4/high:1	"fprintf(stderr, ""fatlabel: error when processing label\n""); exit(1);"	
+05-sites-dosfstools/sites-dosfstools-mkfs-error-report	34	待判	dosfstools mkfs/error-report; 文件: src(34); 风险 medium:34	"fprintf(stderr, ""Warning: root directory entries specified with -r have "	
+05-sites-dosfstools/sites-dosfstools-mkfs-fatal-exit	75	待判	dosfstools mkfs/fatal-exit; 文件: src(75); 风险 high:75	"die(""Internal error: out of range cluster number in mark_FAT_cluster""); "	
+05-sites-dosfstools/sites-dosfstools-mkfs-refusal	20	待判	dosfstools mkfs/refusal; 文件: src(20); 风险 medium:19/high:1	"perror(""getline""); die(""Error while reading bad blocks file""); }"	
+05-sites-dosfstools/sites-dosfstools-mkfs-string-channel	29	待判	dosfstools mkfs/string-channel; 文件: src(29); 风险 medium:26/high:3	"printf(""Searching for bad blocks ""); fflush(stdout); }"	
+05-sites-dosfstools/sites-dosfstools-probe-error-report	1	待判	dosfstools probe/error-report; 文件: src(1); 风险 medium:1	"perror(""open device""); return 1; }"	
+05-sites-dosfstools/sites-dosfstools-probe-refusal	1	待判	dosfstools probe/refusal; 文件: src(1); 风险 medium:1	"perror(""fstat on target failed""); return -1; }"	
+05-sites-dosfstools/sites-dosfstools-probe-string-channel	10	待判	dosfstools probe/string-channel; 文件: src(10); 风险 medium:10	"printf(""unknown\n""); break;"	
+05-sites-e2fsprogs/sites-e2fsprogs-check-abort	1	待判	e2fsprogs check/abort; 文件: e2fsck(1); 风险 high:1	abort(); break; case 'f':	
+05-sites-e2fsprogs/sites-e2fsprogs-check-error-report	486	待判	e2fsprogs check/error-report; 文件: e2fsck(486); 风险 medium:486	"com_err(""read_bad_blocks_file"", errno, _(""while trying to open %s""), bad"	
+05-sites-e2fsprogs/sites-e2fsprogs-check-fail-goto	130	待判	e2fsprogs check/fail-goto; 文件: e2fsck(130); 风险 high:130	goto errout; refcount->count = 0;	
+05-sites-e2fsprogs/sites-e2fsprogs-check-fatal-exit	54	待判	e2fsprogs check/fatal-exit; 文件: e2fsck(54); 风险 high:54	"exit(1); } else printf(""Creating refcount with size %zu\n"","	
+05-sites-e2fsprogs/sites-e2fsprogs-check-message-entry	311	待判	e2fsprogs check/message-entry; 文件: e2fsck(311); 风险 medium:311	"N_(""(no prompt)""), /* PROMPT_NONE = 0 */ N_(""Fix""), /* PROMPT_FIX = 1 */"	
+05-sites-e2fsprogs/sites-e2fsprogs-check-refusal	271	待判	e2fsprogs check/refusal; 文件: e2fsck(271); 风险 medium:163/high:108	"printf(_(""Bad block %u out of range; ignored.\n""), blk); return; }"	
+05-sites-e2fsprogs/sites-e2fsprogs-check-string-channel	7	待判	e2fsprogs check/string-channel; 文件: e2fsck(7); 风险 medium:7	"printf(""%s: Updating bad block inode.\n"", ctx->device_name); retval = ex"	
+05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-error-report	60	待判	e2fsprogs label-uuid/error-report; 文件: misc(60); 风险 medium:60	"fprintf(stderr, _(""Usage: %s [-c max_mounts_count] [-e errors_behavior] "	
+05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fail-goto	32	待判	e2fsprogs label-uuid/fail-goto; 文件: misc(32); 风险 high:32	goto out; } if (name_size & 3)	
+05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-fatal-exit	33	待判	e2fsprogs label-uuid/fatal-exit; 文件: misc(33); 风险 high:33	static void usage(void) { fprintf(stderr,	
+05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-refusal	103	待判	e2fsprogs label-uuid/refusal; 文件: misc(103); 风险 medium:63/high:40	"static const char *fsck_explain = N_(""\nThis operation requires a freshl"	
+05-sites-e2fsprogs/sites-e2fsprogs-label-uuid-string-channel	1	待判	e2fsprogs label-uuid/string-channel; 文件: misc(1); 风险 medium:1	"printf(""Failed to rewrite metadata checksums\n""); rc = 1; goto closefs;"	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-assert	1	待判	e2fsprogs misc/assert; 文件: lib(1); 风险 high:1	#define dict_assert(x) assert(x) #endif #define DICT_IMPLEMENTATION	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-error-report	27	待判	e2fsprogs misc/error-report; 文件: lib(27); 风险 medium:27	"fprintf(stderr, ""Usage: %s [-r]\n"", argv[0]); exit(1); }"	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-fail-goto	85	待判	e2fsprogs misc/fail-goto; 文件: lib(85); 风险 high:85	goto cleanup; strcpy(fs->device_name, name); cp = strchr(fs->device_name	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-fatal-exit	8	待判	e2fsprogs misc/fatal-exit; 文件: lib(8); 风险 high:8	exit(1); } }	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-refusal	3	待判	e2fsprogs misc/refusal; 文件: lib(3); 风险 medium:3	"printf(_(""\tlast mounted on %.*s on %s""), EXT2_LEN_STR(sb->s_last_mounte"	
+05-sites-e2fsprogs/sites-e2fsprogs-misc-string-channel	6	待判	e2fsprogs misc/string-channel; 文件: lib(6); 风险 medium:6	"puts(""dict_alloc_insert failed""); free((void *) key); free(val);"	
+05-sites-e2fsprogs/sites-e2fsprogs-mkfs-error-report	85	待判	e2fsprogs mkfs/error-report; 文件: misc(85); 风险 medium:85	"fprintf(stderr, _(""Usage: %s [-c|-l filename] [-b block-size] "" ""[-C clu"	
+05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fail-goto	28	待判	e2fsprogs mkfs/fail-goto; 文件: lib(18),misc(10); 风险 high:28	goto out; tp = blkid_probe_get_topology(pr);	
+05-sites-e2fsprogs/sites-e2fsprogs-mkfs-fatal-exit	116	待判	e2fsprogs mkfs/fatal-exit; 文件: misc(116); 风险 high:116	"static void usage(void) { fprintf(stderr, _(""Usage: %s [-c|-l filename] "	
+05-sites-e2fsprogs/sites-e2fsprogs-mkfs-refusal	124	待判	e2fsprogs mkfs/refusal; 文件: misc(124); 风险 medium:74/high:50	"fprintf(stderr, _(""Bad block %u out of range; ignored.\n""), blk); return"	
+05-sites-e2fsprogs/sites-e2fsprogs-probe-error-report	18	待判	e2fsprogs probe/error-report; 文件: misc(18); 风险 medium:18	"fprintf(stderr, _(""Usage: %s [-bfghimxV] [-o superblock=<num>] "" ""[-o bl"	
+05-sites-e2fsprogs/sites-e2fsprogs-probe-fail-goto	3	待判	e2fsprogs probe/fail-goto; 文件: misc(3); 风险 high:3	goto out; } fs->default_bitmap_type = EXT2FS_BMAP64_RBTREE;	
+05-sites-e2fsprogs/sites-e2fsprogs-probe-fatal-exit	13	待判	e2fsprogs probe/fatal-exit; 文件: misc(13); 风险 high:13	"static void usage(void) { fprintf(stderr, _(""Usage: %s [-bfghimxV] [-o s"	
+05-sites-e2fsprogs/sites-e2fsprogs-probe-refusal	12	待判	e2fsprogs probe/refusal; 文件: misc(12); 风险 medium:6/high:6	"com_err(""ext2fs_badblocks_list_iterate_begin"", retval, ""%s"", _(""while pr"	
+05-sites-e2fsprogs/sites-e2fsprogs-resize-fail-goto	95	待判	e2fsprogs resize/fail-goto; 文件: resize(95); 风险 high:95	goto errout; print_resource_track(rfs, &rtrack, fs->io);	
+05-sites-e2fsprogs/sites-e2fsprogs-resize-fatal-exit	3	待判	e2fsprogs resize/fatal-exit; 文件: resize(3); 风险 high:3	exit(1); } if (old_desc && old_desc != sb+1) {	
+05-sites-e2fsprogs/sites-e2fsprogs-resize-refusal	3	待判	e2fsprogs resize/refusal; 文件: resize(3); 风险 high:2/medium:1	"fprintf(stderr, _(""inodes (%llu) must be less than %u\n""), (unsigned lon"	
+05-sites-e2fsprogs/sites-e2fsprogs-resize-string-channel	2	待判	e2fsprogs resize/string-channel; 文件: resize(2); 风险 medium:2	"printf(""fs has %d inodes, %d groups required.\n"", inode_count, groups); "	
+05-sites-f2fs-tools/sites-f2fs-tools-check-assert	299	待判	f2fs-tools check/assert; 文件: fsck(299); 风险 high:299	ASSERT(cc->private); cc->rbuf = (char *) cc->private + LZO_WORK_SIZE; cc	
+05-sites-f2fs-tools/sites-f2fs-tools-check-error-report	3	待判	f2fs-tools check/error-report; 文件: fsck(3); 风险 medium:3	"fprintf(stderr, ""%s: "", desc); fprintf(stderr, ""%u %lld:%lld:%lld %lld:%"	
+05-sites-f2fs-tools/sites-f2fs-tools-check-fail-goto	62	待判	f2fs-tools check/fail-goto; 文件: fsck(62); 风险 high:62	goto err; } ret = dev_read_block(parent, ni.blk_addr);	
+05-sites-f2fs-tools/sites-f2fs-tools-check-fatal-exit	7	待判	f2fs-tools check/fatal-exit; 文件: fsck(7); 风险 high:7	exit(EXIT_FAILURE); } ret = malloc(strlen(cwd) + 1 + strlen(file) + 1);	
+05-sites-f2fs-tools/sites-f2fs-tools-check-refusal	2	待判	f2fs-tools check/refusal; 文件: fsck(2); 风险 medium:2	"fprintf(stderr, ""Failed to getcwd\n""); exit(EXIT_FAILURE); }"	
+05-sites-f2fs-tools/sites-f2fs-tools-check-string-channel	8	待判	f2fs-tools check/string-channel; 文件: fsck(8); 风险 medium:7/high:1	"puts(""dict_alloc_insert failed""); free((void *) key); free(val);"	
+05-sites-f2fs-tools/sites-f2fs-tools-misc-assert	12	待判	f2fs-tools misc/assert; 文件: lib(12); 风险 high:12	ASSERT(uevent); uevent[ret] = '\0';	
+05-sites-f2fs-tools/sites-f2fs-tools-misc-fail-goto	13	待判	f2fs-tools misc/fail-goto; 文件: lib(13); 风险 high:13	"goto out_free; ret = sscanf(ptr, ""DEVNAME=%s\n"", buf);"	
+05-sites-f2fs-tools/sites-f2fs-tools-misc-refusal	1	待判	f2fs-tools misc/refusal; 文件: lib(1); 风险 medium:1	"fprintf(stderr, ""failed to alloc %llu\n"", (unsigned long long)num * F2FS"	
+05-sites-f2fs-tools/sites-f2fs-tools-mkfs-assert	2	待判	f2fs-tools mkfs/assert; 文件: mkfs(2); 风险 high:2	ASSERT(0); /* write two blocks */	
+05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fail-goto	14	待判	f2fs-tools mkfs/fail-goto; 文件: mkfs(14); 风险 high:14	goto out; ret = blkid_probe_enable_partitions(pr, 1);	
+05-sites-f2fs-tools/sites-f2fs-tools-mkfs-fatal-exit	6	待判	f2fs-tools mkfs/fatal-exit; 文件: mkfs(6); 风险 high:6	exit(1); }	
+05-sites-f2fs-tools/sites-f2fs-tools-resize-assert	28	待判	f2fs-tools resize/assert; 文件: fsck(28); 风险 high:28	ASSERT(raw != NULL); for (i = MAIN_SEGS(sbi) - 1; i >= 0; i--) {	
+05-sites-gdisk/sites-gdisk-gpt-error-report	49	待判	gdisk gpt/error-report; 文件: gpt.cc(34),gptcl.cc(7),gptcurses.cc(5); 风险 medium:49	"cerr << ""Setting the header size for CRC computation to "" << HEADER_SIZE"	
+05-sites-gdisk/sites-gdisk-gpt-fatal-exit	9	待判	gdisk gpt/fatal-exit; 文件: gpt.cc(8),gpttext.cc(1); 风险 high:9	exit(1); } // if for (i = 0; i < numParts; i++) {	
+05-sites-gdisk/sites-gdisk-gpt-refusal	48	待判	gdisk gpt/refusal; 文件: gpt.cc(38),gptcl.cc(6),gptcurses.cc(3); 风险 medium:30/high:18	"cerr << ""Error! Could not allocate memory for partitions in GPTData::ope"	
+05-sites-gdisk/sites-gdisk-gpt-string-channel	1	待判	gdisk gpt/string-channel; 文件: gptcurses.cc(1); 风险 high:1	"printw(""Warning!! This may destroy data on your disk!""); echo(); while ("	
+05-sites-gdisk/sites-gdisk-mbr-error-report	12	待判	gdisk mbr/error-report; 文件: basicmbr.cc(12); 风险 medium:12	"cerr << ""Unable to allocate memory in BasicMBRData copy constructor! Ter"	
+05-sites-gdisk/sites-gdisk-mbr-fatal-exit	3	待判	gdisk mbr/fatal-exit; 文件: basicmbr.cc(3); 风险 high:3	exit(1); } // if if (orig.myDisk != NULL)	
+05-sites-gdisk/sites-gdisk-mbr-refusal	11	待判	gdisk mbr/refusal; 文件: basicmbr.cc(8),mbrpart.cc(3); 风险 medium:8/high:3	"cerr << ""Error reading logical partitions! List may be truncated!\n""; } "	
+05-sites-gdisk/sites-gdisk-misc-error-report	11	待判	gdisk misc/error-report; 文件: fixparts.cc(4),attributes.cc(2),parttypes.cc(2); 风险 medium:11	"cerr << ""Could not convert hex attribute mask"" << endl; return false; } "	
+05-sites-gdisk/sites-gdisk-misc-fatal-exit	9	待判	gdisk misc/fatal-exit; 文件: fixparts.cc(5),support.cc(3),bsd.cc(1); 风险 high:9	exit(1); } // if for (i = 0; i < numParts; i++) {	
+05-sites-gdisk/sites-gdisk-misc-refusal	5	待判	gdisk misc/refusal; 文件: fixparts.cc(3),attributes.cc(1),support.cc(1); 风险 high:3/medium:2	"cerr << ""Unknown attributes operator: "" << attributeOperator << endl; re"	
+05-sites-gdisk/sites-gdisk-table-edit-error-report	23	待判	gdisk table-edit/error-report; 文件: diskio-unix.cc(14),cgdisk.cc(4),diskio-windows.cc(3); 风险 medium:23	"cerr << ""Usage: "" << argv[0] << "" [-a] device_file\n""; exit(1); } // if/"	
+05-sites-gdisk/sites-gdisk-table-edit-fatal-exit	8	待判	gdisk table-edit/fatal-exit; 文件: cgdisk.cc(3),diskio-unix.cc(2),diskio-windows.cc(2); 风险 high:8	exit(1); switch (argc) {	
+05-sites-gdisk/sites-gdisk-table-edit-refusal	3	待判	gdisk table-edit/refusal; 文件: diskio-unix.cc(2),diskio-windows.cc(1); 风险 medium:3	"cerr << ""Problem opening "" << realFilename << "" for reading! Error is "" "	
+05-sites-libfdisk/sites-libfdisk-align-assert	5	待判	libfdisk align/assert; 文件: libfdisk(5); 风险 high:5	assert(cxt); cxt->io_size = 0;	
+05-sites-libfdisk/sites-libfdisk-align-fail-goto	1	待判	libfdisk align/fail-goto; 文件: libfdisk(1); 风险 high:1	goto done; }	
+05-sites-libfdisk/sites-libfdisk-gpt-assert	107	待判	libfdisk gpt/assert; 文件: libfdisk(107); 风险 high:107	assert(cxt); assert(gpt); assert(gpt->pheader);	
+05-sites-libfdisk/sites-libfdisk-gpt-error-report	23	待判	libfdisk gpt/error-report; 文件: libfdisk(23); 风险 medium:23	"fprintf(stderr, ""%s: "" ""%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x"	
+05-sites-libfdisk/sites-libfdisk-gpt-fail-goto	40	待判	libfdisk gpt/fail-goto; 文件: libfdisk(40); 风险 high:40	goto failed; b->partition_entry_lba = cpu_to_le64(x);	
+05-sites-libfdisk/sites-libfdisk-gpt-refusal	28	待判	libfdisk gpt/refusal; 文件: libfdisk(28); 风险 medium:17/high:11	"fdisk_warn(cxt, _(""failed to allocate GPT header"")); return NULL; }"	
+05-sites-libfdisk/sites-libfdisk-label-uuid-assert	10	待判	libfdisk label-uuid/assert; 文件: libfdisk(10); 风险 high:10	assert(lb); return lb->flags & FDISK_LABEL_FL_REQUIRE_GEOMETRY ? 1 : 0;	
+05-sites-libfdisk/sites-libfdisk-label-uuid-refusal	1	待判	libfdisk label-uuid/refusal; 文件: libfdisk(1); 风险 medium:1	"fdisk_warnx(cxt, _(""Failed to fix partitions order."")); break; }"	
+05-sites-libfdisk/sites-libfdisk-mbr-assert	104	待判	libfdisk mbr/assert; 文件: libfdisk(104); 风险 high:104	assert(cxt); assert(cxt->label); assert(fdisk_is_label(cxt, DOS));	
+05-sites-libfdisk/sites-libfdisk-mbr-error-report	29	待判	libfdisk mbr/error-report; 文件: libfdisk(29); 风险 medium:29	"fdisk_warnx(cxt, _(""Primary partition not available."")); } else if (rc ="	
+05-sites-libfdisk/sites-libfdisk-mbr-fail-goto	11	待判	libfdisk mbr/fail-goto; 文件: libfdisk(11); 风险 high:11	goto done; stop = fdisk_ask_number_get_result(ask);	
+05-sites-libfdisk/sites-libfdisk-mbr-refusal	19	待判	libfdisk mbr/refusal; 文件: libfdisk(19); 风险 medium:14/high:5	"fdisk_warn(cxt, _(""Failed to read extended partition table "" ""(offset=%j"	
+05-sites-libfdisk/sites-libfdisk-table-edit-assert-disk-utils	62	待判	libfdisk table-edit/assert; 文件: disk-utils(62); 风险 high:62	assert(ask); switch(fdisk_ask_get_type(ask)) {	
+05-sites-libfdisk/sites-libfdisk-table-edit-assert-libfdisk	301	待判	libfdisk table-edit/assert; 文件: libfdisk(301); 风险 high:301	assert(cxt); cxt->ask_cb = ask_cb;	
+05-sites-libfdisk/sites-libfdisk-table-edit-error-report	62	待判	libfdisk table-edit/error-report; 文件: libfdisk(33),disk-utils(29); 风险 medium:62	fputs(fdisk_ask_print_get_mesg(ask), stderr); fputc('\n', stderr); break	
+05-sites-libfdisk/sites-libfdisk-table-edit-fail-goto	59	待判	libfdisk table-edit/fail-goto; 文件: libfdisk(32),disk-utils(27); 风险 high:59	goto done; if (res && *res) name = res;	
+05-sites-libfdisk/sites-libfdisk-table-edit-fatal-exit	109	待判	libfdisk table-edit/fatal-exit; 文件: disk-utils(93),libfdisk(16); 风险 high:109	"errx(EXIT_FAILURE, ""no device specified""); if (!label) label = ""dos"";"	
+05-sites-libfdisk/sites-libfdisk-table-edit-refusal	115	待判	libfdisk table-edit/refusal; 文件: disk-utils(83),libfdisk(32); 风险 medium:72/high:43	"fdisk_warnx(cxt, _(""No free partition available!"")); rc = 1; }"	
+05-sites-libfdisk/sites-libfdisk-table-edit-string-channel	3	待判	libfdisk table-edit/string-channel; 文件: disk-utils(2),libfdisk(1); 风险 medium:3	"printf(""FAILED [rc=%d]"", rc); break; }"	
+05-sites-lvm2/sites-lvm2-frontend-error-report	100	待判	lvm2 frontend/error-report; 文件: tools(100); 风险 medium:100	"log_warn(""Physical volume \""%s\"" is already "" ""allocatable."", pv_name); "	
+05-sites-lvm2/sites-lvm2-frontend-fail-goto	33	待判	lvm2 frontend/fail-goto; 文件: tools(33); 风险 high:33	goto out; }	
+05-sites-lvm2/sites-lvm2-frontend-fatal-exit	3	待判	lvm2 frontend/fatal-exit; 文件: tools(3); 风险 high:3	_exit(ECMD_FAILED); }	
+05-sites-lvm2/sites-lvm2-frontend-refusal	192	待判	lvm2 frontend/refusal; 文件: tools(192); 风险 medium:127/high:65	"log_error(""Cannot update volume group %s with duplicate PV devices."", vg"	
+05-sites-lvm2/sites-lvm2-lvm-error-report-lib	269	待判	lvm2 lvm/error-report; 文件: lib(269); 风险 medium:269	"log_error(""Missing PV segment on %s at %u."", pv_dev_name(pv), pe); retur"	
+05-sites-lvm2/sites-lvm2-lvm-error-report-tools	52	待判	lvm2 lvm/error-report; 文件: tools(52); 风险 medium:52	"log_error(""%s %s."", arg_long_option_name(arg), err_found); return 1;"	
+05-sites-lvm2/sites-lvm2-lvm-fail-goto	51	待判	lvm2 lvm/fail-goto; 文件: lib(42),tools(9); 风险 high:51	goto out; count = commands[best_i].op_count;	
+05-sites-lvm2/sites-lvm2-lvm-refusal-lib	316	待判	lvm2 lvm/refusal; 文件: lib(316); 风险 medium:217/high:99	"log_error(""pv_segment allocation failed""); return NULL; }"	
+05-sites-lvm2/sites-lvm2-lvm-refusal-tools	38	待判	lvm2 lvm/refusal; 文件: tools(38); 风险 medium:24/high:14	"log_error(""Selected cache metadata format %d is not supported."", av->i_v"	
+05-sites-lvm2/sites-lvm2-misc-error-report	3	待判	lvm2 misc/error-report; 文件: lib(3); 风险 medium:3	"log_warn(""WARNING: %s: ioctl BLKGETSIZE64 %s"", name, strerror(errno)); i"	
+05-sites-lvm2/sites-lvm2-misc-refusal	4	待判	lvm2 misc/refusal; 文件: lib(4); 风险 medium:4	"log_warn(""WARNING: Failed to open %s to get readahead %s."", dev_name(dev"	
+05-sites-lvm2/sites-lvm2-resize-error-report	9	待判	lvm2 resize/error-report; 文件: tools(9); 风险 medium:9	"log_error(""Can't reduce pool metadata size.""); return 0; }"	
+05-sites-lvm2/sites-lvm2-resize-fail-goto	4	待判	lvm2 resize/fail-goto; 文件: tools(4); 风险 high:4	goto out; }	
+05-sites-lvm2/sites-lvm2-resize-refusal	7	待判	lvm2 resize/refusal; 文件: tools(7); 风险 high:4/medium:3	"log_error(INTERNAL_ERROR ""Invalid resize params.""); return ECMD_FAILED; "	
+05-sites-ntfs-3g/sites-ntfs-3g-frontend-error-report	7	待判	ntfs-3g frontend/error-report; 文件: ntfsprogs(7); 风险 medium:7	"ntfs_log_perror(""Could not locate attribute for %s"", name); ntfs_attr_pu"	
+05-sites-ntfs-3g/sites-ntfs-3g-frontend-fail-goto	28	待判	ntfs-3g frontend/fail-goto; 文件: ntfsprogs(28); 风险 high:28	goto err_exit; } /* Get a pointer to the volume information attribute. *	
+05-sites-ntfs-3g/sites-ntfs-3g-frontend-fatal-exit	14	待判	ntfs-3g frontend/fatal-exit; 文件: ntfsprogs(14); 风险 high:14	"static void usage(int ret) { ntfs_log_info(""%s v%s (libntfs-3g)\n"""	
+05-sites-ntfs-3g/sites-ntfs-3g-frontend-refusal	54	待判	ntfs-3g frontend/refusal; 文件: ntfsprogs(54); 风险 medium:43/high:11	"ntfs_log_perror(""Failed to read $Volume""); return -1; }"	
+05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-error-report	3	待判	ntfs-3g label-uuid/error-report; 文件: ntfsprogs(3); 风险 medium:3	"ntfs_log_error(""You must specify a device.\n""); err++; }"	
+05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-fatal-exit	2	待判	ntfs-3g label-uuid/fatal-exit; 文件: ntfsprogs(2); 风险 high:2	"static void usage(void) { ntfs_log_info(""\nUsage: %s [options] device [l"	
+05-sites-ntfs-3g/sites-ntfs-3g-label-uuid-refusal	6	待判	ntfs-3g label-uuid/refusal; 文件: ntfsprogs(6); 风险 medium:4/high:2	"ntfs_log_error(""Bad hexadecimal serial number.\n""); } opts.new_serial |="	
+05-sites-ntfs-3g/sites-ntfs-3g-misc-error-report	125	待判	ntfs-3g misc/error-report; 文件: libntfs-3g(125); 风险 medium:125	"ntfs_log_error(""Partial read of $MFT/$ATTR_LIST (%lld != "" ""%u or < %d)."	
+05-sites-ntfs-3g/sites-ntfs-3g-misc-fail-goto	195	待判	ntfs-3g misc/fail-goto; 文件: libntfs-3g(195); 风险 high:195	goto error_exit; } vol->mft_ni->mft_no = 0;	
+05-sites-ntfs-3g/sites-ntfs-3g-misc-refusal	234	待判	ntfs-3g misc/refusal; 文件: libntfs-3g(234); 风险 medium:185/high:49	"ntfs_log_error(""Failed to get standard information of $MFT\n""); r = -1; "	
+05-sites-ntfs-3g/sites-ntfs-3g-probe-error-report	7	待判	ntfs-3g probe/error-report; 文件: ntfsprogs(7); 风险 medium:7	"ntfs_log_error(""Option 'T' is deprecated, it was "" ""replaced by 't'.\n"")"	
+05-sites-ntfs-3g/sites-ntfs-3g-probe-fail-goto	2	待判	ntfs-3g probe/fail-goto; 文件: ntfsprogs(2); 风险 high:2	goto out_index_root; }	
+05-sites-ntfs-3g/sites-ntfs-3g-probe-fatal-exit	4	待判	ntfs-3g probe/fatal-exit; 文件: ntfsprogs(4); 风险 high:4	"static void usage(void) { printf(""\nUsage: %s [options] device\n"""	
+05-sites-ntfs-3g/sites-ntfs-3g-probe-refusal	22	待判	ntfs-3g probe/refusal; 文件: ntfsprogs(22); 风险 medium:21/high:1	"ntfs_log_error(""Unknown option '%s'.\n"", argv[optind-1]); err++;"	
+05-sites-ntfs-3g/sites-ntfs-3g-probe-string-channel	10	待判	ntfs-3g probe/string-channel; 文件: ntfsprogs(10); 风险 medium:10	"printf("" READONLY""); flags &= ~FILE_ATTR_READONLY; }"	
+05-sites-ntfs-3g/sites-ntfs-3g-resize-fail-goto	2	待判	ntfs-3g resize/fail-goto; 文件: ntfsprogs(2); 风险 high:2	goto done; if (a->bm[pos] == bm[i])	
+05-sites-ntfs-3g/sites-ntfs-3g-resize-fatal-exit	30	待判	ntfs-3g resize/fatal-exit; 文件: ntfsprogs(30); 风险 high:30	exit(1); }	
+05-sites-ntfs-3g/sites-ntfs-3g-resize-string-channel	35	待判	ntfs-3g resize/string-channel; 文件: ntfsprogs(35); 风险 medium:31/high:4	"printf(""\nResize an NTFS Volume, without data loss.\n\n""); printf(""Copyr"	
+05-sites-parted/sites-parted-align-assert	26	待判	parted align/assert; 文件: libparted(26); 风险 high:26	PED_ASSERT (constraint != NULL); PED_ASSERT (start_range != NULL); PED_A	
+05-sites-parted/sites-parted-align-fail-goto	4	待判	parted align/fail-goto; 文件: libparted(4); 风险 high:4	goto error; if (!ped_constraint_init (constraint, start_align, end_align	
+05-sites-parted/sites-parted-frontend-abort	7	待判	parted frontend/abort; 文件: parted(6),libparted(1); 风险 high:7	abort (); }	
+05-sites-parted/sites-parted-frontend-assert-libparted	241	待判	parted frontend/assert; 文件: libparted(241); 风险 high:241	PED_ASSERT(path != NULL); dev = (PedDevice*) ped_malloc (sizeof (PedDevi	
+05-sites-parted/sites-parted-frontend-assert-parted	29	待判	parted frontend/assert; 文件: parted(29); 风险 high:29	assert(fmt->indent > 0); switch (type) {	
+05-sites-parted/sites-parted-frontend-error-report	11	待判	parted frontend/error-report; 文件: libparted(6),parted(5); 风险 medium:11	"fprintf ( stderr, ""[%d] %s:%d (%s): %s\n"", level, file, line, function, "	
+05-sites-parted/sites-parted-frontend-exception-libparted	184	待判	parted frontend/exception; 文件: libparted(184); 风险 high:184	if (ped_exception_throw ( PED_EXCEPTION_ERROR, PED_EXCEPTION_RETRY_CANCE	
+05-sites-parted/sites-parted-frontend-exception-parted	24	待判	parted frontend/exception; 文件: parted(24); 风险 high:24	if (ped_exception_throw ( PED_EXCEPTION_WARNING, PED_EXCEPTION_YES_NO,	
+05-sites-parted/sites-parted-frontend-fail-goto-libparted	209	待判	parted frontend/fail-goto; 文件: libparted(209); 风险 high:209	goto done; if (S_ISBLK(dev_stat.st_mode) || S_ISCHR(dev_stat.st_mode))	
+05-sites-parted/sites-parted-frontend-fail-goto-parted	83	待判	parted frontend/fail-goto; 文件: parted(83); 风险 high:83	goto error; if (disk) {	
+05-sites-parted/sites-parted-frontend-fatal-exit	9	待判	parted frontend/fatal-exit; 文件: parted(9); 风险 high:9	exit (EXIT_SUCCESS); }	
+05-sites-parted/sites-parted-frontend-refusal-libparted	86	待判	parted frontend/refusal; 文件: libparted(86); 风险 medium:63/high:23	"_(""Error opening %s: %s""), dev->path, strerror (errno)) != PED_EXCEPTION"	
+05-sites-parted/sites-parted-frontend-refusal-parted	44	待判	parted frontend/refusal; 文件: parted(44); 风险 medium:35/high:9	"_(""The existing disk label on %s will be destroyed "" ""and all data on th"	
+05-sites-parted/sites-parted-label-uuid-assert	359	待判	parted label-uuid/assert; 文件: libparted(359); 风险 high:359	PED_ASSERT (dev != NULL); void *label;	
+05-sites-parted/sites-parted-label-uuid-error-report	5	待判	parted label-uuid/error-report; 文件: libparted(5); 风险 medium:5	"#define PDEBUG fprintf(stderr, ""%s:%d:%s\n"", \ __FILE__, \ __LINE__, \"	
+05-sites-parted/sites-parted-label-uuid-exception	98	待判	parted label-uuid/exception; 文件: libparted(98); 风险 high:98	"ped_exception_throw (PED_EXCEPTION_NO_FEATURE, PED_EXCEPTION_CANCEL, _("""	
+05-sites-parted/sites-parted-label-uuid-fail-goto	198	待判	parted label-uuid/fail-goto; 文件: libparted(198); 风险 high:198	goto error_free_disk; atr_disk_reset (atr_disk);	
+05-sites-parted/sites-parted-label-uuid-fatal-exit	9	待判	parted label-uuid/fatal-exit; 文件: libparted(9); 风险 high:9	exit(EXIT_FAILURE); }	
+05-sites-parted/sites-parted-label-uuid-refusal	69	待判	parted label-uuid/refusal; 文件: libparted(69); 风险 medium:43/high:26	"_(""Too many Atari partitions detected. "" "" Maybe there is a loop in the "	
+05-sites-parted/sites-parted-label-uuid-string-channel	6	待判	parted label-uuid/string-channel; 文件: libparted(6); 风险 medium:6	"puts (""BUG: overlapping free space extents "" ""in FMT5 DSCB!\nexiting..."""	
+05-sites-parted/sites-parted-probe-assert	11	待判	parted probe/assert; 文件: libparted(11); 风险 high:11	PED_ASSERT (geom != NULL); PED_ASSERT (dev != NULL);	
+05-sites-parted/sites-parted-probe-exception	2	待判	parted probe/exception; 文件: libparted(2); 风险 high:2	ped_exception_throw ( PED_EXCEPTION_ERROR, PED_EXCEPTION_CANCEL,	
+05-sites-parted/sites-parted-resize-assert	12	待判	parted resize/assert; 文件: libparted(12); 风险 high:12	PED_ASSERT (old_fs_info->root_dir_sector_count == new_fs_info->root_dir_	
+05-sites-parted/sites-parted-resize-exception	6	待判	parted resize/exception; 文件: libparted(6); 风险 high:6	return ped_exception_throw (PED_EXCEPTION_ERROR, PED_EXCEPTION_IGNORE_CA	
+05-sites-parted/sites-parted-resize-fail-goto	14	待判	parted resize/fail-goto; 文件: libparted(14); 风险 high:14	goto error; new_fs = fat_alloc (new_geom);	
+05-sites-parted/sites-parted-resize-refusal	3	待判	parted resize/refusal; 文件: libparted(3); 风险 medium:2/high:1	"_(""There's not enough room in the root "" ""directory for all of the files"	
+05-sites-parted/sites-parted-swap-exception	3	待判	parted swap/exception; 文件: libparted(3); 风险 high:3	"ped_exception_throw (PED_EXCEPTION_ERROR, PED_EXCEPTION_CANCEL, _(""Unrec"	
+05-sites-parted/sites-parted-swap-fail-goto	17	待判	parted swap/fail-goto; 文件: libparted(17); 风险 high:17	goto error; }	
+05-sites-parted/sites-parted-table-edit-assert-libparted	166	待判	parted table-edit/assert; 文件: libparted(166); 风险 high:166	PED_ASSERT (disk_type != NULL); PED_ASSERT (disk_type->ops != NULL); PED	
+05-sites-parted/sites-parted-table-edit-assert-parted	9	待判	parted table-edit/assert; 文件: parted(9); 风险 high:9	assert ( ncols >= 0 ); Table *t = xmalloc (sizeof(*t));	
+05-sites-parted/sites-parted-table-edit-error-report	1	待判	parted table-edit/error-report; 文件: libparted(1); 风险 medium:1	"fprintf (stderr, ""probe label: %s\n"", walk->name); fflush (stderr);"	
+05-sites-parted/sites-parted-table-edit-exception	27	待判	parted table-edit/exception; 文件: libparted(27); 风险 high:27	"ped_exception_throw (PED_EXCEPTION_ERROR, PED_EXCEPTION_CANCEL, _(""%s: u"	
+05-sites-parted/sites-parted-table-edit-fail-goto	45	待判	parted table-edit/fail-goto; 文件: libparted(45); 风险 high:45	goto error; type = ped_disk_probe (dev);	
+05-sites-parted/sites-parted-table-edit-fatal-exit	1	待判	parted table-edit/fatal-exit; 文件: libparted(1); 风险 high:1	exit (EXIT_FAILURE); /* FIXME */ }	
+05-sites-parted/sites-parted-table-edit-refusal	7	待判	parted table-edit/refusal; 文件: libparted(7); 风险 medium:7	"_(""This libparted doesn't have write support for "" ""%s. Perhaps it was c"	
+05-sites-testdisk/sites-testdisk-frontend-assert	8	待判	testdisk frontend/assert; 文件: src(8); 风险 high:8	assert(current_cmd!=NULL); start.cylinder=0; start.head=0;	
+05-sites-testdisk/sites-testdisk-frontend-error-report	34	待判	testdisk frontend/error-report; 文件: src(34); 风险 medium:34	screen_buffer_add( msg_PART_RD_ERR); free(buffer); return NULL;	
+05-sites-testdisk/sites-testdisk-frontend-refusal	29	待判	testdisk frontend/refusal; 文件: src(29); 风险 medium:22/high:7	"screen_buffer_add(""Bad HUMAX partition\n""); free(buffer); return NULL;"	
+05-sites-testdisk/sites-testdisk-mbr-error-report	3	待判	testdisk mbr/error-report; 文件: src(3); 风险 medium:3	"display_message(""Function to write a new MBR code not implemented for th"	
+05-sites-testdisk/sites-testdisk-mbr-refusal	2	待判	testdisk mbr/refusal; 文件: src(2); 风险 medium:2	"display_message(""Write error: Can't write new MBR code.\n""); return 2; }"	
+05-sites-testdisk/sites-testdisk-recovery-assert	1	待判	testdisk recovery/assert; 文件: src(1); 风险 high:1	assert(current_cmd!=NULL); new_partition=partition_new(&arch_gpt); new_p	
+05-sites-testdisk/sites-testdisk-recovery-error-report	8	待判	testdisk recovery/error-report; 文件: src(8); 风险 medium:8	"screen_buffer_add(""GPT: Warning - not revision 1.0\n""); } if(le32(gpt->_"	
+05-sites-testdisk/sites-testdisk-recovery-refusal	15	待判	testdisk recovery/refusal; 文件: src(15); 风险 high:11/medium:4	"log_warning(""Media is opened in read-only.\n""); log_flush(); #ifdef HAVE"	
+05-sites-testdisk/sites-testdisk-recovery-string-channel	1	待判	testdisk recovery/string-channel; 文件: src(1); 风险 medium:1	"wprintw(stdscr,""- No partition from this disk must be mounted:\n""); wmov"	
+05-sites-xfsprogs/sites-xfsprogs-misc-assert	1	待判	xfsprogs misc/assert; 文件: db(1); 风险 high:1	ASSERT(typtab[TYP_SB].typnm == TYP_SB); set_cur(&typtab[TYP_SB], XFS_AG_	
+05-sites-xfsprogs/sites-xfsprogs-misc-error-report	3	待判	xfsprogs misc/error-report; 文件: db(3); 风险 medium:3	"fprintf(stderr, _( ""Usage: %s [-ifFrxV] [-p prog] [-l logdev] [-c cmd].."	
+05-sites-xfsprogs/sites-xfsprogs-misc-fatal-exit	8	待判	xfsprogs misc/fatal-exit; 文件: db(8); 风险 high:8	usage(void) { fprintf(stderr, _(	
+05-sites-xfsprogs/sites-xfsprogs-misc-refusal	25	待判	xfsprogs misc/refusal; 文件: db(25); 风险 medium:14/high:11	"dbprintf(_(""bad allocation group number %s\n""), argv[1]); return 0; }"	
+05-sites-xfsprogs/sites-xfsprogs-mkfs-assert	6	待判	xfsprogs mkfs/assert; 文件: mkfs(6); 风险 high:6	"ASSERT(0); fail(_(""Unknown format""), EINVAL); }"	
+05-sites-xfsprogs/sites-xfsprogs-mkfs-error-report	65	待判	xfsprogs mkfs/error-report; 文件: mkfs(65); 风险 medium:65	"fprintf(stderr, _(""%s: proto file %s premature EOF\n""), progname, fname)"	
+05-sites-xfsprogs/sites-xfsprogs-mkfs-fail-goto	7	待判	xfsprogs mkfs/fail-goto; 文件: mkfs(7); 风险 high:7	goto out_fail; }	
+05-sites-xfsprogs/sites-xfsprogs-mkfs-fatal-exit	125	待判	xfsprogs mkfs/fatal-exit; 文件: mkfs(125); 风险 high:125	exit(1); }	
+05-sites-xfsprogs/sites-xfsprogs-mkfs-refusal	177	待判	xfsprogs mkfs/refusal; 文件: mkfs(177); 风险 medium:153/high:24	"fprintf(stderr, _(""%s: failed to open %s: %s\n""), progname, fname, strer"	
+05-sites-xfsprogs/sites-xfsprogs-resize-error-report	10	待判	xfsprogs resize/error-report; 文件: growfs(10); 风险 medium:10	"fprintf(stderr, _( ""Usage: %s [options] mountpoint\n\n\ Options:\n\"	
+05-sites-xfsprogs/sites-xfsprogs-resize-fatal-exit	13	待判	xfsprogs resize/fatal-exit; 文件: growfs(13); 风险 high:13	usage(void) { fprintf(stderr, _(	
+05-sites-xfsprogs/sites-xfsprogs-resize-refusal	22	待判	xfsprogs resize/refusal; 文件: growfs(22); 风险 medium:20/high:2	"fprintf(stderr, _(""%s: path resolution failed for %s: %s\n""), progname, "	

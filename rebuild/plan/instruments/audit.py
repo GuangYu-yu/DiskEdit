@@ -298,12 +298,11 @@ def check_disposition(args: argparse.Namespace) -> int:
         for line_number, row in enumerate(csv.DictReader(f, delimiter="\t"), start=2):
             batch_count += 1
             batch_path = args.disp / f"{row['batch']}.tsv"
-            md_path = args.disp / f"{row['evidence_md']}"
+            md_rel = row["evidence_md"].strip()
+            md_path = args.disp / md_rel if md_rel else None
             if not batch_path.exists():
                 errors.append(f"queue.tsv:{line_number}: 批次文件缺失 {batch_path}")
                 continue
-            if not md_path.exists():
-                errors.append(f"queue.tsv:{line_number}: 依据文件缺失 {md_path}")
             declared = int(row["rows"])
             with batch_path.open(newline="", encoding="utf-8") as bf:
                 members = list(csv.DictReader(bf, delimiter="\t"))
@@ -323,10 +322,15 @@ def check_disposition(args: argparse.Namespace) -> int:
                     errors.append(f"{batch_path}: {rid} 非法状态 {member['state']!r}")
                 elif member["state"] != "待判":
                     judged += 1
-                    if member["state"] == "裁剪" and md_path.exists():
-                        text = md_path.read_text(encoding="utf-8")
-                        if "撤回条件" not in text or "（裁剪/差异必填）" in text:
-                            errors.append(f"{md_path}: 裁剪批次须含撤回条件且不得为模板占位")
+                    if member["state"] in {"裁剪", "差异"}:
+                        if md_path is None or not md_path.exists():
+                            errors.append(
+                                f"{batch_path}: {rid} 裁剪/差异须在 queue.tsv 填 evidence_md 指向依据文件"
+                            )
+                        elif member["state"] == "裁剪":
+                            text = md_path.read_text(encoding="utf-8")
+                            if "撤回条件" not in text or "（裁剪/差异必填）" in text:
+                                errors.append(f"{md_path}: 裁剪批次须含撤回条件且不得为模板占位")
                     if member["state"] == "差异":
                         if not re.search(r"D\d+", member["note"]):
                             errors.append(f"{batch_path}: {rid} 差异须在 note 链 D 编号")
