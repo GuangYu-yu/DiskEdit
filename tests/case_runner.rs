@@ -959,6 +959,32 @@ fn records_show_refuses_a_damaged_or_foreign_record() {
     assert_eq!(code, 3, "非普通记录条目必须拒绝：{stderr}");
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
+// covers: D21
+#[cfg(target_os = "linux")]
+#[test]
+fn a_write_refuses_when_the_record_cannot_be_decoded() {
+    // 记录文件存在但解码不了：写入必须停下来。删掉这条拒绝就会把"读不出来"
+    // 当成"没有记录"继续，用例会以 0 或别的退出码结束。
+    fixtures::prepare();
+    let directory = "target/fixtures/s7/write-unreadable-record";
+    drop(std::fs::remove_dir_all(directory));
+    std::fs::create_dir_all(directory).expect("夹具目录可建");
+    let image = format!("{directory}/gpt.img");
+    std::fs::copy(Path::new(fixtures::BASE).join("gpt.img"), &image).expect("复制夹具");
+    let state = format!("{directory}/state");
+    drop(std::fs::remove_dir_all(&state));
+    let record_dir = record_state_dir(&state, &image);
+    std::fs::create_dir_all(&record_dir).expect("记录目录可建");
+    std::fs::write(record_dir.join("record"), vec![0u8; 200]).expect("记录可写");
+
+    let (code, _stdout, stderr) = run_argv_env(
+        &["add", &image, "1M", "--yes"],
+        &[("XDG_STATE_HOME", &state)],
+    );
+    assert_eq!(code, 3, "记录不可解码必须拒绝写入：{stderr}");
+    assert!(stderr.contains("cannot be decoded"), "{stderr}");
+}
+
 // covers: R0674
 #[test]
 fn resize_allow_move_relocates_the_blocking_partition() {
