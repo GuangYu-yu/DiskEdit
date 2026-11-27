@@ -544,6 +544,20 @@ pub trait TargetHandle {
 /// 记录目录上的独占锁；销毁时释放。
 pub trait StateLock {}
 
+/// 记录位置上的读取结果。
+///
+/// 记录位置只接受普通文件：符号链接、目录、设备、FIFO 等都不是恢复记录，
+/// 必须作为独立结果上报，不能折成"没有记录"或空字节。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordEntry {
+    /// 位置不存在。
+    Absent,
+    /// 是普通文件，字节已读出。
+    Contents(Vec<u8>),
+    /// 位置上有东西，但不是普通文件。
+    NotARecoveryFile,
+}
+
 /// 宿主端口。
 pub trait Platform: Send + Sync {
     /// 以读写方式打开目标。
@@ -635,6 +649,30 @@ pub trait Platform: Send + Sync {
 
     /// 读取一个普通文件；不存在时返回 `None`。
     fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>>;
+
+    /// 读取记录位置：不跟随符号链接，返回明确的结果。
+    ///
+    /// 默认实现只回答存在性（`symlink_metadata`），普通文件按"读不出来"拒绝；
+    /// 会逐级 `openat` 的宿主覆盖它。
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(RecordEntry::Absent),
+            Err(error) => Err(PlatformError::io(path, error)),
+            Ok(metadata) if metadata.file_type().is_file() => Err(PlatformError::not_supported(
+                "this host cannot read a recovery record",
+            )),
+            Ok(_) => Ok(RecordEntry::NotARecoveryFile),
+        }
+    }
+
+    /// 递归列出记录目录里名为 `record` 的条目（含非普通条目）。
+    fn list_record_entries(&self, root: &Path) -> PlatformResult<Vec<PathBuf>> {
+        Ok(self
+            .list_files(root)?
+            .into_iter()
+            .filter(|path| path.file_name().is_some_and(|name| name == "record"))
+            .collect())
+    }
 
     /// 运行一个外部程序。程序身份到可执行名与参数的映射留在本层。
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun>;

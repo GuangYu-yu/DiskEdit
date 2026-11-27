@@ -157,7 +157,7 @@ fn scan_root(platform: &dyn Platform, root: &std::path::Path, request: &observe:
         );
         return exit::REFUSED;
     }
-    let files = match platform.list_files(root) {
+    let files = match platform.list_record_entries(root) {
         Ok(files) => files,
         Err(error) => {
             eprintln!("error: cannot scan {}: {error}", root.display());
@@ -172,11 +172,16 @@ fn scan_root(platform: &dyn Platform, root: &std::path::Path, request: &observe:
         {
             continue;
         }
-        // 读失败不能当作"没有记录"跳过：否则扫描会把不完整的结果报告成完整。
-        match platform.read_file(&file) {
-            Ok(Some(bytes)) => records.push((file, bytes)),
-            Ok(None) => {
+        // 读失败或"不是恢复文件"都不能当作"没有记录"跳过：否则扫描会把
+        // 不完整的结果报告成完整。
+        match platform.read_record(&file) {
+            Ok(crate::platform::RecordEntry::Contents(bytes)) => records.push((file, bytes)),
+            Ok(crate::platform::RecordEntry::Absent) => {
                 eprintln!("error: {} disappeared while scanning", file.display());
+                return exit::ENVIRONMENT;
+            }
+            Ok(crate::platform::RecordEntry::NotARecoveryFile) => {
+                eprintln!("error: {} is not a recovery file", file.display());
                 return exit::ENVIRONMENT;
             }
             Err(error) => {

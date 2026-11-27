@@ -19,7 +19,7 @@ use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
 use crate::app::decide::step::TableSegment;
 use crate::app::decide::{ConfirmedPlan, Step, StepKind};
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, StateLock, TargetHandle};
+use crate::platform::{Platform, RecordEntry, StateLock, TargetHandle};
 
 /// 读原像与摘要时分段大小。
 const CHUNK: usize = 1 << 20;
@@ -501,9 +501,19 @@ impl<'a> Session<'a> {
             plan_digest,
         };
 
-        let existing = platform
-            .read_file(&file)
-            .map_err(|error| (ExecError::from(error), false))?;
+        let existing = match platform
+            .read_record(&file)
+            .map_err(|error| (ExecError::from(error), false))?
+        {
+            RecordEntry::Contents(bytes) => Some(bytes),
+            RecordEntry::Absent => None,
+            RecordEntry::NotARecoveryFile => {
+                return Err((
+                    ExecError::Record(format!("{} is not a recovery file", file.display())),
+                    false,
+                ));
+            }
+        };
         if let Some(bytes) = existing.filter(|bytes| !bytes.is_empty()) {
             let decoded = record::decode(&bytes).map_err(|error| {
                 (

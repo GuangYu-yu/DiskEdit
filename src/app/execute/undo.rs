@@ -19,7 +19,7 @@ use super::{ExecError, FailureKind, Outcome};
 use crate::app::decide::{ConfirmedPlan, StepKind};
 use crate::app::observe::RecoverMode;
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, TargetHandle};
+use crate::platform::{Platform, RecordEntry, TargetHandle};
 
 /// 执行一份已确认的回滚计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
@@ -95,14 +95,27 @@ pub(super) fn prepare(
         ));
     }
     let file = directory.join(RECORD_FILE);
-    let bytes = platform
-        .read_file(&file)
-        .map_err(|error| (ExecError::from(error), false))?;
+    let bytes = site_bytes(platform, &file).map_err(|error| (error, false))?;
     Ok(Site {
         directory,
         file,
         bytes,
     })
+}
+
+/// 读记录位置：链接、目录等非普通条目一律按"不是恢复文件"拒绝。
+pub(super) fn site_bytes(
+    platform: &dyn Platform,
+    file: &Path,
+) -> Result<Option<Vec<u8>>, ExecError> {
+    match platform.read_record(file)? {
+        RecordEntry::Contents(bytes) => Ok(Some(bytes)),
+        RecordEntry::Absent => Ok(None),
+        RecordEntry::NotARecoveryFile => Err(ExecError::Record(format!(
+            "{} is not a recovery file",
+            file.display()
+        ))),
+    }
 }
 
 pub(super) fn mode_of(plan: &ConfirmedPlan) -> Result<RecoverMode, (ExecError, bool)> {
@@ -485,7 +498,7 @@ fn clear(
     file: &Path,
     expected: &[u8],
 ) -> Result<(), ExecError> {
-    let current = platform.read_file(file)?;
+    let current = site_bytes(platform, file)?;
     if current.as_deref() != Some(expected) {
         return Err(ExecError::Record(
             "the record changed before it could be cleaned up".to_owned(),

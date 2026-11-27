@@ -19,8 +19,8 @@ use diskedit::app::observe::TableFormat;
 use diskedit::app::observe::records::{RECORD_FILE, hex16};
 use diskedit::app::report::exit::{ENVIRONMENT, PARTIAL, REFUSED, SUCCESS, UNSUPPORTED, exit_of};
 use diskedit::platform::{
-    LoopBinding, Occupancy, PartitionMount, Platform, PlatformError, PlatformResult, StateLock,
-    TargetHandle, TargetKind, ToolRun,
+    LoopBinding, Occupancy, PartitionMount, Platform, PlatformError, PlatformResult, RecordEntry,
+    StateLock, TargetHandle, TargetKind, ToolRun,
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
@@ -241,6 +241,18 @@ impl Platform for Memory {
             ));
         }
         Ok(self.files.lock().unwrap().get(path).cloned())
+    }
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        if self.read_failure {
+            return Err(PlatformError::io(
+                path,
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            ));
+        }
+        Ok(match self.files.lock().unwrap().get(path).cloned() {
+            Some(bytes) => RecordEntry::Contents(bytes),
+            None => RecordEntry::Absent,
+        })
     }
     fn run(
         &self,

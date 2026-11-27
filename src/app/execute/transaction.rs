@@ -16,7 +16,7 @@ use super::digest::Hasher;
 use super::token::SessionId;
 use super::{ExecError, Recorded};
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, StateLock};
+use crate::platform::{Platform, RecordEntry, StateLock};
 
 /// 记录目录里的锁文件名。
 pub const LOCK_FILE: &str = "record.lock";
@@ -72,7 +72,17 @@ impl<'a> RecordSession<'a> {
 
         let mut pending = None;
         let mut sequence = 0;
-        if let Some(bytes) = platform.read_file(&file).map_err(ExecError::from)?
+        let existing = match platform.read_record(&file).map_err(ExecError::from)? {
+            RecordEntry::Contents(bytes) => Some(bytes),
+            RecordEntry::Absent => None,
+            RecordEntry::NotARecoveryFile => {
+                return Err(ExecError::Record(format!(
+                    "{} is not a recovery file",
+                    file.display()
+                )));
+            }
+        };
+        if let Some(bytes) = existing
             && !bytes.is_empty()
         {
             let decoded =

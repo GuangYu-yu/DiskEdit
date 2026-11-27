@@ -10,8 +10,8 @@ use crate::app::decide::{Plan, Step, confirm};
 use crate::app::execute::digest::Hasher;
 use crate::app::execute::{ExecutionState, Outcome};
 use crate::platform::{
-    LoopBinding, Occupancy, PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind,
-    ToolRun,
+    LoopBinding, Occupancy, PlatformError, PlatformResult, RecordEntry, StateLock, TargetHandle,
+    TargetKind, ToolRun,
 };
 
 const IDENTITY: Fingerprint = Fingerprint::strong([0x42; 32]);
@@ -150,6 +150,12 @@ impl Platform for Memory {
     }
     fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
         Ok(self.get(path))
+    }
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        Ok(match self.get(path) {
+            Some(bytes) => RecordEntry::Contents(bytes),
+            None => RecordEntry::Absent,
+        })
     }
     fn run(
         &self,

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use diskedit_core::fingerprint::Fingerprint;
 
-use crate::platform::{Platform, PlatformResult};
+use crate::platform::{Platform, PlatformResult, RecordEntry};
 
 /// 记录目录的文件名。
 pub const RECORD_FILE: &str = "record";
@@ -53,24 +53,26 @@ pub fn locate(
     let directory = root.join("images").join(hex16(fingerprint));
     let directory_exists = platform.is_directory(&directory);
     let file = directory.join(RECORD_FILE);
-    match platform.read_file(&file) {
-        Ok(bytes) => Ok(RecordState {
-            directory: Some(directory),
-            directory_exists,
-            file: Some(file),
-            bytes,
-            unavailable: None,
-        }),
-        Err(error) => {
-            let message = format!("cannot read {}: {error}", file.display());
-            Ok(RecordState {
-                directory: Some(directory),
-                directory_exists,
-                file: Some(file),
-                bytes: None,
-                unavailable: Some(message),
-            })
-        }
+    let state = |bytes: Option<Vec<u8>>, unavailable: Option<String>| RecordState {
+        directory: Some(directory.clone()),
+        directory_exists,
+        file: Some(file.clone()),
+        bytes,
+        unavailable,
+    };
+    match platform.read_record(&file) {
+        Ok(RecordEntry::Contents(bytes)) => Ok(state(Some(bytes), None)),
+        Ok(RecordEntry::Absent) => Ok(state(None, None)),
+        // 位置上有东西但不是普通文件：这是"有东西、但不是我们的记录"，
+        // 不能被当成"没有记录"，也不能被当成可读的记录。
+        Ok(RecordEntry::NotARecoveryFile) => Ok(state(
+            None,
+            Some(format!("{} is not a recovery file", file.display())),
+        )),
+        Err(error) => Ok(state(
+            None,
+            Some(format!("cannot read {}: {error}", file.display())),
+        )),
     }
 }
 

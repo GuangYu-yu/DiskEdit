@@ -16,9 +16,10 @@ use sha2::{Digest, Sha256};
 
 use crate::platform::{
     Carrier, DeviceMatch, LoopBinding, MountFacts, Occupancy, PartitionMount, Platform,
-    PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
+    PlatformError, PlatformResult, RecordEntry, StateLock, TargetHandle, TargetKind, ToolRun,
 };
 
+mod record;
 mod tools;
 
 pub mod carrier;
@@ -160,6 +161,14 @@ impl Platform for LinuxPlatform {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(PlatformError::io(path, error)),
         }
+    }
+
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        record::read(path)
+    }
+
+    fn list_record_entries(&self, root: &Path) -> PlatformResult<Vec<PathBuf>> {
+        record::list(root)
     }
 
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun> {
