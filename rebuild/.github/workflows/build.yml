@@ -10,6 +10,11 @@ permissions:
   contents: write
 
 jobs:
+  # 发布前跑与 tests.yml 完全相同的全量门禁（lint / root / 等价对照 / QEMU）。
+  # tests.yml 声明了 workflow_call；放在仓库根启用时路径即 ./.github/workflows/tests.yml。
+  test:
+    uses: ./.github/workflows/tests.yml
+
   matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -26,7 +31,7 @@ jobs:
 
   release:
     name: 构建 ${{ matrix.entry.os }} ${{ matrix.entry.arch }}
-    needs: matrix
+    needs: [matrix, test]
     runs-on: ${{ matrix.entry.runner }}
     strategy:
       fail-fast: false

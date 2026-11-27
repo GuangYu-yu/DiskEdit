@@ -96,7 +96,7 @@
 | 3 | 已修 | `gpt/parse.rs::validate_geometry` revision >1.2 拒绝（`a_revision_above_1_2_is_rejected`） |
 | 4 | 已修 | `edit.rs::set_mbr_boot` 拒扩展容器（`boot_flag_on_an_extended_container_is_refused`） |
 | 5 | 既有 | 决策层 `fs/attrs.rs::label_problem` 已做 vfat 11 字节/ASCII 前置（单测在 `attrs.rs`），无需改 |
-| 6 | 认领真·已修 | 构建 e2fsprogs 1.47.4 取 `resize2fs -P` 真值（`plan/evidence/G6-truth.log`）；`observe/resize.rs::offline_min_bytes` 采集 + `decide/resize.rs` 构造 `BelowMinimumSize`/`MinimumSizeUnknown`（`tests/online.rs::offline_ext_shrink_*`） |
+| 6 | 认领真·已修 | 构建 e2fsprogs 1.47.4 取 `resize2fs -P` 真值（`plan/evidence/G6-truth.md`）；`observe/resize.rs::offline_min_bytes` 采集 + `decide/resize.rs` 构造 `BelowMinimumSize`/`MinimumSizeUnknown`（`tests/online.rs::offline_ext_shrink_*`） |
 | 7 | 已修 | `execute/filesystem.rs` NTFS 收缩后只读卷信息回读（`verify_ntfs_size` + `ntfs_shrink_readback_requires_current_volume_size`） |
 | 8 | 已修 | `execute/diagnose.rs::is_pre_run_refusal` 区分运行前拒绝/磁盘问题（`refusal_markers_split_from_reported_problems`），SA2-018 入账 |
 | 9 | 已修 | 主 GPT 头保留字节非零 → `layout` 的 `damaged` 诊断（`observe/table.rs::reserved_damage` 单测）；revision 越界由 #3 直接拒绝 |

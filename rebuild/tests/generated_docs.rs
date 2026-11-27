@@ -63,3 +63,30 @@ fn generated_docs_match_their_sources() {
         );
     }
 }
+
+/// 双语目录只放 Markdown：机器可读的对账表固定放 `docs/catalogue.json`。
+/// 任何把 JSON/其他产物塞进 `docs/en`、`docs/zh` 的行为都会被这条挡下。
+#[test]
+fn bilingual_docs_hold_only_markdown() {
+    for language in ["docs/en", "docs/zh"] {
+        let directory = root().join(language);
+        let entries = std::fs::read_dir(&directory)
+            .unwrap_or_else(|error| panic!("读取 {} 失败: {error}", directory.display()));
+        for entry in entries {
+            let path = entry.expect("目录项可读").path();
+            assert_eq!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("md"),
+                "{} 只允许 Markdown，发现 {}（对账表放 docs/catalogue.json）",
+                language,
+                path.display()
+            );
+        }
+    }
+    let catalogue = root().join(diskedit::docsgen::I18N_CATALOGUE);
+    assert!(
+        catalogue.is_file(),
+        "双语对账表应位于 docs/ 下：{}",
+        catalogue.display()
+    );
+}
