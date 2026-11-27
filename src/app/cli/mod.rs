@@ -164,14 +164,27 @@ fn scan_root(platform: &dyn Platform, root: &std::path::Path, request: &observe:
             return exit::ENVIRONMENT;
         }
     };
-    let records: Vec<(std::path::PathBuf, Vec<u8>)> = files
-        .iter()
-        .filter(|file| {
-            file.file_name()
-                .is_some_and(|name| name == observe::records::RECORD_FILE)
-        })
-        .filter_map(|file| std::fs::read(file).ok().map(|bytes| (file.clone(), bytes)))
-        .collect();
+    let mut records: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+    for file in files {
+        if file
+            .file_name()
+            .is_none_or(|name| name != observe::records::RECORD_FILE)
+        {
+            continue;
+        }
+        // 读失败不能当作"没有记录"跳过：否则扫描会把不完整的结果报告成完整。
+        match platform.read_file(&file) {
+            Ok(Some(bytes)) => records.push((file, bytes)),
+            Ok(None) => {
+                eprintln!("error: {} disappeared while scanning", file.display());
+                return exit::ENVIRONMENT;
+            }
+            Err(error) => {
+                eprintln!("error: cannot read {}: {error}", file.display());
+                return exit::ENVIRONMENT;
+            }
+        }
+    }
     conclude(
         platform,
         request,
