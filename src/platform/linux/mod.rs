@@ -487,6 +487,23 @@ impl TargetHandle for LinuxHandle {
     }
 
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+        // 平台层自己再判一次上界：普通文件的 pwrite 会静默扩展稀疏文件，
+        // 越过打开时长度的写在任何上层失手时都必须在这里被拒绝。
+        let end = offset
+            .checked_add(buf.len() as u64)
+            .ok_or_else(|| PlatformError::parse("write range overflows the offset space"))?;
+        if end > self.len {
+            return Err(PlatformError::io(
+                &self.path,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "write [{offset}, {end}) extends past the target length {}",
+                        self.len
+                    ),
+                ),
+            ));
+        }
         FileExt::write_at(&self.file, buf, offset)
             .map_err(|error| PlatformError::io(&self.path, error))
     }

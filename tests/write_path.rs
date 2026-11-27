@@ -35,6 +35,34 @@ fn only_the_write_channel_calls_the_raw_write() {
     );
 }
 
+// covers: I11
+#[cfg(target_os = "linux")]
+#[test]
+fn the_platform_refuses_a_write_past_the_target_length() {
+    use diskedit::platform::{Platform, host};
+
+    let directory = PathBuf::from("target/fixtures/write-bounds");
+    std::fs::create_dir_all(&directory).expect("夹具目录可建");
+    let path = directory.join("four-bytes.img");
+    std::fs::write(&path, b"abcd").expect("目标可写");
+
+    let mut handle = host().open_target(&path).expect("目标可打开");
+    assert_eq!(handle.len(), 4);
+    let error = handle
+        .write_at(2, &[0xde, 0xad, 0xbe])
+        .expect_err("越过目标末尾的写必须被平台层拒绝");
+    assert!(
+        !matches!(error, diskedit::platform::PlatformError::NotSupported(_)),
+        "这是越界写入，不是缺少能力：{error}"
+    );
+    drop(handle);
+    assert_eq!(
+        std::fs::read(&path).expect("目标可读"),
+        b"abcd",
+        "被拒绝的写不能扩展或改动目标"
+    );
+}
+
 fn rust_files(directory: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(directory).expect("执行器目录可读") {
         let path = entry.expect("目录项可读").path();
