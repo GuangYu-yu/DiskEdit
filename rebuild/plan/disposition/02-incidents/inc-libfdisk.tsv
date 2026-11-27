@@ -15,4 +15,4 @@ libfdisk-inc-00013	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00014	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00015	incidents	裁剪	同 libfdisk-inc-00004
 libfdisk-inc-00016	incidents	裁剪	同 libfdisk-inc-00004
-libfdisk-inc-00017	incidents	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-inc-00017	incidents	裁剪	换版重放：nsenter cgroup.procs fd 泄漏修复属 util-linux 兄弟组件（cgroup 命名空间），不在 libfdisk/分区表面；同 libfdisk-inc-00004（全家桶公告裁剪）

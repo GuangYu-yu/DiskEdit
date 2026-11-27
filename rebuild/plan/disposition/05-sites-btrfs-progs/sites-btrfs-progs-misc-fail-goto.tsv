@@ -4,9 +4,9 @@ btrfs-progs-00546	sites	拒绝	同上
 btrfs-progs-00549	sites	拒绝	同上
 btrfs-progs-00550	sites	拒绝	同上
 btrfs-progs-00551	sites	拒绝	同上
-btrfs-progs-00552	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00552	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00553	sites	拒绝	同上
-btrfs-progs-00560	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00560	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00561	sites	拒绝	同上
 btrfs-progs-00562	sites	拒绝	同上
 btrfs-progs-00565	sites	拒绝	同上
@@ -24,14 +24,14 @@ btrfs-progs-00627	sites	拒绝	同上
 btrfs-progs-00629	sites	拒绝	同上
 btrfs-progs-00630	sites	拒绝	同上
 btrfs-progs-00632	sites	拒绝	同上
-btrfs-progs-00637	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00638	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00639	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00640	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00657	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00659	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00637	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00638	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00639	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00640	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00657	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00659	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00661	sites	拒绝	同上
-btrfs-progs-00663	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00663	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00665	sites	拒绝	同上
 btrfs-progs-00667	sites	拒绝	同上
 btrfs-progs-00669	sites	拒绝	同上
@@ -45,8 +45,8 @@ btrfs-progs-00682	sites	拒绝	同上
 btrfs-progs-00683	sites	拒绝	同上
 btrfs-progs-00685	sites	拒绝	同上
 btrfs-progs-00687	sites	拒绝	同上
-btrfs-progs-00688	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00690	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00688	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00690	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00692	sites	拒绝	同上
 btrfs-progs-00693	sites	拒绝	同上
 btrfs-progs-00694	sites	拒绝	同上
@@ -55,8 +55,8 @@ btrfs-progs-00697	sites	拒绝	同上
 btrfs-progs-00699	sites	拒绝	同上
 btrfs-progs-00701	sites	拒绝	同上
 btrfs-progs-00702	sites	拒绝	同上
-btrfs-progs-00703	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00704	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00703	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00704	sites	拒绝	拒绝：btrfstune 未消费特性内部失败清理跳转——C 防御模式逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00707	sites	拒绝	同上
 btrfs-progs-00708	sites	拒绝	同上
 btrfs-progs-00709	sites	拒绝	同上

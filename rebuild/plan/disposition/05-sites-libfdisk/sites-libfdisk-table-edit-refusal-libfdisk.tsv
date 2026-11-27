@@ -8,7 +8,7 @@ libfdisk-00122	sites	认领	同上
 libfdisk-00126	sites	认领	同上
 libfdisk-00127	sites	认领	同上
 libfdisk-00129	sites	认领	同上
-libfdisk-00131	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00131	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
 libfdisk-00132	sites	认领	同上
 libfdisk-00133	sites	认领	同上
 libfdisk-00150	sites	拒绝	设备持有/去持有概念不存在：只读打开与单写事务由平台端口管理。依据：SA1-002（架构差异）

@@ -8,11 +8,11 @@ btrfs-progs-00743	sites	裁剪	同上
 btrfs-progs-00744	sites	裁剪	同上
 btrfs-progs-00745	sites	裁剪	同上
 btrfs-progs-00746	sites	裁剪	同上
-btrfs-progs-00747	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00774	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00775	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00747	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-00774	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-00775	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-00777	sites	裁剪	同上
-btrfs-progs-00784	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00784	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-00809	sites	裁剪	同上
 btrfs-progs-00818	sites	裁剪	同上
 btrfs-progs-00830	sites	裁剪	同上
@@ -22,7 +22,7 @@ btrfs-progs-00845	sites	裁剪	同上
 btrfs-progs-00849	sites	裁剪	同上
 btrfs-progs-00852	sites	裁剪	同上
 btrfs-progs-00854	sites	裁剪	同上
-btrfs-progs-00857	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00857	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-00873	sites	裁剪	同上
 btrfs-progs-00875	sites	裁剪	同上
 btrfs-progs-00886	sites	裁剪	同上
@@ -52,7 +52,7 @@ btrfs-progs-00944	sites	裁剪	同上
 btrfs-progs-00953	sites	裁剪	同上
 btrfs-progs-00956	sites	裁剪	同上
 btrfs-progs-00972	sites	裁剪	同上
-btrfs-progs-00979	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00979	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-00982	sites	裁剪	同上
 btrfs-progs-01003	sites	裁剪	同上
 btrfs-progs-01011	sites	裁剪	同上
@@ -62,13 +62,13 @@ btrfs-progs-01014	sites	裁剪	同上
 btrfs-progs-01015	sites	裁剪	同上
 btrfs-progs-01018	sites	裁剪	同上
 btrfs-progs-01020	sites	裁剪	同上
-btrfs-progs-01021	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01021	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01024	sites	裁剪	同上
 btrfs-progs-01026	sites	裁剪	同上
 btrfs-progs-01027	sites	裁剪	同上
 btrfs-progs-01028	sites	裁剪	同上
-btrfs-progs-01033	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01034	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01033	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01034	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01035	sites	裁剪	同上
 btrfs-progs-01037	sites	裁剪	同上
 btrfs-progs-01040	sites	裁剪	同上
@@ -84,33 +84,33 @@ btrfs-progs-01071	sites	裁剪	同上
 btrfs-progs-01072	sites	裁剪	同上
 btrfs-progs-01073	sites	裁剪	同上
 btrfs-progs-01074	sites	裁剪	同上
-btrfs-progs-01078	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01079	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01078	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01079	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01083	sites	裁剪	同上
 btrfs-progs-01084	sites	裁剪	同上
 btrfs-progs-01092	sites	裁剪	同上
 btrfs-progs-01093	sites	裁剪	同上
 btrfs-progs-01094	sites	裁剪	同上
 btrfs-progs-01095	sites	裁剪	同上
-btrfs-progs-01096	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01097	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01098	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01096	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01097	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01098	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01099	sites	裁剪	同上
 btrfs-progs-01101	sites	裁剪	同上
 btrfs-progs-01103	sites	裁剪	同上
 btrfs-progs-01105	sites	裁剪	同上
-btrfs-progs-01107	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01109	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01107	sites	裁剪	裁剪：check 新选项面（--skip-qgroup-accounting 与 --repair/--qgroup-report 组合校验）——固定 `btrfs check --readonly` 不消费新选项，出口不可达（src/platform/linux/tools.rs::check_arguments）
+btrfs-progs-01109	sites	裁剪	裁剪：check 新选项面（--skip-qgroup-accounting 与 --repair/--qgroup-report 组合校验）——固定 `btrfs check --readonly` 不消费新选项，出口不可达（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-01112	sites	认领	认领：check 运行前的占用/挂载闸（已挂载且无 --force 即拒绝、mount status 不可查即报错）——调用时生效的拒绝面，退出码消费（src/app/execute/diagnose.rs::run）；本实现 check 固定只读参数（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-01114	sites	认领	同上
 btrfs-progs-01116	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
-btrfs-progs-01118	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01118	sites	裁剪	裁剪：check --repair 专属的 replace/balance 运行闸——固定 `btrfs check --readonly` 不消费 --repair，闸不可达（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）
 btrfs-progs-01119	sites	裁剪	同上
 btrfs-progs-01120	sites	裁剪	同上
 btrfs-progs-01121	sites	裁剪	同上
-btrfs-progs-01123	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01123	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01126	sites	裁剪	同上
-btrfs-progs-01132	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01132	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01136	sites	裁剪	同上
 btrfs-progs-01140	sites	裁剪	同上
 btrfs-progs-01142	sites	裁剪	同上
@@ -132,7 +132,7 @@ btrfs-progs-01207	sites	裁剪	同上
 btrfs-progs-01208	sites	裁剪	同上
 btrfs-progs-01229	sites	裁剪	同上
 btrfs-progs-01230	sites	裁剪	同上
-btrfs-progs-01231	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01231	sites	裁剪	裁剪：check --repair 修复写路径（orphan item 插入/dev extent 删除）——固定 `btrfs check --readonly` 不进修复分支，随外部工具自带、只消费退出码（src/app/execute/diagnose.rs::run）
 btrfs-progs-01233	sites	裁剪	同上
 btrfs-progs-01235	sites	裁剪	同上
 btrfs-progs-01240	sites	裁剪	同上
@@ -152,7 +152,7 @@ btrfs-progs-01283	sites	裁剪	同上
 btrfs-progs-01284	sites	裁剪	同上
 btrfs-progs-01285	sites	裁剪	同上
 btrfs-progs-01286	sites	裁剪	同上
-btrfs-progs-01287	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01287	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01289	sites	裁剪	同上
 btrfs-progs-01290	sites	裁剪	同上
 btrfs-progs-01291	sites	裁剪	同上
@@ -162,9 +162,9 @@ btrfs-progs-01294	sites	裁剪	同上
 btrfs-progs-01295	sites	裁剪	同上
 btrfs-progs-01296	sites	裁剪	同上
 btrfs-progs-01297	sites	裁剪	同上
-btrfs-progs-01298	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01298	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01299	sites	裁剪	同上
-btrfs-progs-01300	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01300	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01301	sites	裁剪	同上
 btrfs-progs-01302	sites	裁剪	同上
 btrfs-progs-01303	sites	裁剪	同上
@@ -182,7 +182,7 @@ btrfs-progs-01327	sites	裁剪	同上
 btrfs-progs-01330	sites	裁剪	同上
 btrfs-progs-01331	sites	裁剪	同上
 btrfs-progs-01332	sites	裁剪	同上
-btrfs-progs-01336	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01336	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01337	sites	裁剪	同上
 btrfs-progs-01338	sites	裁剪	同上
 btrfs-progs-01339	sites	裁剪	同上
@@ -197,8 +197,8 @@ btrfs-progs-01351	sites	裁剪	同上
 btrfs-progs-01354	sites	裁剪	同上
 btrfs-progs-01360	sites	裁剪	同上
 btrfs-progs-01362	sites	裁剪	同上
-btrfs-progs-01364	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01365	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01364	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01365	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01366	sites	裁剪	同上
 btrfs-progs-01367	sites	裁剪	同上
 btrfs-progs-01368	sites	裁剪	同上
@@ -214,11 +214,11 @@ btrfs-progs-01385	sites	裁剪	同上
 btrfs-progs-01386	sites	裁剪	同上
 btrfs-progs-01387	sites	裁剪	同上
 btrfs-progs-01392	sites	裁剪	同上
-btrfs-progs-01394	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01396	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01398	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01401	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01402	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01394	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01396	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01398	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01401	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
+btrfs-progs-01402	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01408	sites	裁剪	同上
 btrfs-progs-01410	sites	裁剪	同上
 btrfs-progs-01412	sites	裁剪	同上
@@ -239,7 +239,7 @@ btrfs-progs-01438	sites	裁剪	同上
 btrfs-progs-01439	sites	裁剪	同上
 btrfs-progs-01440	sites	裁剪	同上
 btrfs-progs-01442	sites	裁剪	同上
-btrfs-progs-01443	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01443	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01445	sites	裁剪	同上
 btrfs-progs-01447	sites	裁剪	同上
 btrfs-progs-01448	sites	裁剪	同上
@@ -250,7 +250,7 @@ btrfs-progs-01455	sites	裁剪	同上
 btrfs-progs-01458	sites	裁剪	同上
 btrfs-progs-01459	sites	裁剪	同上
 btrfs-progs-01460	sites	裁剪	同上
-btrfs-progs-01461	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01461	sites	裁剪	裁剪：btrfs check 腐蚀检测与运行内拒绝细节（I_ERR 旗标、inode/extent/chunk 校验、修复分支）——随外部工具自带：固定 `btrfs check --readonly` 调用时整体生效，本实现只消费退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run），不逐点复刻检测面
 btrfs-progs-01463	sites	裁剪	同上
 btrfs-progs-01465	sites	裁剪	同上
 btrfs-progs-01470	sites	裁剪	同上
@@ -274,7 +274,7 @@ btrfs-progs-01525	sites	裁剪	同上
 btrfs-progs-01527	sites	裁剪	同上
 btrfs-progs-01532	sites	裁剪	同上
 btrfs-progs-01533	sites	裁剪	同上
-btrfs-progs-01537	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01538	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01539	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01540	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01537	sites	裁剪	裁剪：check --repair 修复写路径（orphan item 插入/dev extent 删除）——固定 `btrfs check --readonly` 不进修复分支，随外部工具自带、只消费退出码（src/app/execute/diagnose.rs::run）
+btrfs-progs-01538	sites	裁剪	裁剪：check --repair 修复写路径（orphan item 插入/dev extent 删除）——固定 `btrfs check --readonly` 不进修复分支，随外部工具自带、只消费退出码（src/app/execute/diagnose.rs::run）
+btrfs-progs-01539	sites	裁剪	裁剪：check --repair 修复写路径（orphan item 插入/dev extent 删除）——固定 `btrfs check --readonly` 不进修复分支，随外部工具自带、只消费退出码（src/app/execute/diagnose.rs::run）
+btrfs-progs-01540	sites	裁剪	裁剪：check --repair 修复写路径（orphan item 插入/dev extent 删除）——固定 `btrfs check --readonly` 不进修复分支，随外部工具自带、只消费退出码（src/app/execute/diagnose.rs::run）

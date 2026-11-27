@@ -5,31 +5,31 @@ lvm2-doc-00003	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00004	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00005	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00006	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00007	docs	待判	换版重放：本行在上游新版本新增或改写
-lvm2-doc-00008	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00007	docs	裁剪	换版重放：同 lvm2-doc-00002（lvs attr 卷类型字符位显示面；本实现只按 SA2-011 解析文档化稳定字段）
+lvm2-doc-00008	docs	裁剪	同 lvm2-doc-00002（attr 权限位）
 lvm2-doc-00009	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00010	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00011	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00012	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00013	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00014	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00015	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00015	docs	裁剪	同 lvm2-doc-00002（attr 卷健康分组标题）
 lvm2-doc-00016	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00017	docs	待判	换版重放：本行在上游新版本新增或改写
-lvm2-doc-00018	docs	待判	换版重放：本行在上游新版本新增或改写
-lvm2-doc-00019	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00017	docs	裁剪	同 lvm2-doc-00002（attr partial/unknown 位）
+lvm2-doc-00018	docs	裁剪	同 lvm2-doc-00002（RAID 健康位）
+lvm2-doc-00019	docs	裁剪	同 lvm2-doc-00002（RAID refresh/mismatches 说明）
 lvm2-doc-00020	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00021	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00021	docs	裁剪	同 lvm2-doc-00002（thin pool 健康位）
 lvm2-doc-00022	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00023	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00023	docs	裁剪	同 lvm2-doc-00002（thin pool Failed 位）
 lvm2-doc-00024	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00025	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00025	docs	裁剪	同 lvm2-doc-00002（writecache Error 位）
 lvm2-doc-00026	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00027	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00028	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00028	docs	裁剪	同 lvm2-doc-00002（vgs attr 权限位）
 lvm2-doc-00029	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00030	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00031	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00031	docs	裁剪	同 lvm2-doc-00002（vgs partial 位）
 lvm2-doc-00032	docs	裁剪	同 lvm2-doc-00002
 lvm2-doc-00033	docs	裁剪	同 lvm2-doc-00002
-lvm2-doc-00034	docs	待判	换版重放：本行在上游新版本新增或改写
+lvm2-doc-00034	docs	裁剪	同 lvm2-doc-00002（vgs 持久保留位；SCSI PR 面不存在）

@@ -11,8 +11,8 @@ e2fsprogs-00749	sites	裁剪	同上
 e2fsprogs-00750	sites	裁剪	同上
 e2fsprogs-00765	sites	裁剪	同上
 e2fsprogs-00766	sites	裁剪	同上
-e2fsprogs-00767	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00768	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00767	sites	裁剪	裁剪：ehandler 读写失败后的 Ignore/Force rewrite 交互应答与 PR_2_DIR_CORRUPTED 修复判读——属 e2fsck 修复面与交互面，本实现不实现 fs 修复，只消费退出码（SA2-001/002）
+e2fsprogs-00768	sites	裁剪	裁剪：ehandler 读写失败后的 Ignore/Force rewrite 交互应答与 PR_2_DIR_CORRUPTED 修复判读——属 e2fsck 修复面与交互面，本实现不实现 fs 修复，只消费退出码（SA2-001/002）
 e2fsprogs-00769	sites	裁剪	同上
 e2fsprogs-00770	sites	裁剪	同上
 e2fsprogs-00771	sites	裁剪	同上
@@ -73,7 +73,7 @@ e2fsprogs-01147	sites	裁剪	同上
 e2fsprogs-01152	sites	裁剪	同上
 e2fsprogs-01154	sites	裁剪	同上
 e2fsprogs-01165	sites	裁剪	同上
-e2fsprogs-01168	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01168	sites	裁剪	裁剪：ehandler 读写失败后的 Ignore/Force rewrite 交互应答与 PR_2_DIR_CORRUPTED 修复判读——属 e2fsck 修复面与交互面，本实现不实现 fs 修复，只消费退出码（SA2-001/002）
 e2fsprogs-01169	sites	裁剪	同上
 e2fsprogs-01181	sites	裁剪	同上
 e2fsprogs-01246	sites	裁剪	同上

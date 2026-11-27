@@ -25,3 +25,11 @@
 ## 差异与拆分
 
 - 本批无差异（D-建议）行；结论混合时拆分建议见 plan/disposition/reports/chunk-C-parted.md。
+
+## 换版重放补充（2026-11-27：parted 3.6→3.8）
+
+- 本批新增/改写 3 行（00824/00825/00826 fs/r/fat/resize 断言），全部判**裁剪**：FAT 扩缩容不入范围——档案表按不支持拒绝（不接 fatresize，SA2-014）。
+
+**依据**：plan/baseline/incident-classes.tsv（行内引 SA id）；plan/baseline/refusal-map.tsv；行原文 plan/baseline/reference/sites/*.tsv；上游源码对照 /tmp/refsrc（新）与 /tmp/src（旧）。
+
+**撤回条件**：SA2-014 重开（上游 fatresize 修复分区设备视图断言、能证明 -s 语义安全）时重审。

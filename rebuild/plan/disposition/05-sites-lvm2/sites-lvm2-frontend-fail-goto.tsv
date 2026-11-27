@@ -4,15 +4,15 @@ lvm2-00046	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out�
 lvm2-00048	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00050	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00051	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00062	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00063	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00064	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00065	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00066	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00062	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
+lvm2-00063	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
+lvm2-00064	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
+lvm2-00065	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
+lvm2-00066	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
 lvm2-00287	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00288	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00290	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
-lvm2-00291	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00291	sites	拒绝	拒绝（架构差异-多虑）：工具/库内部失败清理跳转（goto out/err/bad）不复制——清理由 Rust Result/所有权结构承担；链内硬失败经非零退出映射（SA2-017，R0386），判定层等价（R0385-R0387/R0679-R0681）
 lvm2-00302	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00303	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住
 lvm2-00312	sites	裁剪	裁剪：工具/库内部失败清理路径（goto out）——随消费的 pvresize/lvextend 自带（SA2-017），非零退出由 R0386 兜住

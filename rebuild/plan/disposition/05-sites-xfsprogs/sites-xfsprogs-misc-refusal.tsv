@@ -10,7 +10,7 @@ xfsprogs-00671	sites	裁剪	同上
 xfsprogs-00672	sites	裁剪	同上
 xfsprogs-00673	sites	裁剪	同上
 xfsprogs-00674	sites	裁剪	同上
-xfsprogs-00675	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00675	sites	裁剪	裁剪：xfs_db sb label 写入截断路径——本实现不消费 db 工具（档案表只登记 growfs，crates/core/src/fs/catalog.rs），特性绑定不存在
 xfsprogs-00676	sites	裁剪	同上
 xfsprogs-00677	sites	裁剪	同上
 xfsprogs-00678	sites	裁剪	同上

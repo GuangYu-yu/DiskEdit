@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-lvm2-00010	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00012	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00015	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00010	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00012	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00015	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
 lvm2-00017	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00019	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00020	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00022	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
-lvm2-00023	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00023	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达

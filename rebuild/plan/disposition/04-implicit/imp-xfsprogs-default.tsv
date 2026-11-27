@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-xfsprogs-imp-00001	implicit	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-imp-00002	implicit	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-imp-00001	implicit	裁剪	换版重放：mkfs.xfs proto 硬链接增长因子内部常数；xfs 面只登记 growfs（SA2-004/005），mkfs 以档案表固定参数调用（SA2-012），常数不复制
+xfsprogs-imp-00002	implicit	裁剪	同 xfsprogs-imp-00001（XFS_MIN_REALISTIC_LOG_BLOCKS 日志下限常数）
 xfsprogs-imp-00003	implicit	裁剪	同上
 xfsprogs-imp-00004	implicit	裁剪	同上
 xfsprogs-imp-00005	implicit	裁剪	同上
 xfsprogs-imp-00006	implicit	裁剪	同上
-xfsprogs-imp-00012	implicit	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-imp-00012	implicit	裁剪	同 xfsprogs-imp-00001（MAX_RW_COUNT 单次写上限常数）

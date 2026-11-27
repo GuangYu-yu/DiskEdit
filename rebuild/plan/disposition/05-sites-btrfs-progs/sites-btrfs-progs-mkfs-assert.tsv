@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-btrfs-progs-00450	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00450	sites	拒绝	拒绝：mkfs.btrfs 内部 BUG_ON 不变量兜底（rootdir reflink 写入路径）——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=固定 `mkfs.btrfs -f [-L]` 调用只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）

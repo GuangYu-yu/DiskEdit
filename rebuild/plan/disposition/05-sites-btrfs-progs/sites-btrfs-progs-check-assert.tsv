@@ -2,15 +2,15 @@ row_id	ledger	state	note
 btrfs-progs-00769	sites	拒绝	拒绝：check 内部 BUG_ON/assert 不变量断言——上游 C 防御，本实现由 Rust 所有权/类型与穷尽匹配承担，逐点复刻属多虑（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）
 btrfs-progs-00770	sites	拒绝	同上
 btrfs-progs-00771	sites	拒绝	同上
-btrfs-progs-00772	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00772	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-00773	sites	拒绝	同上
-btrfs-progs-00778	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00780	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00781	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00778	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
+btrfs-progs-00780	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
+btrfs-progs-00781	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-00782	sites	拒绝	同上
 btrfs-progs-00783	sites	拒绝	同上
-btrfs-progs-00792	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00793	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00792	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
+btrfs-progs-00793	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-00807	sites	拒绝	同上
 btrfs-progs-00808	sites	拒绝	同上
 btrfs-progs-00810	sites	拒绝	同上
@@ -22,7 +22,7 @@ btrfs-progs-00839	sites	拒绝	同上
 btrfs-progs-00840	sites	拒绝	同上
 btrfs-progs-00841	sites	拒绝	同上
 btrfs-progs-00842	sites	拒绝	同上
-btrfs-progs-00850	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00850	sites	拒绝	拒绝：check 内部 BUG_ON 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
 btrfs-progs-00871	sites	拒绝	同上
 btrfs-progs-00874	sites	拒绝	同上
 btrfs-progs-00876	sites	拒绝	同上

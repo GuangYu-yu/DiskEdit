@@ -64,7 +64,7 @@ btrfs-progs-00931	sites	拒绝	同上
 btrfs-progs-00932	sites	拒绝	同上
 btrfs-progs-00933	sites	拒绝	同上
 btrfs-progs-00936	sites	拒绝	同上
-btrfs-progs-00943	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00943	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00945	sites	拒绝	同上
 btrfs-progs-00946	sites	拒绝	同上
 btrfs-progs-00948	sites	拒绝	同上
@@ -96,12 +96,12 @@ btrfs-progs-01000	sites	拒绝	同上
 btrfs-progs-01001	sites	拒绝	同上
 btrfs-progs-01032	sites	拒绝	同上
 btrfs-progs-01036	sites	拒绝	同上
-btrfs-progs-01038	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01038	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01039	sites	拒绝	同上
 btrfs-progs-01041	sites	拒绝	同上
 btrfs-progs-01043	sites	拒绝	同上
 btrfs-progs-01045	sites	拒绝	同上
-btrfs-progs-01047	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01047	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01049	sites	拒绝	同上
 btrfs-progs-01050	sites	拒绝	同上
 btrfs-progs-01051	sites	拒绝	同上
@@ -129,10 +129,10 @@ btrfs-progs-01090	sites	拒绝	同上
 btrfs-progs-01091	sites	拒绝	同上
 btrfs-progs-01113	sites	拒绝	同上
 btrfs-progs-01115	sites	拒绝	同上
-btrfs-progs-01117	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01137	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01117	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-01137	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01143	sites	拒绝	同上
-btrfs-progs-01149	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01149	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01151	sites	拒绝	同上
 btrfs-progs-01155	sites	拒绝	同上
 btrfs-progs-01157	sites	拒绝	同上
@@ -257,7 +257,7 @@ btrfs-progs-01357	sites	拒绝	同上
 btrfs-progs-01358	sites	拒绝	同上
 btrfs-progs-01359	sites	拒绝	同上
 btrfs-progs-01361	sites	拒绝	同上
-btrfs-progs-01363	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01363	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01369	sites	拒绝	同上
 btrfs-progs-01371	sites	拒绝	同上
 btrfs-progs-01372	sites	拒绝	同上
@@ -270,11 +270,11 @@ btrfs-progs-01388	sites	拒绝	同上
 btrfs-progs-01389	sites	拒绝	同上
 btrfs-progs-01390	sites	拒绝	同上
 btrfs-progs-01391	sites	拒绝	同上
-btrfs-progs-01393	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01395	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01393	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-01395	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01397	sites	拒绝	同上
-btrfs-progs-01399	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01400	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01399	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-01400	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01403	sites	拒绝	同上
 btrfs-progs-01404	sites	拒绝	同上
 btrfs-progs-01405	sites	拒绝	同上
@@ -295,7 +295,7 @@ btrfs-progs-01430	sites	拒绝	同上
 btrfs-progs-01431	sites	拒绝	同上
 btrfs-progs-01432	sites	拒绝	同上
 btrfs-progs-01441	sites	拒绝	同上
-btrfs-progs-01444	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01444	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01446	sites	拒绝	同上
 btrfs-progs-01451	sites	拒绝	同上
 btrfs-progs-01452	sites	拒绝	同上
@@ -311,7 +311,7 @@ btrfs-progs-01469	sites	拒绝	同上
 btrfs-progs-01471	sites	拒绝	同上
 btrfs-progs-01472	sites	拒绝	同上
 btrfs-progs-01473	sites	拒绝	同上
-btrfs-progs-01475	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01475	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01477	sites	拒绝	同上
 btrfs-progs-01478	sites	拒绝	同上
 btrfs-progs-01484	sites	拒绝	同上
@@ -323,15 +323,15 @@ btrfs-progs-01492	sites	拒绝	同上
 btrfs-progs-01496	sites	拒绝	同上
 btrfs-progs-01497	sites	拒绝	同上
 btrfs-progs-01500	sites	拒绝	同上
-btrfs-progs-01501	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01502	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01501	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-01502	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01506	sites	拒绝	同上
 btrfs-progs-01507	sites	拒绝	同上
 btrfs-progs-01508	sites	拒绝	同上
 btrfs-progs-01510	sites	拒绝	同上
 btrfs-progs-01512	sites	拒绝	同上
 btrfs-progs-01514	sites	拒绝	同上
-btrfs-progs-01515	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01515	sites	拒绝	拒绝：check 内部失败清理跳转（goto out/err/close_out）——上游 C 防御模式，本实现不实现检查器，只按固定参数 `btrfs check --readonly` 消费退出码（crates/core/src/fs/catalog.rs check=Tools(BTRFS)、src/platform/linux/tools.rs::check_arguments、src/app/execute/diagnose.rs::run）；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-01517	sites	拒绝	同上
 btrfs-progs-01519	sites	拒绝	同上
 btrfs-progs-01522	sites	拒绝	同上

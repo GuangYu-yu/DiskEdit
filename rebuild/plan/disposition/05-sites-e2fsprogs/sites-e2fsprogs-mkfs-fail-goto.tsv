@@ -27,4 +27,4 @@ e2fsprogs-02023	sites	裁剪	同上
 e2fsprogs-02024	sites	裁剪	同上
 e2fsprogs-02025	sites	裁剪	同上
 e2fsprogs-02026	sites	裁剪	同上
-e2fsprogs-02027	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-02027	sites	裁剪	裁剪：lib/ext2fs initialize 内部失败清理路径——随外部工具自带，mke2fs 以固定参数调用，非零退出即失败（src/app/execute/filesystem.rs::mkfs_invocation）

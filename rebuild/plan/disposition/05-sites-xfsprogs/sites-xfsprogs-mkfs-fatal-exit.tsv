@@ -3,24 +3,24 @@ xfsprogs-00053	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口—�
 xfsprogs-00055	sites	裁剪	同上
 xfsprogs-00058	sites	裁剪	同上
 xfsprogs-00060	sites	裁剪	同上
-xfsprogs-00065	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00065	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00068	sites	裁剪	同上
-xfsprogs-00070	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00083	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00085	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00070	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00083	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00085	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00095	sites	裁剪	同上
 xfsprogs-00097	sites	裁剪	同上
 xfsprogs-00099	sites	裁剪	同上
 xfsprogs-00101	sites	裁剪	同上
 xfsprogs-00105	sites	裁剪	同上
-xfsprogs-00129	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00144	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00146	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00148	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00150	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00153	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00155	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00157	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00129	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00144	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00146	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00148	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00150	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00153	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00155	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00157	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00161	sites	裁剪	同上
 xfsprogs-00163	sites	裁剪	同上
 xfsprogs-00165	sites	裁剪	同上
@@ -58,14 +58,14 @@ xfsprogs-00255	sites	裁剪	同上
 xfsprogs-00257	sites	裁剪	同上
 xfsprogs-00259	sites	裁剪	同上
 xfsprogs-00261	sites	裁剪	同上
-xfsprogs-00265	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00267	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00265	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00267	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00269	sites	裁剪	同上
-xfsprogs-00272	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00272	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00275	sites	裁剪	同上
 xfsprogs-00278	sites	裁剪	同上
 xfsprogs-00281	sites	裁剪	同上
-xfsprogs-00283	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00283	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00285	sites	裁剪	同上
 xfsprogs-00287	sites	裁剪	同上
 xfsprogs-00289	sites	裁剪	同上
@@ -80,39 +80,39 @@ xfsprogs-00309	sites	裁剪	同上
 xfsprogs-00312	sites	裁剪	同上
 xfsprogs-00315	sites	裁剪	同上
 xfsprogs-00318	sites	裁剪	同上
-xfsprogs-00321	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00324	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00327	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00330	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00321	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00324	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00327	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00330	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00333	sites	裁剪	同上
 xfsprogs-00336	sites	裁剪	同上
-xfsprogs-00339	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00342	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00339	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00342	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00345	sites	裁剪	同上
-xfsprogs-00347	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00347	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00349	sites	裁剪	同上
-xfsprogs-00352	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00355	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00358	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00361	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00352	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00355	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00358	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00361	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00364	sites	裁剪	同上
-xfsprogs-00367	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00370	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00367	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00370	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00373	sites	裁剪	同上
 xfsprogs-00375	sites	裁剪	同上
 xfsprogs-00377	sites	裁剪	同上
 xfsprogs-00381	sites	裁剪	同上
 xfsprogs-00383	sites	裁剪	同上
 xfsprogs-00387	sites	裁剪	同上
-xfsprogs-00390	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00390	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00394	sites	裁剪	同上
 xfsprogs-00397	sites	裁剪	同上
 xfsprogs-00400	sites	裁剪	同上
 xfsprogs-00403	sites	裁剪	同上
-xfsprogs-00406	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00406	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00410	sites	裁剪	同上
 xfsprogs-00415	sites	裁剪	同上
-xfsprogs-00417	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00417	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00420	sites	裁剪	同上
 xfsprogs-00423	sites	裁剪	同上
 xfsprogs-00426	sites	裁剪	同上
@@ -123,8 +123,8 @@ xfsprogs-00438	sites	裁剪	同上
 xfsprogs-00441	sites	裁剪	同上
 xfsprogs-00444	sites	裁剪	同上
 xfsprogs-00446	sites	裁剪	同上
-xfsprogs-00449	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00451	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00449	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00451	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00453	sites	裁剪	同上
 xfsprogs-00457	sites	裁剪	同上
 xfsprogs-00460	sites	裁剪	同上
@@ -138,60 +138,60 @@ xfsprogs-00479	sites	裁剪	同上
 xfsprogs-00482	sites	裁剪	同上
 xfsprogs-00486	sites	裁剪	同上
 xfsprogs-00491	sites	裁剪	同上
-xfsprogs-00496	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00498	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00496	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00498	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00504	sites	裁剪	同上
 xfsprogs-00506	sites	裁剪	同上
-xfsprogs-00509	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00512	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00514	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00519	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00521	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00523	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00525	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00527	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00530	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00532	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00535	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00538	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00509	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00512	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00514	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00519	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00521	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00523	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00525	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00527	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00530	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00532	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00535	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00538	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00541	sites	裁剪	同上
 xfsprogs-00544	sites	裁剪	同上
-xfsprogs-00547	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00550	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00555	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00557	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00547	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00550	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00555	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00557	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00560	sites	裁剪	同上
-xfsprogs-00563	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00563	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00566	sites	裁剪	同上
-xfsprogs-00568	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00568	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00572	sites	裁剪	同上
-xfsprogs-00575	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00578	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00581	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00575	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00578	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00581	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00584	sites	裁剪	同上
-xfsprogs-00586	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00589	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00591	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00593	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00586	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00589	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00591	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00593	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00595	sites	裁剪	同上
 xfsprogs-00597	sites	裁剪	同上
-xfsprogs-00599	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00601	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00599	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00601	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00610	sites	裁剪	同上
-xfsprogs-00619	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00622	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00624	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00627	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00630	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00632	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00634	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00639	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00642	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00619	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00622	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00624	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00627	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00630	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00632	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00634	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00639	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00642	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00645	sites	裁剪	同上
-xfsprogs-00647	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00649	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00655	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00658	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00660	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00647	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00649	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00655	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00658	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00660	sites	裁剪	裁剪：mkfs.xfs usage/OOM/fail() 致命出口——固定参数调用下 usage 不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00661	sites	裁剪	同上
 xfsprogs-00662	sites	裁剪	同上

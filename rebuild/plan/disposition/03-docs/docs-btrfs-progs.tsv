@@ -4,12 +4,12 @@ btrfs-progs-doc-00002	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00003	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00004	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00005	docs	裁剪	同 btrfs-progs-doc-00001
-btrfs-progs-doc-00006	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00007	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00006	docs	裁剪	换版重放：同 btrfs-progs-doc-00001（defragment 压缩等级注记，defragment 不在依赖面）
+btrfs-progs-doc-00007	docs	裁剪	同 btrfs-progs-doc-00001（defragment --nocomp/-r/-f）
 btrfs-progs-doc-00008	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00009	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00010	docs	裁剪	同 btrfs-progs-doc-00001
-btrfs-progs-doc-00011	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00011	docs	裁剪	同 btrfs-progs-doc-00001（defragment --step 步进）
 btrfs-progs-doc-00012	docs	裁剪	同 btrfs-progs-doc-00001
 btrfs-progs-doc-00013	docs	裁剪	btrfs filesystem du 空间统计显示面不实现
 btrfs-progs-doc-00014	docs	裁剪	同 btrfs-progs-doc-00012
@@ -20,37 +20,37 @@ btrfs-progs-doc-00018	docs	裁剪	同 btrfs-progs-doc-00012
 btrfs-progs-doc-00019	docs	认领	"label show/update 在 btrfs attrs 面（catalog.rs BTRFS Program；SA2-012）；""≤256 字节无换行""约束由上游自保，本实现按 SA2-011 稳定字段回读"
 btrfs-progs-doc-00020	docs	认领	同 btrfs-progs-doc-00018（label 读写经档案表登记程序）
 btrfs-progs-doc-00021	docs	认领	同 btrfs-progs-doc-00018
-btrfs-progs-doc-00022	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00022	docs	裁剪	换版重放：btrfs mkswapfile/swapfile 创建面不在依赖面（本实现不制作 swap 文件）
 btrfs-progs-doc-00023	docs	裁剪	同 btrfs-progs-doc-00021
-btrfs-progs-doc-00024	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00025	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00024	docs	裁剪	同 btrfs-progs-doc-00022（swapfile 激活属 swapon(8) 面）
+btrfs-progs-doc-00025	docs	裁剪	同 btrfs-progs-doc-00022
 btrfs-progs-doc-00026	docs	裁剪	同 btrfs-progs-doc-00021
-btrfs-progs-doc-00027	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00027	docs	裁剪	同 btrfs-progs-doc-00022（--pagesize 选项面）
 btrfs-progs-doc-00028	docs	裁剪	同 btrfs-progs-doc-00021
 btrfs-progs-doc-00029	docs	裁剪	同 btrfs-progs-doc-00021
 btrfs-progs-doc-00030	docs	认领	SA2-006/007/008/016：resize 面向已挂载文件系统、按带单位大小执行，成功才落分区表（先 fs 后表）；测试锚 tests/online.rs
-btrfs-progs-doc-00031	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00031	docs	裁剪	换版重放：文件镜像载体（--offline resize）不在目标面；本实现目标为块设备/分区，btrfs resize 语义由 SA2-006/016 承接
 btrfs-progs-doc-00032	docs	认领	同 btrfs-progs-doc-00028
 btrfs-progs-doc-00033	docs	认领	同 btrfs-progs-doc-00028
-btrfs-progs-doc-00034	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00035	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00034	docs	认领	换版重放：SA2-006/007/016+tests/online.rs——先扩分区再扩文件系统、先缩文件系统再缩分区正是本实现固定次序（grow：表→内核视图→fs；shrink：fs 成功才落表，失败不动分区表）
+btrfs-progs-doc-00035	docs	认领	换版重放：SA2-006——扩容完成以 superblock total_bytes/sectorsize 回读证实，与 dump-super dev_item.total_bytes 同源（tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock）
 btrfs-progs-doc-00036	docs	认领	同 btrfs-progs-doc-00028（devid 形态由单设备载体承接）
-btrfs-progs-doc-00037	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00037	docs	认领	换版重放：SA2-007/016——低于文件系统最小值由 resize 工具失败拒绝继续、分区表不动；min-dev-size 探测面不提供（同 btrfs-progs-doc-00072）
 btrfs-progs-doc-00038	docs	认领	同 btrfs-progs-doc-00028（max 形态由 grow 承接，observe/mod.rs SizeSpec::Grow）
 btrfs-progs-doc-00039	docs	认领	同 btrfs-progs-doc-00028
-btrfs-progs-doc-00040	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00041	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00042	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00040	docs	裁剪	换版重放：--enqueue/--offline 上游选项面；互斥由本实现自建占用闸承接（SA1-004），resize 以档案表固定参数调用（SA2-006）
+btrfs-progs-doc-00041	docs	裁剪	同 btrfs-progs-doc-00031（--offline 单设备只增面不适用）
+btrfs-progs-doc-00042	docs	裁剪	同 btrfs-progs-doc-00031（文件镜像截断语义不适用）
 btrfs-progs-doc-00043	docs	裁剪	btrfs filesystem show 扫描面不实现（识别以档案表为唯一事实源 SA1-017）
 btrfs-progs-doc-00044	docs	裁剪	同 btrfs-progs-doc-00037
 btrfs-progs-doc-00045	docs	裁剪	同 btrfs-progs-doc-00037
 btrfs-progs-doc-00046	docs	裁剪	同 btrfs-progs-doc-00037
 btrfs-progs-doc-00047	docs	裁剪	同 btrfs-progs-doc-00037
-btrfs-progs-doc-00048	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00049	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00048	docs	裁剪	换版重放：同 btrfs-progs-doc-00053（commit-stats 显示面）
+btrfs-progs-doc-00049	docs	裁剪	同 btrfs-progs-doc-00053
 btrfs-progs-doc-00050	docs	裁剪	同 btrfs-progs-doc-00043
-btrfs-progs-doc-00051	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00052	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00051	docs	裁剪	同 btrfs-progs-doc-00053（-z reset）
+btrfs-progs-doc-00052	docs	裁剪	换版重放：btrfs filesystem sync 子命令不提供；落盘语义由写路径 sync_all 承担（SA1-011，同 btrfs-progs-imp-00001）
 btrfs-progs-doc-00053	docs	裁剪	btrfs filesystem usage 显示面不实现
 btrfs-progs-doc-00054	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00055	docs	裁剪	同 btrfs-progs-doc-00043
@@ -64,20 +64,20 @@ btrfs-progs-doc-00062	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00063	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00064	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00065	docs	裁剪	同 btrfs-progs-doc-00043
-btrfs-progs-doc-00066	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00066	docs	裁剪	换版重放：Options 节标题排版行，无行为面
 btrfs-progs-doc-00067	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00068	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00069	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00070	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00071	docs	裁剪	同 btrfs-progs-doc-00043
 btrfs-progs-doc-00072	docs	认领	SA2-007/SA2-016：收缩由 btrfs resize 执行、失败落已写待恢复且不动分区表；低于文件系统最小值由工具失败拒绝继续（min-dev-size 探测面不提供）
-btrfs-progs-doc-00073	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00073	docs	裁剪	换版重放：btrfs check 不在扩缩链（收缩经挂载 resize，SA2-007）；好镜像自动选择属工具内部
 btrfs-progs-doc-00074	docs	裁剪	btrfs check --repair 交互告警面不实现；btrfs check 不在扩缩链（收缩经挂载 resize，SA2-007）
 btrfs-progs-doc-00075	docs	裁剪	同 btrfs-progs-doc-00063
 btrfs-progs-doc-00076	docs	裁剪	同 btrfs-progs-doc-00063
 btrfs-progs-doc-00077	docs	裁剪	同 btrfs-progs-doc-00063
 btrfs-progs-doc-00078	docs	裁剪	同 btrfs-progs-doc-00063
-btrfs-progs-doc-00079	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00079	docs	裁剪	换版重放：同 btrfs-progs-doc-00074（check 的 replace/balance 占用告警面）
 btrfs-progs-doc-00080	docs	裁剪	同 btrfs-progs-doc-00063
 btrfs-progs-doc-00081	docs	裁剪	同 btrfs-progs-doc-00063
 btrfs-progs-doc-00082	docs	裁剪	同 btrfs-progs-doc-00063
@@ -103,36 +103,36 @@ btrfs-progs-doc-00101	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00102	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00103	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00104	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00105	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00106	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00107	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00105	docs	裁剪	换版重放：同 btrfs-progs-doc-00080（mkfs sectorsize 默认演进注记；mkfs 以档案表固定参数调用，SA2-012）
+btrfs-progs-doc-00106	docs	裁剪	同 btrfs-progs-doc-00080（sectorsize/page 挂载告警）
+btrfs-progs-doc-00107	docs	裁剪	同 btrfs-progs-doc-00080（实验性 2K sectorsize）
 btrfs-progs-doc-00108	docs	认领	mkfs 的 label 参数承接（observe/mod.rs Command::Mkfs label 字段；SA2-012）；长度约束由上游自保
 btrfs-progs-doc-00109	docs	裁剪	上游 -K nodiscard 选项面；本实现 mkfs 以固定参数调用不照搬开关（SA2-012），表/盘面零 discard 由 SA1-006 承接
 btrfs-progs-doc-00110	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00111	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00111	docs	裁剪	同 btrfs-progs-doc-00080（--rootdir 子卷/硬链接面）
 btrfs-progs-doc-00112	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00113	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00114	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00115	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00116	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00117	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00118	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00119	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00120	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00121	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00122	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00123	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00124	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00125	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00126	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00127	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00128	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00129	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00130	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00131	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00132	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00133	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00134	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00113	docs	裁剪	同 btrfs-progs-doc-00080（--compress 压缩面）
+btrfs-progs-doc-00114	docs	裁剪	同 btrfs-progs-doc-00080（压缩等级建议）
+btrfs-progs-doc-00115	docs	裁剪	同 btrfs-progs-doc-00080（不可压不写压缩 extent）
+btrfs-progs-doc-00116	docs	裁剪	同 btrfs-progs-doc-00080（ZSTD/LZO 编译期开关）
+btrfs-progs-doc-00117	docs	裁剪	同 btrfs-progs-doc-00080（-u|--subvol 选项面）
+btrfs-progs-doc-00118	docs	裁剪	同 btrfs-progs-doc-00080（subvol 类型修饰符）
+btrfs-progs-doc-00119	docs	裁剪	同 btrfs-progs-doc-00080（subvol 类型枚举）
+btrfs-progs-doc-00120	docs	裁剪	同 btrfs-progs-doc-00080（default/default-ro 互斥）
+btrfs-progs-doc-00121	docs	裁剪	同 btrfs-progs-doc-00080（冒号路径转义）
+btrfs-progs-doc-00122	docs	裁剪	同 btrfs-progs-doc-00080（man 示例行）
+btrfs-progs-doc-00123	docs	裁剪	同 btrfs-progs-doc-00080（硬链接拆分示例）
+btrfs-progs-doc-00124	docs	裁剪	同 btrfs-progs-doc-00080（目录树排版行）
+btrfs-progs-doc-00125	docs	裁剪	同 btrfs-progs-doc-00080（硬链接跨子卷限制）
+btrfs-progs-doc-00126	docs	裁剪	同 btrfs-progs-doc-00080（--inode-flags 选项面）
+btrfs-progs-doc-00127	docs	裁剪	同 btrfs-progs-doc-00080（flag 枚举标题）
+btrfs-progs-doc-00128	docs	裁剪	同 btrfs-progs-doc-00080（nodatacow/nodatasum）
+btrfs-progs-doc-00129	docs	裁剪	同 btrfs-progs-doc-00080（flag 逗号分隔）
+btrfs-progs-doc-00130	docs	裁剪	同 btrfs-progs-doc-00080（flag 继承说明）
+btrfs-progs-doc-00131	docs	裁剪	同 btrfs-progs-doc-00080（目录树排版行）
+btrfs-progs-doc-00132	docs	裁剪	同 btrfs-progs-doc-00080（继承示例）
+btrfs-progs-doc-00133	docs	裁剪	同 btrfs-progs-doc-00080（subvol flag 独立性）
+btrfs-progs-doc-00134	docs	裁剪	同 btrfs-progs-doc-00080（--reflink FICLONERANGE 面）
 btrfs-progs-doc-00135	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00136	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00137	docs	裁剪	同 btrfs-progs-doc-00080
@@ -144,16 +144,16 @@ btrfs-progs-doc-00142	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00143	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00144	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00145	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00146	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00146	docs	裁剪	换版重放：mkfs.btrfs 自身 --version 开关；本实现版本信息由自身 CLI 提供，mkfs 以固定参数调用（SA2-012）
 btrfs-progs-doc-00147	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00148	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00149	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00150	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00151	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00152	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00153	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00154	docs	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-doc-00155	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00150	docs	裁剪	换版重放：同 btrfs-progs-doc-00080（block-group-tree 特性依赖位）
+btrfs-progs-doc-00151	docs	裁剪	同 btrfs-progs-doc-00080（raid-stripe-tree 特性位）
+btrfs-progs-doc-00152	docs	裁剪	同 btrfs-progs-doc-00080（raid-stripe-tree 说明）
+btrfs-progs-doc-00153	docs	裁剪	同 btrfs-progs-doc-00080（raid-stripe-tree 实验状态）
+btrfs-progs-doc-00154	docs	裁剪	同 btrfs-progs-doc-00080（squota 特性位）
+btrfs-progs-doc-00155	docs	裁剪	同 btrfs-progs-doc-00080（squota 说明）
 btrfs-progs-doc-00156	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00157	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00158	docs	裁剪	同 btrfs-progs-doc-00080
@@ -168,15 +168,15 @@ btrfs-progs-doc-00166	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00167	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00168	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00169	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00170	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00170	docs	裁剪	换版重放：同 btrfs-progs-doc-00130（btrfstune 不在依赖面）
 btrfs-progs-doc-00171	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00172	docs	裁剪	btrfstune（seeding/fsid 变更）不在依赖面
 btrfs-progs-doc-00173	docs	裁剪	同 btrfs-progs-doc-00130
 btrfs-progs-doc-00174	docs	裁剪	同 btrfs-progs-doc-00130
-btrfs-progs-doc-00175	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00175	docs	裁剪	换版重放：同 btrfs-progs-doc-00130（btrfstune fsid 变更面；本实现身份面只管分区 PARTUUID，SA1-007/SA3-001）
 btrfs-progs-doc-00176	docs	裁剪	同 btrfs-progs-doc-00130
 btrfs-progs-doc-00177	docs	裁剪	同 btrfs-progs-doc-00130
 btrfs-progs-doc-00178	docs	裁剪	同 btrfs-progs-doc-00130
 btrfs-progs-doc-00179	docs	裁剪	同 btrfs-progs-doc-00130
 btrfs-progs-doc-00180	docs	裁剪	同 btrfs-progs-doc-00130
-btrfs-progs-doc-00181	docs	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-doc-00181	docs	裁剪	换版重放：同 btrfs-progs-doc-00130（btrfstune --version 开关）

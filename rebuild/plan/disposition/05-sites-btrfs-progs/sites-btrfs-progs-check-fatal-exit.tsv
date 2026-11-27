@@ -8,5 +8,5 @@ btrfs-progs-01100	sites	裁剪	同上
 btrfs-progs-01102	sites	裁剪	同上
 btrfs-progs-01104	sites	裁剪	同上
 btrfs-progs-01106	sites	裁剪	同上
-btrfs-progs-01108	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01110	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01108	sites	裁剪	裁剪：check 新选项面（--skip-qgroup-accounting/--qgroup-report 与 --repair 组合）致命出口——固定 `btrfs check --readonly` 下不可达，非零退出码统一按 check 失败映射（src/app/execute/diagnose.rs::run）
+btrfs-progs-01110	sites	裁剪	裁剪：check 新选项面（--skip-qgroup-accounting/--qgroup-report 与 --repair 组合）致命出口——固定 `btrfs check --readonly` 下不可达，非零退出码统一按 check 失败映射（src/app/execute/diagnose.rs::run）

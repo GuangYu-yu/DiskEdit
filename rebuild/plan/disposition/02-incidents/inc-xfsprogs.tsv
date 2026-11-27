@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-xfsprogs-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00003	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00004	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00005	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00006	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00007	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00008	incidents	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-inc-00009	incidents	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-inc-00001	incidents	裁剪	换版重放：依赖工具 xfsprogs 的内部修复/特性（CHANGES 聚合块：healer/fiemap/xfs_scrub/mdrestore 等程序自身）；本实现仅按档案表以 xfs_growfs 承接在线扩容（SA2-004/005）及登记的 mkfs/attrs 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
+xfsprogs-inc-00002	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：fsr/xfs_scrub/mkfs/xfs_protofile，不含 xfs_growfs）
+xfsprogs-inc-00003	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：xfs_scrub/xfs_quota，不含 xfs_growfs）
+xfsprogs-inc-00004	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：xfs_io/mkfs/libxfs，不含 xfs_growfs）
+xfsprogs-inc-00005	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：mkfs/xfs_logprint/mdrestore/libfrog，不含 xfs_growfs）
+xfsprogs-inc-00006	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：xfs_scrub_all/xfs_protofile/xfs_repair，不含 xfs_growfs）
+xfsprogs-inc-00007	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：xfs_protofile/xfs_repair/mkfs，不含 xfs_growfs）
+xfsprogs-inc-00008	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：xfs_io/xfs_repair/xfs_spaceman，不含 xfs_growfs）
+xfsprogs-inc-00009	incidents	裁剪	同 xfsprogs-inc-00001（CHANGES 聚合块：mkfs/xfs_scrub/xfs_property/xfs_db，不含 xfs_growfs）
 xfsprogs-inc-00010	incidents	裁剪	依赖工具 xfsprogs 的内部修复/特性（xfs_repair/mkfs.xfs/xfs_db/xfs_io/metadump/quota/logprint/libxfs 程序自身）；本实现仅按档案表以 xfs_growfs 承接在线扩容（SA2-004/005）及登记的 mkfs/attrs 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
 xfsprogs-inc-00011	incidents	裁剪	同 xfsprogs-inc-00001
 xfsprogs-inc-00012	incidents	裁剪	同 xfsprogs-inc-00001

@@ -29,3 +29,11 @@
 ## 差异与拆分
 
 - 本批无差异（D-建议）行；结论混合时拆分建议见 plan/disposition/reports/chunk-C-parted.md。
+
+## 换版重放补充（2026-11-27：parted 3.6→3.8）
+
+- 本批新增/改写 3 行（01171/01172 atari 盘标注册与结构尺寸断言、01398 fdasd 参数断言），全部判**裁剪**：atari/fdasd/dasd 老盘标不识别，统一按未知拒绝（SA1-016）。
+
+**依据**：plan/baseline/incident-classes.tsv（行内引 SA id）；plan/baseline/refusal-map.tsv；行原文 plan/baseline/reference/sites/*.tsv；上游源码对照 /tmp/refsrc（新）与 /tmp/src（旧）。
+
+**撤回条件**：SA1-016 重开（出现必须识别对应盘标的外部契约）时重审。

@@ -20,14 +20,14 @@ libfdisk-00842	sites	裁剪	同上
 libfdisk-00846	sites	认领	GPT 激活语义定案：set flag boot 落 ESP 类型 GUID，legacy active 不写保护 MBR。依据：SA1-015
 libfdisk-00848	sites	认领	同上
 libfdisk-00850	sites	认领	同上
-libfdisk-00853	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00853	sites	认领	delete 已实现——分区号解析拒绝（parse.rs 白名单与目标校验）。依据：SA1-015、SA1-027、R0046 族
 libfdisk-00874	sites	认领	同上
 libfdisk-00881	sites	认领	同上
 libfdisk-00888	sites	认领	同上
 libfdisk-00895	sites	认领	同上
-libfdisk-00902	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00904	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00905	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00902	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
+libfdisk-00904	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
+libfdisk-00905	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
 libfdisk-00914	sites	认领	loop 绑定已有（src/platform loop binding；镜像分区经 loop 视图检查）。依据：SA1-002 同口径
 libfdisk-00915	sites	认领	同上
 libfdisk-00926	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（fdisk 菜单循环/失败提示）
@@ -40,20 +40,20 @@ libfdisk-00941	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提�
 libfdisk-00943	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
 libfdisk-00944	sites	认领	同上
 libfdisk-00951	sites	认领	同上
-libfdisk-00955	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00955	sites	认领	--sector-size 校验已有（parse.rs，2 的幂；上游白名单 512/1024/2048/4096）。依据：R0092
 libfdisk-00961	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00963	sites	裁剪	同上
 libfdisk-00965	sites	裁剪	同上
 libfdisk-00972	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
 libfdisk-00974	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
-libfdisk-00980	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00980	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——上界拒绝语义已有（SA1-014 resize 拒绝越上界/不安全收缩），菜单对话框裁剪。依据：SA1-010、特性依据=交互面
 libfdisk-00988	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
 libfdisk-00989	sites	认领	同上
 libfdisk-00990	sites	认领	同上
-libfdisk-00991	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00997	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01003	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01004	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00991	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00997	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-01003	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-01004	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
 libfdisk-01007	sites	认领	 dump 面定案：info JSON 输出。依据：SA1-010
 libfdisk-01008	sites	认领	同上
 libfdisk-01019	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
@@ -81,12 +81,12 @@ libfdisk-01111	sites	认领	同上
 libfdisk-01112	sites	认领	同上
 libfdisk-01113	sites	认领	同上
 libfdisk-01117	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
-libfdisk-01118	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01119	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01118	sites	裁剪	cfdisk TUI 写盘标失败提示——写失败退出码映射已有（SA1-009），TUI 提示面裁剪。依据：SA1-010、特性依据=交互面（cfdisk TUI）
+libfdisk-01119	sites	认领	签名语义定案——撞签检测与拒绝已实现（new 遇已有数据须显式 --overwrite-data，否则拒绝且目标字节不变）；cfdisk TUI 本体不提供，检测语义已落地。依据：SA1-005、SA1-006
 libfdisk-01120	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
 libfdisk-01121	sites	认领	同上
 libfdisk-01122	sites	认领	同上
 libfdisk-01123	sites	认领	同上
 libfdisk-01125	sites	认领	同上
-libfdisk-01126	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01128	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01126	sites	裁剪	cfdisk TUI 帮助/选项面——交互面未实现。依据：SA1-010、特性依据=交互面（cfdisk TUI）
+libfdisk-01128	sites	认领	--sector-size 校验已有（parse.rs，2 的幂，覆盖 cfdisk -b 同语义；cfdisk TUI 本体不提供）。依据：R0092

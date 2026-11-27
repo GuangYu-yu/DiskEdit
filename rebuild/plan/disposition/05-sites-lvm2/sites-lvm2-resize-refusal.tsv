@@ -3,13 +3,13 @@ lvm2-00001	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道
 lvm2-00002	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00004	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
 lvm2-00006	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
-lvm2-00008	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00009	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00011	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00013	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00014	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00016	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00008	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00009	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00011	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00013	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00014	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00016	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
 lvm2-00021	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
-lvm2-00024	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00025	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00026	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00024	sites	裁剪	裁剪：lvresize CLI 参数面（--fs/--resizefs/--fsmode/policy）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现固定参数 lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达
+lvm2-00025	sites	认领	认领：SA2-017——fs resize 期间 VG 变更的并发守卫随消费的 lvextend -r 交付，硬失败经非零退出映射（R0386）；链后回读核验（src/app/lvm.rs::grow_chain 的 lv_state 回读）
+lvm2-00026	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）

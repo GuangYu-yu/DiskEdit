@@ -68,7 +68,7 @@ e2fsprogs-00923	sites	裁剪	同上
 e2fsprogs-00924	sites	裁剪	同上
 e2fsprogs-00925	sites	裁剪	同上
 e2fsprogs-00926	sites	裁剪	同上
-e2fsprogs-00927	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00927	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-00928	sites	裁剪	同上
 e2fsprogs-00929	sites	裁剪	同上
 e2fsprogs-00930	sites	裁剪	同上
@@ -94,10 +94,10 @@ e2fsprogs-00956	sites	裁剪	同上
 e2fsprogs-00957	sites	裁剪	同上
 e2fsprogs-00958	sites	裁剪	同上
 e2fsprogs-00959	sites	裁剪	同上
-e2fsprogs-00960	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00960	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-00961	sites	裁剪	同上
 e2fsprogs-00962	sites	裁剪	同上
-e2fsprogs-00963	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00963	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-00964	sites	裁剪	同上
 e2fsprogs-00965	sites	裁剪	同上
 e2fsprogs-00966	sites	裁剪	同上
@@ -133,7 +133,7 @@ e2fsprogs-01000	sites	裁剪	同上
 e2fsprogs-01001	sites	裁剪	同上
 e2fsprogs-01002	sites	裁剪	同上
 e2fsprogs-01003	sites	裁剪	同上
-e2fsprogs-01004	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01004	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-01005	sites	裁剪	同上
 e2fsprogs-01006	sites	裁剪	同上
 e2fsprogs-01007	sites	裁剪	同上
@@ -145,10 +145,10 @@ e2fsprogs-01012	sites	裁剪	同上
 e2fsprogs-01013	sites	裁剪	同上
 e2fsprogs-01014	sites	裁剪	同上
 e2fsprogs-01015	sites	裁剪	同上
-e2fsprogs-01016	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01016	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-01017	sites	裁剪	同上
 e2fsprogs-01018	sites	裁剪	同上
-e2fsprogs-01020	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01020	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-01021	sites	裁剪	同上
 e2fsprogs-01022	sites	裁剪	同上
 e2fsprogs-01023	sites	裁剪	同上
@@ -314,7 +314,7 @@ e2fsprogs-01235	sites	裁剪	同上
 e2fsprogs-01236	sites	裁剪	同上
 e2fsprogs-01237	sites	裁剪	同上
 e2fsprogs-01238	sites	裁剪	同上
-e2fsprogs-01239	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01239	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-01240	sites	裁剪	同上
 e2fsprogs-01241	sites	裁剪	同上
 e2fsprogs-01244	sites	裁剪	同上
@@ -426,8 +426,8 @@ e2fsprogs-01855	sites	裁剪	同上
 e2fsprogs-01856	sites	裁剪	同上
 e2fsprogs-01857	sites	裁剪	同上
 e2fsprogs-01858	sites	裁剪	同上
-e2fsprogs-01859	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-01860	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01859	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
+e2fsprogs-01860	sites	裁剪	裁剪：e2fsck fix_problem 修复判读消息（1.47.4 新增 ea_inode 族/zero dtime/超前 mount 时间等站点）——属 e2fsck 修复器本体，本实现不实现 fs 修复，只消费退出码（SA2-001/002）；文案非本实现契约（D3/D9）
 e2fsprogs-01862	sites	裁剪	同上
 e2fsprogs-01863	sites	裁剪	同上
 e2fsprogs-01864	sites	裁剪	同上

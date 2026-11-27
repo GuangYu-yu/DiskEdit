@@ -2,4 +2,4 @@ row_id	ledger	state	note
 btrfs-progs-imp-00002	implicit	认领	O_RDWR|O_CREAT|O_EXCL 原子独占 ↔ 记录文件原子写（B5：.tmp+O_EXCL+改名）；锚 src/platform/linux/mod.rs
 btrfs-progs-imp-00038	implicit	认领	依据 SA1-004/B5/B9：独占语义由目标锁+占用闸承担，锁不可得即 Occupied 拒绝，不降级共享打开；锚 src/app/decide/refusal.rs::Occupied、src/platform/linux/mod.rs（记录文件 O_CREAT|O_EXCL）
 btrfs-progs-imp-00050	implicit	裁剪	O_DIRECT 直通 I/O；本实现缓冲 I/O+sync_all+回读证实（SA1-011/SA2-002），不采纳直通模式
-btrfs-progs-imp-00054	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00054	implicit	裁剪	换版重放：同 btrfs-progs-imp-00050（btrfstune O_DIRECT 直通 I/O；本实现缓冲 I/O+sync_all+回读证实，SA1-011/SA2-002；btrfstune 亦不在面）

@@ -1,6 +1,6 @@
 row_id	ledger	state	note
 xfsprogs-00115	sites	拒绝	拒绝：mkfs.xfs 内部 ASSERT 不变量断言（含 ASSERT(0) 兜底）——上游 C 防御，Rust 所有权/类型承担，逐点复刻属多虑（架构差异-多虑）；消费边界=固定 `mkfs.xfs -f [-L]` 调用只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
-xfsprogs-00391	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00391	sites	拒绝	拒绝：mkfs.xfs 内部 ASSERT 不变量断言（rt device 几何兜底）——上游 C 防御，Rust 所有权/类型承担，逐点复刻属多虑（架构差异-多虑）；消费边界=固定 `mkfs.xfs -f [-L]` 调用只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00454	sites	拒绝	同上
 xfsprogs-00493	sites	拒绝	同上
 xfsprogs-00494	sites	拒绝	同上

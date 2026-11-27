@@ -16,7 +16,7 @@ libfdisk-imp-00037	implicit	拒绝	同上（--force 用法行）；SA1-005
 libfdisk-imp-00038	implicit	裁剪	同上
 libfdisk-imp-00039	implicit	裁剪	同上
 libfdisk-imp-00040	implicit	裁剪	同上
-libfdisk-imp-00041	implicit	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-imp-00041	implicit	裁剪	换版重放：sfdisk 脚本 last-lba 头+force 改写面；不提供脚本/JSON 导入（SA1-010）；同 libfdisk-imp-00022
 libfdisk-imp-00042	implicit	裁剪	同上
 libfdisk-imp-00043	implicit	裁剪	同上
 libfdisk-imp-00044	implicit	裁剪	同上

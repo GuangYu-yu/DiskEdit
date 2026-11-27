@@ -1,4 +1,4 @@
 row_id	ledger	state	note
 parted-00828	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
 parted-00835	sites	裁剪	同上
-parted-00844	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00844	sites	裁剪	裁剪|FAT 扩缩容拒绝文案（3.8 改写：“cannot resize this partition of this size… too small”）不入范围——档案表按不支持拒绝（不接 fatresize）。依据：SA2-014

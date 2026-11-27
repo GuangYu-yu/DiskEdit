@@ -1,18 +1,18 @@
 row_id	ledger	state	note
-lvm2-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00003	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00004	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00005	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00006	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00007	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00008	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00009	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00010	incidents	待判	换版重放：本行在上游新版本新增或改写
-lvm2-inc-00011	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00001	incidents	裁剪	换版重放：依赖工具 LVM2 的内部修复/特性（WHATS_NEW 聚合块：VDO slab/blkio/polldaemon/libaio 等）；本实现 LVM 链仅 pvresize→lvextend -r→pvs/vgs 证据（SA2-017），工具内部随发行版版本固定（SA2-011），不属本实现行为面
+lvm2-inc-00002	incidents	裁剪	同 lvm2-inc-00001（VDO/thin chunk/dmeventd/lvmpolld）
+lvm2-inc-00003	incidents	裁剪	同 lvm2-inc-00001（raid integrity/lvmlockd/bcache/lvm-maths）
+lvm2-inc-00004	incidents	裁剪	同 lvm2-inc-00001（dmeventd 插件/libdm/cachevol）
+lvm2-inc-00005	incidents	裁剪	同 lvm2-inc-00001（lvmlockd CAW/pvmove/CoW snapshot）
+lvm2-inc-00006	incidents	裁剪	同 lvm2-inc-00001（lvscan/lvmconfig/lvmdevices/vdopool）
+lvm2-inc-00007	incidents	裁剪	同 lvm2-inc-00001（pool 参数/raid 分配/pvmove 分段）
+lvm2-inc-00008	incidents	裁剪	同 lvm2-inc-00001（lvresize -r LV→crypt→FS 栈与 btrfs 支持属上游内部；等价契约由 lvextend -r+回读证实承接，SA2-017）
+lvm2-inc-00009	incidents	裁剪	同 lvm2-inc-00001（locale/raid 瞬时丢盘修复）
+lvm2-inc-00010	incidents	裁剪	同 lvm2-inc-00001（lvmlockd/man 页/raid 子 LV 重命名）
+lvm2-inc-00011	incidents	裁剪	同 lvm2-inc-00001（-S select 段错误/lvmlockd 配置）
 lvm2-inc-00012	incidents	裁剪	依赖工具 LVM2 的内部修复/特性（cluster/lvmetad/dmeventd/thin/cache/raid/mirror/metadata 程序自身）；本实现 LVM 链仅 pvresize→lvextend -r→pvs/vgs 证据（SA2-017），工具内部随发行版版本固定（SA2-011），不属本实现行为面
 lvm2-inc-00013	incidents	裁剪	同 lvm2-inc-00001
-lvm2-inc-00014	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00014	incidents	裁剪	同 lvm2-inc-00001（pvck/writecache/BLKZEROOUT；fsadm 的 fsck 结果处理等价契约由 SA2-001 退出码契约与 SA2-017 承接）
 lvm2-inc-00015	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00016	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00017	incidents	裁剪	同 lvm2-inc-00001
@@ -26,7 +26,7 @@ lvm2-inc-00024	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00025	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00026	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00027	incidents	裁剪	同 lvm2-inc-00001
-lvm2-inc-00028	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00028	incidents	裁剪	同 lvm2-inc-00001（2.02.129 老版本聚合：thin-pool 收缩拒绝/cmirrord）
 lvm2-inc-00029	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00030	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00031	incidents	裁剪	同 lvm2-inc-00001
@@ -36,7 +36,7 @@ lvm2-inc-00034	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00035	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00036	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00037	incidents	裁剪	同 lvm2-inc-00001
-lvm2-inc-00038	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00038	incidents	裁剪	同 lvm2-inc-00001（2.02.104 老版本聚合：自动激活竞态/mirror/lvmetad）
 lvm2-inc-00039	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00040	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00041	incidents	裁剪	同 lvm2-inc-00001
@@ -49,7 +49,7 @@ lvm2-inc-00047	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00048	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00049	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00050	incidents	裁剪	同 lvm2-inc-00001
-lvm2-inc-00051	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00051	incidents	裁剪	同 lvm2-inc-00001（2.02.80 老版本聚合：udev cookie/配置树缓存）
 lvm2-inc-00052	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00053	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00054	incidents	裁剪	同 lvm2-inc-00001
@@ -80,7 +80,7 @@ lvm2-inc-00078	incidents	裁剪	同 lvm2-inc-00001（fsadm 联动属上游内部
 lvm2-inc-00079	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00080	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00081	incidents	裁剪	同 lvm2-inc-00001
-lvm2-inc-00082	incidents	待判	换版重放：本行在上游新版本新增或改写
+lvm2-inc-00082	incidents	裁剪	同 lvm2-inc-00001（2.02.30 老版本聚合：readahead/stripe 默认）
 lvm2-inc-00083	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00084	incidents	裁剪	同 lvm2-inc-00001
 lvm2-inc-00085	incidents	裁剪	同 lvm2-inc-00001

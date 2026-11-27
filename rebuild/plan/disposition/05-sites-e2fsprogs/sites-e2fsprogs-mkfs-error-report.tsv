@@ -6,15 +6,15 @@ e2fsprogs-00342	sites	裁剪	同上
 e2fsprogs-00349	sites	裁剪	同上
 e2fsprogs-00356	sites	裁剪	同上
 e2fsprogs-00358	sites	裁剪	同上
-e2fsprogs-00360	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00362	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00360	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00362	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00364	sites	裁剪	同上
 e2fsprogs-00366	sites	裁剪	同上
 e2fsprogs-00368	sites	裁剪	同上
-e2fsprogs-00370	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00372	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00374	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00376	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00370	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00372	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00374	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00376	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00378	sites	裁剪	同上
 e2fsprogs-00380	sites	裁剪	同上
 e2fsprogs-00382	sites	裁剪	同上
@@ -26,14 +26,14 @@ e2fsprogs-00394	sites	裁剪	同上
 e2fsprogs-00396	sites	裁剪	同上
 e2fsprogs-00398	sites	裁剪	同上
 e2fsprogs-00399	sites	裁剪	同上
-e2fsprogs-00428	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00434	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00428	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00434	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00437	sites	裁剪	同上
 e2fsprogs-00441	sites	裁剪	同上
 e2fsprogs-00443	sites	裁剪	同上
 e2fsprogs-00456	sites	裁剪	同上
 e2fsprogs-00459	sites	裁剪	同上
-e2fsprogs-00463	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00463	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00468	sites	裁剪	同上
 e2fsprogs-00472	sites	裁剪	同上
 e2fsprogs-00476	sites	裁剪	同上
@@ -42,8 +42,8 @@ e2fsprogs-00495	sites	裁剪	同上
 e2fsprogs-00496	sites	裁剪	同上
 e2fsprogs-00505	sites	裁剪	同上
 e2fsprogs-00510	sites	裁剪	同上
-e2fsprogs-00512	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00514	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00512	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
+e2fsprogs-00514	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00516	sites	裁剪	同上
 e2fsprogs-00518	sites	裁剪	同上
 e2fsprogs-00522	sites	裁剪	同上
@@ -68,7 +68,7 @@ e2fsprogs-00576	sites	裁剪	同上
 e2fsprogs-00577	sites	裁剪	同上
 e2fsprogs-00578	sites	裁剪	同上
 e2fsprogs-00579	sites	裁剪	同上
-e2fsprogs-00591	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00591	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00593	sites	裁剪	同上
 e2fsprogs-00597	sites	裁剪	同上
 e2fsprogs-00601	sites	裁剪	同上
@@ -91,6 +91,6 @@ e2fsprogs-00676	sites	裁剪	同上
 e2fsprogs-00678	sites	裁剪	同上
 e2fsprogs-00680	sites	裁剪	同上
 e2fsprogs-00684	sites	裁剪	同上
-e2fsprogs-00686	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00686	sites	裁剪	裁剪：mke2fs 建卷过程消息（inode 表写入/xattr selinux root 标签/revision 校验/已移除选项/inode 尺寸/huge files）——文案不逐字复刻，本实现以自身 note 汇报，工具非零退出即失败（src/app/execute/filesystem.rs::run_checked）；对应参数面不接线（mkfs_invocation 固定参数）
 e2fsprogs-00687	sites	裁剪	同上
 e2fsprogs-00689	sites	裁剪	同上

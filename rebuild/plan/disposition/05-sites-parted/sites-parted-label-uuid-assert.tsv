@@ -64,8 +64,8 @@ parted-01167	sites	裁剪	同上
 parted-01168	sites	裁剪	同上
 parted-01169	sites	裁剪	同上
 parted-01170	sites	裁剪	同上
-parted-01171	sites	待判	换版重放：本行在上游新版本新增或改写
-parted-01172	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01171	sites	裁剪	裁剪|atari 老盘标不识别——统一按未知拒绝（含盘标注册与结构尺寸断言）。依据：SA1-016
+parted-01172	sites	裁剪	裁剪|atari 老盘标不识别——统一按未知拒绝（含盘标注册与结构尺寸断言）。依据：SA1-016
 parted-01173	sites	裁剪	同上
 parted-01174	sites	裁剪	同上
 parted-01180	sites	裁剪	同上
@@ -182,7 +182,7 @@ parted-01373	sites	裁剪	同上
 parted-01375	sites	裁剪	同上
 parted-01378	sites	裁剪	同上
 parted-01380	sites	裁剪	同上
-parted-01398	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01398	sites	裁剪	裁剪|fdasd/dasd 老盘标不识别——统一按未知拒绝。依据：SA1-016
 parted-01408	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
 parted-01409	sites	拒绝	同上
 parted-01410	sites	拒绝	同上

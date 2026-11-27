@@ -124,7 +124,7 @@ parted-00749	sites	裁剪	同上
 parted-00757	sites	裁剪	同上
 parted-00758	sites	裁剪	同上
 parted-00759	sites	裁剪	同上
-parted-00760	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00760	sites	裁剪	裁剪|parted fs 操作面（fs/r/fat 复制/缩放上下文断言与清理）不入范围——识别只按档案表与只读探针，未登记族按未知拒绝；vfat 扩缩容按不支持拒绝。依据：SA1-017、SA2-014
 parted-00763	sites	裁剪	同上
 parted-00764	sites	裁剪	同上
 parted-00779	sites	裁剪	同上

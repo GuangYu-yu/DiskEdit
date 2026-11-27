@@ -11,5 +11,5 @@ e2fsprogs-00718	sites	裁剪	同上
 e2fsprogs-00724	sites	裁剪	同上
 e2fsprogs-00725	sites	裁剪	同上
 e2fsprogs-00728	sites	裁剪	同上
-e2fsprogs-00729	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00731	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00729	sites	裁剪	裁剪：dumpe2fs usage 与 flag 组合出口——本实现以固定参数（-h）调用，usage 出口不可达；非零码由回读闸兜住（SA2-003）
+e2fsprogs-00731	sites	裁剪	裁剪：dumpe2fs usage 与 flag 组合出口——本实现以固定参数（-h）调用，usage 出口不可达；非零码由回读闸兜住（SA2-003）

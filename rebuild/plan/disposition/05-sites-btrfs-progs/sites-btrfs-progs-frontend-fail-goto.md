@@ -10,3 +10,10 @@ SA2-006/007/008/016；crates/core/src/fs/catalog.rs（消费面登记）；plan/
 
 ## 撤回条件
 档案表登记 device/子卷/raid 级能力或提供相应子命令消费时重审裁剪行；resize 校验语义被推翻时重审拒绝行。
+
+## 换版重放补充（btrfs-progs 6.6.3→7.3）
+
+换版重放在本批新增/改写 21 行（state=待判），已全部翻态：拒绝 4 / 裁剪 17；note 见同名 tsv。
+- 判断：新增行两类——check_resize_args 的 goto out（00051/53/55/57）为 C 控制流载体，校验语义已在同函数拒绝行按 SA2-006/007/008/016 认领，判拒绝；mkswapfile/commit-stats/filesystem usage/property/device stats 的内部跳转绑定未消费子命令（含上游新增的 `filesystem mkswapfile` 与 commit-stats 面），判裁剪。
+- 依据：SA2-006/007/008/016；crates/core/src/fs/catalog.rs；plan/06-防漂移执行手册.md B17。
+- 撤回条件：档案表登记上述子命令消费面，或 resize 校验语义被推翻时重审。

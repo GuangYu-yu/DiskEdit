@@ -22,7 +22,7 @@ btrfs-progs-00208	sites	拒绝	同上
 btrfs-progs-00222	sites	拒绝	同上
 btrfs-progs-00224	sites	拒绝	同上
 btrfs-progs-00226	sites	拒绝	同上
-btrfs-progs-00228	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00228	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00229	sites	拒绝	同上
 btrfs-progs-00230	sites	拒绝	同上
 btrfs-progs-00231	sites	拒绝	同上
@@ -44,34 +44,34 @@ btrfs-progs-00251	sites	拒绝	同上
 btrfs-progs-00253	sites	拒绝	同上
 btrfs-progs-00255	sites	拒绝	同上
 btrfs-progs-00257	sites	拒绝	同上
-btrfs-progs-00266	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00267	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00269	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00271	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00273	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00274	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00266	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00267	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00269	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00271	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00273	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00274	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00275	sites	拒绝	同上
 btrfs-progs-00276	sites	拒绝	同上
 btrfs-progs-00284	sites	拒绝	同上
 btrfs-progs-00286	sites	拒绝	同上
 btrfs-progs-00287	sites	拒绝	同上
 btrfs-progs-00289	sites	拒绝	同上
-btrfs-progs-00290	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00292	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00293	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00294	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00290	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00292	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00293	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00294	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00296	sites	拒绝	同上
 btrfs-progs-00299	sites	拒绝	同上
-btrfs-progs-00301	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00303	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00305	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00301	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00303	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00305	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00307	sites	拒绝	同上
 btrfs-progs-00309	sites	拒绝	同上
 btrfs-progs-00311	sites	拒绝	同上
-btrfs-progs-00312	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00313	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00312	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00313	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00315	sites	拒绝	同上
-btrfs-progs-00317	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00317	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00319	sites	拒绝	同上
 btrfs-progs-00321	sites	拒绝	同上
 btrfs-progs-00323	sites	拒绝	同上
@@ -80,7 +80,7 @@ btrfs-progs-00328	sites	拒绝	同上
 btrfs-progs-00341	sites	拒绝	同上
 btrfs-progs-00343	sites	拒绝	同上
 btrfs-progs-00345	sites	拒绝	同上
-btrfs-progs-00347	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00347	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00349	sites	拒绝	同上
 btrfs-progs-00352	sites	拒绝	同上
 btrfs-progs-00354	sites	拒绝	同上
@@ -97,63 +97,63 @@ btrfs-progs-00373	sites	拒绝	同上
 btrfs-progs-00375	sites	拒绝	同上
 btrfs-progs-00377	sites	拒绝	同上
 btrfs-progs-00378	sites	拒绝	同上
-btrfs-progs-00380	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00380	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00382	sites	拒绝	同上
-btrfs-progs-00384	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00386	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00384	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00386	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00387	sites	拒绝	同上
-btrfs-progs-00388	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00391	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00393	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00388	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00391	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00393	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00395	sites	拒绝	同上
 btrfs-progs-00396	sites	拒绝	同上
 btrfs-progs-00397	sites	拒绝	同上
 btrfs-progs-00399	sites	拒绝	同上
-btrfs-progs-00401	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00401	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00402	sites	拒绝	同上
 btrfs-progs-00403	sites	拒绝	同上
 btrfs-progs-00405	sites	拒绝	同上
-btrfs-progs-00406	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00406	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00408	sites	拒绝	同上
-btrfs-progs-00409	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00411	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00413	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00415	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00409	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00411	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00413	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00415	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00420	sites	拒绝	同上
 btrfs-progs-00423	sites	拒绝	同上
-btrfs-progs-00425	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00426	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00427	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00428	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00429	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00430	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00425	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00426	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00427	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00428	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00429	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00430	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00433	sites	拒绝	同上
 btrfs-progs-00434	sites	拒绝	同上
-btrfs-progs-00435	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00435	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00437	sites	拒绝	同上
 btrfs-progs-00440	sites	拒绝	同上
-btrfs-progs-00442	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00444	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00445	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00447	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00456	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00458	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00459	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00461	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00462	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00464	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00466	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00467	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00469	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00487	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00489	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00491	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00493	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00495	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00497	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00499	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00500	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00525	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00442	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00444	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00445	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00447	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00456	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00458	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00459	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00461	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00462	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00464	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00466	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00467	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00469	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00487	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00489	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00491	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00493	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00495	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00497	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00499	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00500	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00525	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00526	sites	拒绝	同上
-btrfs-progs-00527	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00527	sites	拒绝	拒绝：mkfs.btrfs 内部失败清理跳转（goto out/err/fail）——上游 C 防御模式，本实现以固定参数 `mkfs.btrfs -f [-L]` 调用（src/app/execute/filesystem.rs::mkfs_invocation）只消费退出码；错误经 Rust 类型化传播，逐点复刻属多虑（架构差异-多虑）
 btrfs-progs-00528	sites	拒绝	同上

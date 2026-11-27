@@ -1,7 +1,7 @@
 row_id	ledger	state	note
 btrfs-progs-00724	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00725	sites	裁剪	同上
-btrfs-progs-00726	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00726	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00727	sites	裁剪	同上
 btrfs-progs-00728	sites	裁剪	同上
 btrfs-progs-00729	sites	裁剪	同上
@@ -13,7 +13,7 @@ btrfs-progs-00738	sites	裁剪	同上
 btrfs-progs-00739	sites	裁剪	同上
 btrfs-progs-00740	sites	裁剪	同上
 btrfs-progs-00741	sites	裁剪	同上
-btrfs-progs-00748	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00748	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00749	sites	裁剪	同上
 btrfs-progs-00750	sites	裁剪	同上
 btrfs-progs-00751	sites	裁剪	同上
@@ -42,14 +42,14 @@ btrfs-progs-00829	sites	裁剪	同上
 btrfs-progs-00832	sites	裁剪	同上
 btrfs-progs-00834	sites	裁剪	同上
 btrfs-progs-00836	sites	裁剪	同上
-btrfs-progs-00843	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00844	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00843	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-00844	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00846	sites	裁剪	同上
 btrfs-progs-00851	sites	裁剪	同上
-btrfs-progs-00858	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00859	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00858	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-00859	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00860	sites	裁剪	同上
-btrfs-progs-00861	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00861	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-00862	sites	裁剪	同上
 btrfs-progs-00863	sites	裁剪	同上
 btrfs-progs-00870	sites	裁剪	同上
@@ -94,8 +94,8 @@ btrfs-progs-00994	sites	裁剪	同上
 btrfs-progs-00998	sites	裁剪	同上
 btrfs-progs-01002	sites	裁剪	同上
 btrfs-progs-01004	sites	裁剪	同上
-btrfs-progs-01005	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01006	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01005	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01006	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-01007	sites	裁剪	同上
 btrfs-progs-01008	sites	裁剪	同上
 btrfs-progs-01009	sites	裁剪	同上
@@ -108,28 +108,28 @@ btrfs-progs-01025	sites	裁剪	同上
 btrfs-progs-01029	sites	裁剪	同上
 btrfs-progs-01030	sites	裁剪	同上
 btrfs-progs-01031	sites	裁剪	同上
-btrfs-progs-01067	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01067	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-01076	sites	裁剪	同上
 btrfs-progs-01085	sites	裁剪	同上
 btrfs-progs-01086	sites	裁剪	同上
-btrfs-progs-01122	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01124	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01125	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01122	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01124	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01125	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-01127	sites	裁剪	同上
 btrfs-progs-01128	sites	裁剪	同上
 btrfs-progs-01129	sites	裁剪	同上
-btrfs-progs-01130	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01131	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01133	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01134	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01135	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01138	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01139	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01141	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01144	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01146	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01147	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-01152	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-01130	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01131	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01133	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01134	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01135	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01138	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01139	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01141	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01144	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01146	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01147	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
+btrfs-progs-01152	sites	裁剪	裁剪：check 内部诊断/修复过程打印——随外部工具自带，只读形态下输出不进决策；本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻打印面
 btrfs-progs-01156	sites	裁剪	同上
 btrfs-progs-01161	sites	裁剪	同上
 btrfs-progs-01177	sites	裁剪	同上

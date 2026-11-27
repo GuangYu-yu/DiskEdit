@@ -9,3 +9,10 @@ crates/core/src/fs/catalog.rs、src/app/execute/filesystem.rs::verify_xfs_size�
 
 ## 撤回条件
 本实现接入 xfs_db（如 UUID/标签改写改走 db）时重审。
+
+## 换版重放补充（xfsprogs 6.6.0→7.3.0）
+
+换版重放在本批新增/改写 1 行（state=待判），已全部翻态：裁剪 1；note 见同名 tsv。
+- 判断：xfs_db sb label 写入截断路径——本实现不消费 db 工具，特性绑定不存在。
+- 依据：crates/core/src/fs/catalog.rs；src/app/execute/filesystem.rs::verify_xfs_size。
+- 撤回条件：本实现接入 xfs_db（如 UUID/标签改写改走 db）时重审。

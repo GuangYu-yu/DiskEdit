@@ -35,8 +35,8 @@ e2fsprogs-00420	sites	裁剪	同上
 e2fsprogs-00421	sites	裁剪	同上
 e2fsprogs-00422	sites	裁剪	同上
 e2fsprogs-00423	sites	裁剪	同上
-e2fsprogs-00425	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00426	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00425	sites	裁剪	裁剪：mke2fs revision/fs-verity/revision 0 特性校验——绑定未接线的 mke2fs 参数面（本实现 mkfs 面只有类型 ext2/3/4 与卷标）；mke2fs 以固定参数调用，内部校验随外部工具自带（档案表 mkfs 列 + 命令面冻结）
+e2fsprogs-00426	sites	裁剪	裁剪：mke2fs revision/fs-verity/revision 0 特性校验——绑定未接线的 mke2fs 参数面（本实现 mkfs 面只有类型 ext2/3/4 与卷标）；mke2fs 以固定参数调用，内部校验随外部工具自带（档案表 mkfs 列 + 命令面冻结）
 e2fsprogs-00430	sites	裁剪	同上
 e2fsprogs-00431	sites	裁剪	同上
 e2fsprogs-00432	sites	裁剪	同上
@@ -85,15 +85,15 @@ e2fsprogs-00557	sites	裁剪	同上
 e2fsprogs-00564	sites	裁剪	同上
 e2fsprogs-00565	sites	裁剪	同上
 e2fsprogs-00567	sites	裁剪	同上
-e2fsprogs-00569	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00569	sites	裁剪	裁剪：mke2fs revision/fs-verity/revision 0 特性校验——绑定未接线的 mke2fs 参数面（本实现 mkfs 面只有类型 ext2/3/4 与卷标）；mke2fs 以固定参数调用，内部校验随外部工具自带（档案表 mkfs 列 + 命令面冻结）
 e2fsprogs-00573	sites	裁剪	同上
 e2fsprogs-00574	sites	裁剪	同上
 e2fsprogs-00580	sites	裁剪	同上
 e2fsprogs-00581	sites	裁剪	同上
 e2fsprogs-00583	sites	裁剪	同上
 e2fsprogs-00584	sites	裁剪	同上
-e2fsprogs-00586	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-00587	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00586	sites	裁剪	裁剪：mke2fs revision/fs-verity/revision 0 特性校验——绑定未接线的 mke2fs 参数面（本实现 mkfs 面只有类型 ext2/3/4 与卷标）；mke2fs 以固定参数调用，内部校验随外部工具自带（档案表 mkfs 列 + 命令面冻结）
+e2fsprogs-00587	sites	裁剪	裁剪：mke2fs revision/fs-verity/revision 0 特性校验——绑定未接线的 mke2fs 参数面（本实现 mkfs 面只有类型 ext2/3/4 与卷标）；mke2fs 以固定参数调用，内部校验随外部工具自带（档案表 mkfs 列 + 命令面冻结）
 e2fsprogs-00589	sites	裁剪	同上
 e2fsprogs-00594	sites	裁剪	同上
 e2fsprogs-00595	sites	裁剪	同上

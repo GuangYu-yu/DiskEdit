@@ -12,7 +12,7 @@ parted-01222	sites	裁剪	同上
 parted-01287	sites	认领	认领|MBR wrong-signature 拒绝已有：R0132（crates/core/src/table/mbr/primary.rs）
 parted-01290	sites	认领	认领|扩展链递归拒绝已有：crates/core/src/table/mbr/extended.rs（ExtendedChainLoop）
 parted-01335	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs
-parted-01354	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-01354	sites	裁剪	裁剪|dvh 老盘标校验（checksum wrong）不识别——统一按未知拒绝。依据：SA1-016
 parted-01372	sites	裁剪	同上
 parted-01377	sites	裁剪	同上
 parted-01381	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（fdasd/s390）

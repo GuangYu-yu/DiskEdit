@@ -181,8 +181,8 @@ e2fsprogs-01543	sites	裁剪	同上
 e2fsprogs-01544	sites	裁剪	同上
 e2fsprogs-01545	sites	裁剪	同上
 e2fsprogs-01546	sites	裁剪	同上
-e2fsprogs-01547	sites	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-01548	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01547	sites	裁剪	裁剪：e2fsck problem 表新条目（1.47.4 ea_inode 族与 orphan_present clean）——消息与 PROMPT_* 应答属 e2fsck 修复面，本实现不做 fs 修复、只消费退出码（SA2-001/002）；check 形态 e2fsck -f -n 非交互（交互面裁剪）
+e2fsprogs-01548	sites	裁剪	裁剪：e2fsck problem 表新条目（1.47.4 ea_inode 族与 orphan_present clean）——消息与 PROMPT_* 应答属 e2fsck 修复面，本实现不做 fs 修复、只消费退出码（SA2-001/002）；check 形态 e2fsck -f -n 非交互（交互面裁剪）
 e2fsprogs-01549	sites	裁剪	同上
 e2fsprogs-01550	sites	裁剪	同上
 e2fsprogs-01552	sites	裁剪	同上
@@ -262,7 +262,7 @@ e2fsprogs-01643	sites	裁剪	同上
 e2fsprogs-01644	sites	裁剪	同上
 e2fsprogs-01645	sites	裁剪	同上
 e2fsprogs-01646	sites	裁剪	同上
-e2fsprogs-01647	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01647	sites	裁剪	裁剪：e2fsck problem 表新条目（1.47.4 ea_inode 族与 orphan_present clean）——消息与 PROMPT_* 应答属 e2fsck 修复面，本实现不做 fs 修复、只消费退出码（SA2-001/002）；check 形态 e2fsck -f -n 非交互（交互面裁剪）
 e2fsprogs-01648	sites	裁剪	同上
 e2fsprogs-01649	sites	裁剪	同上
 e2fsprogs-01651	sites	裁剪	同上
@@ -289,7 +289,7 @@ e2fsprogs-01682	sites	裁剪	同上
 e2fsprogs-01683	sites	裁剪	同上
 e2fsprogs-01684	sites	裁剪	同上
 e2fsprogs-01686	sites	裁剪	同上
-e2fsprogs-01689	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01689	sites	裁剪	裁剪：e2fsck problem 表新条目（1.47.4 ea_inode 族与 orphan_present clean）——消息与 PROMPT_* 应答属 e2fsck 修复面，本实现不做 fs 修复、只消费退出码（SA2-001/002）；check 形态 e2fsck -f -n 非交互（交互面裁剪）
 e2fsprogs-01690	sites	裁剪	同上
 e2fsprogs-01691	sites	裁剪	同上
 e2fsprogs-01692	sites	裁剪	同上
@@ -308,7 +308,7 @@ e2fsprogs-01708	sites	裁剪	同上
 e2fsprogs-01709	sites	裁剪	同上
 e2fsprogs-01714	sites	裁剪	同上
 e2fsprogs-01719	sites	裁剪	同上
-e2fsprogs-01720	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01720	sites	裁剪	裁剪：e2fsck problem 表新条目（1.47.4 ea_inode 族与 orphan_present clean）——消息与 PROMPT_* 应答属 e2fsck 修复面，本实现不做 fs 修复、只消费退出码（SA2-001/002）；check 形态 e2fsck -f -n 非交互（交互面裁剪）
 e2fsprogs-01721	sites	裁剪	同上
 e2fsprogs-01722	sites	裁剪	同上
 e2fsprogs-01723	sites	裁剪	同上

@@ -38,24 +38,24 @@ libfdisk-00801	sites	裁剪	同上
 libfdisk-00825	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
 libfdisk-00826	sites	认领	同上
 libfdisk-00919	sites	认领	同上
-libfdisk-00920	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00920	sites	认领	签名语义定案——不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变；本行为 2.42.4 新增的 append 撞签提示，对应本实现的撞签拒绝信息。依据：SA1-005、SA1-006
 libfdisk-00921	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
 libfdisk-00924	sites	认领	同上
 libfdisk-00931	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00946	sites	认领	用法/未知选项拒绝已有：UsageError 退 2 单源（src/app/cli/parse.rs、report/exit.rs）。依据：SA1-009、R0089 族
 libfdisk-00947	sites	认领	同上
-libfdisk-00948	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00948	sites	认领	几何信息面已有——info JSON 输出（dump 面定案）；本实现无 --show-pt-geometry 别名，未知选项按 UsageError 退 2。依据：SA1-009、SA1-010、R0089 族
 libfdisk-00950	sites	认领	同上
 libfdisk-00969	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（ask 回调消息管道）
 libfdisk-00970	sites	裁剪	同上
 libfdisk-00971	sites	裁剪	同上
-libfdisk-00984	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00984	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
 libfdisk-00987	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（交互选号/选类型）
-libfdisk-00993	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00995	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01001	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00993	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00995	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-01001	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
 libfdisk-01005	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
-libfdisk-01013	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01013	sites	认领	签名语义定案——不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变；本行为 2.42.4 新增的 append 撞签提示，对应本实现的撞签拒绝信息。依据：SA1-005、SA1-006
 libfdisk-01014	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
 libfdisk-01015	sites	认领	同上
 libfdisk-01031	sites	认领	用法/未知选项拒绝已有：UsageError 退 2 单源（src/app/cli/parse.rs、report/exit.rs）。依据：SA1-009、R0089 族

@@ -1,3 +1,3 @@
 row_id	ledger	state	note
 btrfs-progs-imp-00003	implicit	裁剪	usage 统计 MIN_UNALOCATED_THRESH 16MiB 内部阈值；btrfs 事实源=superblock total_bytes/sectorsize 回读；依据 SA2-006
-btrfs-progs-imp-00051	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00051	implicit	裁剪	换版重放：mkfs --rootdir MAX_EXTENT_SIZE 内部常数；mkfs 以档案表固定参数调用（SA2-012），btrfs 事实源=superblock 回读（SA2-006）

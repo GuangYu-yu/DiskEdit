@@ -2,12 +2,12 @@ row_id	ledger	state	note
 xfsprogs-00051	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00054	sites	裁剪	同上
 xfsprogs-00057	sites	裁剪	同上
-xfsprogs-00134	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00162	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00134	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00162	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00170	sites	裁剪	同上
 xfsprogs-00171	sites	裁剪	同上
 xfsprogs-00172	sites	裁剪	同上
-xfsprogs-00180	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00180	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00185	sites	裁剪	同上
 xfsprogs-00187	sites	裁剪	同上
 xfsprogs-00195	sites	裁剪	同上
@@ -19,20 +19,20 @@ xfsprogs-00223	sites	裁剪	同上
 xfsprogs-00224	sites	裁剪	同上
 xfsprogs-00229	sites	裁剪	同上
 xfsprogs-00231	sites	裁剪	同上
-xfsprogs-00233	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00233	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00235	sites	裁剪	同上
 xfsprogs-00236	sites	裁剪	同上
-xfsprogs-00241	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00241	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00243	sites	裁剪	同上
 xfsprogs-00245	sites	裁剪	同上
 xfsprogs-00247	sites	裁剪	同上
 xfsprogs-00249	sites	裁剪	同上
 xfsprogs-00251	sites	裁剪	同上
 xfsprogs-00253	sites	裁剪	同上
-xfsprogs-00256	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00258	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00268	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00282	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00256	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00258	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00268	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00282	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00284	sites	裁剪	同上
 xfsprogs-00286	sites	裁剪	同上
 xfsprogs-00288	sites	裁剪	同上
@@ -40,8 +40,8 @@ xfsprogs-00290	sites	裁剪	同上
 xfsprogs-00292	sites	裁剪	同上
 xfsprogs-00294	sites	裁剪	同上
 xfsprogs-00296	sites	裁剪	同上
-xfsprogs-00346	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00348	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00346	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00348	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00374	sites	裁剪	同上
 xfsprogs-00376	sites	裁剪	同上
 xfsprogs-00378	sites	裁剪	同上
@@ -50,9 +50,9 @@ xfsprogs-00380	sites	裁剪	同上
 xfsprogs-00382	sites	裁剪	同上
 xfsprogs-00386	sites	裁剪	同上
 xfsprogs-00416	sites	裁剪	同上
-xfsprogs-00431	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00432	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00433	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00431	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00432	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00433	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00434	sites	裁剪	同上
 xfsprogs-00445	sites	裁剪	同上
 xfsprogs-00452	sites	裁剪	同上
@@ -64,28 +64,28 @@ xfsprogs-00476	sites	裁剪	同上
 xfsprogs-00483	sites	裁剪	同上
 xfsprogs-00490	sites	裁剪	同上
 xfsprogs-00492	sites	裁剪	同上
-xfsprogs-00495	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00497	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00505	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00513	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00520	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00522	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00524	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00526	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00495	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00497	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00505	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00513	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00520	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00522	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00524	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00526	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00531	sites	裁剪	同上
-xfsprogs-00554	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00556	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00567	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00554	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00556	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00567	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00592	sites	裁剪	同上
 xfsprogs-00594	sites	裁剪	同上
 xfsprogs-00596	sites	裁剪	同上
 xfsprogs-00598	sites	裁剪	同上
 xfsprogs-00600	sites	裁剪	同上
 xfsprogs-00604	sites	裁剪	同上
-xfsprogs-00613	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00623	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00631	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00633	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00613	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00623	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00631	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00633	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
 xfsprogs-00644	sites	裁剪	同上
-xfsprogs-00646	sites	待判	换版重放：本行在上游新版本新增或改写
-xfsprogs-00648	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00646	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00648	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）

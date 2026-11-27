@@ -253,7 +253,7 @@ e2fsprogs-imp-00287	implicit	认领	同上
 e2fsprogs-imp-00288	implicit	认领	同上
 e2fsprogs-imp-00289	implicit	认领	同上
 e2fsprogs-imp-00290	implicit	认领	同上
-e2fsprogs-imp-00291	implicit	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-imp-00291	implicit	认领	换版重放：同 e2fsprogs-imp-00037（problem.c PROMPT_FIX 应答表；等价语义在档案表+决策层，SA2-001 固定 -fp 预答+退出码 1/2=已修复+尺寸回读证实）
 e2fsprogs-imp-00292	implicit	认领	同上
 e2fsprogs-imp-00293	implicit	认领	同上
 e2fsprogs-imp-00294	implicit	认领	同上

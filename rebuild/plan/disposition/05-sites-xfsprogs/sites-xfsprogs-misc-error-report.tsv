@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-xfsprogs-00683	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00683	sites	裁剪	裁剪：xfs_db usage 消息——db 工具不在消费面（档案表只登记 growfs；诊断/几何走自研探针与 `xfs_growfs -n` 回读；crates/core/src/fs/catalog.rs）
 xfsprogs-00691	sites	裁剪	同上
 xfsprogs-00694	sites	裁剪	同上

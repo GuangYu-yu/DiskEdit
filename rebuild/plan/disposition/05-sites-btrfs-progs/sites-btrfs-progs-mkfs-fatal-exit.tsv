@@ -2,9 +2,9 @@ row_id	ledger	state	note
 btrfs-progs-00237	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 btrfs-progs-00278	sites	裁剪	同上
 btrfs-progs-00280	sites	裁剪	同上
-btrfs-progs-00281	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00281	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 btrfs-progs-00283	sites	裁剪	同上
-btrfs-progs-00291	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00291	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 btrfs-progs-00295	sites	裁剪	同上
 btrfs-progs-00297	sites	裁剪	同上
 btrfs-progs-00326	sites	裁剪	同上
@@ -12,6 +12,6 @@ btrfs-progs-00330	sites	裁剪	同上
 btrfs-progs-00332	sites	裁剪	同上
 btrfs-progs-00334	sites	裁剪	同上
 btrfs-progs-00336	sites	裁剪	同上
-btrfs-progs-00338	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00340	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00338	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+btrfs-progs-00340	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
 btrfs-progs-00523	sites	裁剪	同上

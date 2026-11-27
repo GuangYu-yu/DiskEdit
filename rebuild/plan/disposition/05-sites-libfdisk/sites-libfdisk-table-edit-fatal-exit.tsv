@@ -29,17 +29,17 @@ libfdisk-00847	sites	认领	同上
 libfdisk-00849	sites	认领	同上
 libfdisk-00851	sites	认领	set/delete 已实现（parse.rs 白名单与目标校验）。依据：SA1-015、SA1-027
 libfdisk-00852	sites	认领	同上
-libfdisk-00854	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00854	sites	认领	delete 已实现——分区号解析失败退 2（parse.rs 白名单与目标校验）。依据：SA1-015、SA1-027、R0046 族
 libfdisk-00855	sites	认领	同上
-libfdisk-00856	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00857	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00858	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00859	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00856	sites	拒绝	条目重排不提供（上游 sfdisk --reorder 为 fix partitions order 面）——delete 保留槽位空缺、次序原样保留。依据：SA3-001 同原则（身份与次序不静默改写）
+libfdisk-00857	sites	拒绝	条目重排不提供（上游 sfdisk --reorder 为 fix partitions order 面）——delete 保留槽位空缺、次序原样保留。依据：SA3-001 同原则（身份与次序不静默改写）
+libfdisk-00858	sites	认领	dump 面定案——info JSON 输出；缺目标/多余参数按 UsageError 退 2。依据：SA1-010、R0046 族
+libfdisk-00859	sites	认领	dump 面定案——info JSON 输出；缺目标/多余参数按 UsageError 退 2。依据：SA1-010、R0046 族
 libfdisk-00860	sites	裁剪	同上
 libfdisk-00861	sites	裁剪	同上
 libfdisk-00862	sites	裁剪	同上
-libfdisk-00863	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00864	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00863	sites	裁剪	sfdisk --backup-pt-sectors 备份文件面不提供——记录只服务崩溃回滚。依据：SA1-020
+libfdisk-00864	sites	裁剪	sfdisk --backup-pt-sectors 备份文件面不提供——记录只服务崩溃回滚。依据：SA1-020
 libfdisk-00865	sites	裁剪	同上
 libfdisk-00868	sites	裁剪	同上
 libfdisk-00869	sites	裁剪	同上
@@ -68,9 +68,9 @@ libfdisk-00894	sites	认领	同上
 libfdisk-00896	sites	认领	同上
 libfdisk-00897	sites	认领	同上
 libfdisk-00898	sites	认领	同上
-libfdisk-00899	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00900	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00901	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00899	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
+libfdisk-00900	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
+libfdisk-00901	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
 libfdisk-00906	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00907	sites	裁剪	同上
 libfdisk-00908	sites	裁剪	同上
@@ -78,7 +78,7 @@ libfdisk-00909	sites	认领	 relocate 已实现（src/app/execute/relocate.rs）
 libfdisk-00910	sites	认领	同上
 libfdisk-00911	sites	认领	同上
 libfdisk-00912	sites	认领	同上
-libfdisk-00925	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00925	sites	裁剪	sfdisk 交互 prompt 面（分区名分配失败出口）——交互面未实现（非交互单命令 CLI）。依据：SA1-010、特性依据=交互面
 libfdisk-00927	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00928	sites	裁剪	同上
 libfdisk-00929	sites	裁剪	同上
@@ -91,7 +91,7 @@ libfdisk-00949	sites	认领	用法错误退 2 单源（UsageError）。依据：
 libfdisk-00952	sites	认领	同上
 libfdisk-00953	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
 libfdisk-00954	sites	认领	同上
-libfdisk-00956	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00956	sites	认领	--sector-size 校验已有（parse.rs，2 的幂；上游白名单 512/1024/2048/4096）。依据：R0092
 libfdisk-00957	sites	认领	move 需分区选择器：解析层拒绝缺 :N。依据：R0082 族、SA1-012
 libfdisk-01011	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
 libfdisk-01012	sites	裁剪	同上
@@ -113,7 +113,7 @@ libfdisk-01071	sites	裁剪	同上
 libfdisk-01091	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
 libfdisk-01124	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-01127	sites	裁剪	同上
-libfdisk-01129	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01129	sites	认领	--sector-size 校验已有（parse.rs，2 的幂，覆盖 cfdisk -b 同语义；cfdisk TUI 本体不提供）。依据：R0092
 libfdisk-01130	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk main）
-libfdisk-01131	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-01131	sites	裁剪	cfdisk TUI 整体——交互面未实现（非交互单命令 CLI）。依据：SA1-010、特性依据=交互面（cfdisk TUI）
 libfdisk-01132	sites	裁剪	同上

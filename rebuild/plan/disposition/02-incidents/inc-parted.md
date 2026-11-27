@@ -11,3 +11,16 @@
 ## 撤回条件
 - 00003/00005/00006：若把 vfat 调整纳入支持族（SA2-014 翻案），重开内嵌库议题。
 - 00011：若新增按文件系统名映射类型码的命令面，重开本条并补映射表测试。
+
+## 换版重放补充（2026-11-27，parted 3.6→3.8 / 账本重放）
+
+### 判断
+- 拒绝 1（parted-inc-00002）：nilfs2 损坏 superblock 的 sigsegv 修复——nilfs2 探测未登记族按未知拒绝（SA1-017），sigsegv 属 C 内存崩溃面由 Rust 所有权承担（同 00018 reiserfs 先例）。
+- 裁剪 1（parted-inc-00001）：CVE-2026-89085/89088 经 ChangeLog 核实为 libparted/fs/fat 内嵌 FAT 调整库堆溢出（_init_fats/fat_table_read/duplicate_legacy_root_dir，PED_ASSERT 防御）；该库不在依赖面，vfat 扩容按不支持拒绝（SA2-014）。
+
+### 依据
+- /tmp 之外的参考源码 parted-3.8 ChangeLog:99-101；SA1-017、SA2-014；既有行 parted-inc-00018。
+
+### 撤回条件
+- 00001：若把 vfat 调整纳入支持族（SA2-014 翻案）或引入 FAT 元数据探针，重开内嵌库议题。
+- 00002：若把 nilfs2（或按签名探测扩展族）登记进档案表，重开探测崩溃面。

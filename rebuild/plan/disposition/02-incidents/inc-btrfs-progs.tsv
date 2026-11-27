@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-btrfs-progs-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-inc-00003	incidents	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-inc-00004	incidents	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-inc-00005	incidents	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-inc-00001	incidents	裁剪	换版重放：依赖工具 btrfs-progs 的内部修复/特性（corrupt-block 调试工具选项面）；本实现仅按档案表以 btrfs resize 承接在线扩缩（SA2-006/007/008/016）及登记的 mkfs/attrs/check 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
+btrfs-progs-inc-00002	incidents	裁剪	同 btrfs-progs-inc-00001（check 内部 extent 检测）
+btrfs-progs-inc-00003	incidents	裁剪	同 btrfs-progs-inc-00001（corrupt-block 调试工具）
+btrfs-progs-inc-00004	incidents	裁剪	同 btrfs-progs-inc-00001（balance filter 内部）
+btrfs-progs-inc-00005	incidents	裁剪	同 btrfs-progs-inc-00001（check 检测修复 ram_bytes）
 btrfs-progs-inc-00006	incidents	裁剪	依赖工具 btrfs-progs 的内部修复/特性（check/convert/inspect/send/receive/quota/scrub/image/restore 程序自身）；本实现仅按档案表以 btrfs resize 承接在线扩缩（SA2-006/007/008/016）及登记的 mkfs/attrs/check 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
 btrfs-progs-inc-00007	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00008	incidents	裁剪	同 btrfs-progs-inc-00001
@@ -14,7 +14,7 @@ btrfs-progs-inc-00012	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00013	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00014	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00015	incidents	裁剪	同 btrfs-progs-inc-00001
-btrfs-progs-inc-00016	incidents	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-inc-00016	incidents	裁剪	同 btrfs-progs-inc-00001（receive 崩溃修复，receive 不在面）
 btrfs-progs-inc-00017	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00018	incidents	裁剪	同 btrfs-progs-inc-00001
 btrfs-progs-inc-00019	incidents	裁剪	同 btrfs-progs-inc-00001

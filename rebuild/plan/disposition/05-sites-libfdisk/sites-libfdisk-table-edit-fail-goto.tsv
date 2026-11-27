@@ -13,10 +13,10 @@ libfdisk-00570	sites	认领	内容识别已有：档案表+只读探针为唯一
 libfdisk-00571	sites	认领	同上
 libfdisk-00573	sites	认领	set 已实现（type/flag/name/uuid/label 白名单）。依据：SA1-015、SA1-027
 libfdisk-00574	sites	认领	同上
-libfdisk-00575	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00576	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00577	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00578	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00575	sites	认领	resize 上界计算已有——按 gaps/对齐求最大可到终点（src/app/decide/resize.rs grow ceiling、crates/core/src/table/edit.rs gaps/first_fit）；对应 2.42.4 新增 fdisk_partition_get_max_size API。依据：SA1-008、SA1-014
+libfdisk-00576	sites	认领	resize 上界计算已有——按 gaps/对齐求最大可到终点（src/app/decide/resize.rs grow ceiling、crates/core/src/table/edit.rs gaps/first_fit）；对应 2.42.4 新增 fdisk_partition_get_max_size API。依据：SA1-008、SA1-014
+libfdisk-00577	sites	认领	resize 上界计算已有——按 gaps/对齐求最大可到终点（src/app/decide/resize.rs grow ceiling、crates/core/src/table/edit.rs gaps/first_fit）；对应 2.42.4 新增 fdisk_partition_get_max_size API。依据：SA1-008、SA1-014
+libfdisk-00578	sites	认领	resize 上界计算已有——按 gaps/对齐求最大可到终点（src/app/decide/resize.rs grow ceiling、crates/core/src/table/edit.rs gaps/first_fit）；对应 2.42.4 新增 fdisk_partition_get_max_size API。依据：SA1-008、SA1-014
 libfdisk-00591	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
 libfdisk-00592	sites	认领	同上
 libfdisk-00606	sites	认领	同上
@@ -40,26 +40,26 @@ libfdisk-00809	sites	裁剪	同上
 libfdisk-00811	sites	裁剪	同上
 libfdisk-00813	sites	裁剪	同上
 libfdisk-00828	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
-libfdisk-00903	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00903	sites	裁剪	sfdisk --discard-free 为 2.42.4 新增 discard 面——从不发送 discard/TRIM（SA1-006 范围裁剪）。依据：SA1-006、特性依据=discard 面
 libfdisk-00922	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
 libfdisk-00923	sites	认领	同上
 libfdisk-00958	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00959	sites	裁剪	同上
 libfdisk-00960	sites	裁剪	同上
-libfdisk-00977	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00978	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00979	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00981	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00982	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00983	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00985	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00992	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00994	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00996	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00998	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-00999	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01000	sites	待判	换版重放：本行在上游新版本新增或改写
-libfdisk-01002	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00977	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00978	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00979	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00981	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00982	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00983	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00985	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
+libfdisk-00992	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00994	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00996	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00998	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-00999	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-01000	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
+libfdisk-01002	sites	裁剪	fdisk 菜单 discard 对话框（2.42.4 新增交互面）——discard 面（SA1-006）与交互面均裁剪。依据：SA1-006、SA1-010、特性依据=交互面
 libfdisk-01048	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
 libfdisk-01049	sites	差异	同上（D18）
 libfdisk-01050	sites	差异	同上（D18）

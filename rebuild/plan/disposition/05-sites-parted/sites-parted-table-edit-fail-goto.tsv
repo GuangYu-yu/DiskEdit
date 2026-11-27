@@ -2,8 +2,8 @@ row_id	ledger	state	note
 parted-00327	sites	认领	认领|盘标探测/读取失败拒绝已有：R0132（src/app/observe/table.rs；crates/core/src/table）
 parted-00329	sites	认领	认领|建新表已有：crates/core/src/table/create.rs（SA1-005）
 parted-00330	sites	认领	认领|盘标探测/读取失败拒绝已有：R0132（src/app/observe/table.rs；crates/core/src/table）
-parted-00331	sites	待判	换版重放：本行在上游新版本新增或改写
-parted-00332	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-00331	sites	拒绝	拒绝|架构差异-多虑——libparted 更新模式生命周期（push/pop update mode 的失败清理 goto），Rust 所有权与 Result 承担；读后元数据同步由快照/写段承担。依据：SA1-021
+parted-00332	sites	拒绝	拒绝|架构差异-多虑——libparted 更新模式生命周期（push/pop update mode 的失败清理 goto），Rust 所有权与 Result 承担；读后元数据同步由快照/写段承担。依据：SA1-021
 parted-00333	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
 parted-00334	sites	拒绝	同上
 parted-00335	sites	认领	认领|add 落位与重叠拒绝已有：crates/core/src/table/edit.rs

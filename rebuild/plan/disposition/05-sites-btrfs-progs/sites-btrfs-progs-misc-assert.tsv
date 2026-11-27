@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-btrfs-progs-00633	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00634	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00635	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00633	sites	拒绝	拒绝：btrfstune（convert-remap-tree）内部 assert 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00634	sites	拒绝	拒绝：btrfstune（convert-remap-tree）内部 assert 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
+btrfs-progs-00635	sites	拒绝	拒绝：btrfstune（convert-remap-tree）内部 assert 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；特性不在档案表消费面（crates/core/src/fs/catalog.rs）
 btrfs-progs-00641	sites	拒绝	同上
 btrfs-progs-00719	sites	拒绝	同上

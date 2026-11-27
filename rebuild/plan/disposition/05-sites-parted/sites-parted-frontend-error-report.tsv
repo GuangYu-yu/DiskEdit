@@ -10,4 +10,4 @@ parted-01991	sites	拒绝	拒绝|崩溃诊断脚手架（bug_msg+history dump）
 parted-01997	sites	拒绝	同上
 parted-02005	sites	拒绝	同上
 parted-02010	sites	拒绝	同上
-parted-02011	sites	待判	换版重放：本行在上游新版本新增或改写
+parted-02011	sites	裁剪	裁剪|parted 异常应答面（--fix 时自动应答 PED_EXCEPTION_FIX 并打印 “Fixing, due to --fix”）——绑定交互异常 prompt 机制，本实现恒非交互；修复动作由显式 repair 命令与表写承担。依据：特性依据=交互面；SA1-001、SA1-018、SA3-003（对照 refusal-map：非拒绝面，无对应 R 行）

@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-ntfs-3g-00075	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00075	sites	裁剪	裁剪：ntfslabel CLI 参数面——固定形式调用（ntfslabel <dev> <label> / --new-serial <dev>，src/app/execute/filesystem.rs），非法参数路径不可达；serial 值由本实现生成后传入
 ntfs-3g-00077	sites	裁剪	裁剪：ntfslabel CLI/usage 面——固定形式调用（ntfslabel <dev> <label> / --new-serial <dev>，src/app/execute/filesystem.rs），不可达
 ntfs-3g-00078	sites	裁剪	裁剪：ntfslabel CLI/usage 面——固定形式调用（ntfslabel <dev> <label> / --new-serial <dev>，src/app/execute/filesystem.rs），不可达
 ntfs-3g-00081	sites	认领	认领：标签编码/容量校验在判定层（crates/core/src/fs/attrs.rs::label_problem，128 UTF-16 码元），失败即拒绝不写

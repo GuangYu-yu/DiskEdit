@@ -2,8 +2,8 @@ row_id	ledger	state	note
 btrfs-progs-imp-00001	implicit	裁剪	btrfs filesystem sync 子命令；落盘语义由写路径 barrier() 承担（SA1-011）
 btrfs-progs-imp-00004	implicit	裁剪	btrfs property set -f（ro→rw 翻转等）特性面；命令面不含 property 镜像
 btrfs-progs-imp-00005	implicit	裁剪	btrfs filesystem sync 子命令；落盘语义由写路径 barrier() 承担（SA1-011）
-btrfs-progs-imp-00006	implicit	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-imp-00007	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00006	implicit	裁剪	换版重放：同 btrfs-progs-imp-00004（property set ro→rw 带 received_uuid 需 -f；命令面不含 property）
+btrfs-progs-imp-00007	implicit	裁剪	同 btrfs-progs-imp-00004（property force 清 received_uuid 提示）
 btrfs-progs-imp-00008	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00009	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00010	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
@@ -20,7 +20,7 @@ btrfs-progs-imp-00020	implicit	裁剪	同上（btrfs 工具交互/特性面，�
 btrfs-progs-imp-00021	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00022	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00023	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
-btrfs-progs-imp-00024	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00024	implicit	认领	换版重放：同 btrfs-progs-imp-00036（device/mkfs "-f --force" 覆写选项 ↔ 覆写闸；SA1-005/SA2-012，写前拒绝+显式确认）
 btrfs-progs-imp-00025	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00026	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00027	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
@@ -30,15 +30,15 @@ btrfs-progs-imp-00030	implicit	裁剪	同上（btrfs 工具交互/特性面，�
 btrfs-progs-imp-00031	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00032	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00033	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
-btrfs-progs-imp-00034	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00034	implicit	裁剪	换版重放：btrfs device remove 安全超时交互面；device remove 不在命令面，超时交互裁剪（同批交互面系）
 btrfs-progs-imp-00036	implicit	认领	test_dev_for_mkfs/test_status_for_mkfs 覆写检查 ↔ mkfs.btrfs 经档案表调用前过占用+已有数据闸；依据 SA1-005、SA2-012
 btrfs-progs-imp-00037	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00039	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00040	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00041	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
-btrfs-progs-imp-00042	implicit	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-imp-00043	implicit	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-imp-00044	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00042	implicit	认领	换版重放：同 btrfs-progs-imp-00036（mkfs force_overwrite 分支 ↔ 覆写闸；SA1-005/SA2-012）
+btrfs-progs-imp-00043	implicit	认领	换版重放：同 btrfs-progs-imp-00036（强覆写时挂载状态不可查告警分支；挂载检查旁路本身拒绝——占用闸一律拒绝，SA1-004/SA1-005）
+btrfs-progs-imp-00044	implicit	认领	换版重放：同 btrfs-progs-imp-00036（mkfs "-f --force" OPTLINE 装配行）
 btrfs-progs-imp-00045	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00046	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00047	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
@@ -52,9 +52,9 @@ btrfs-progs-imp-00057	implicit	裁剪	同上（btrfs 工具交互/特性面，�
 btrfs-progs-imp-00058	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00059	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00060	implicit	拒绝	理由：不采纳挂载卷上 --force 强制检查旁路——占用闸一律拒绝（SA1-004），检查器只读运行；依据 SA1-004
-btrfs-progs-imp-00061	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00061	implicit	裁剪	换版重放：btrfs check --force 装配行；check 不在扩缩链（收缩经挂载 resize，SA2-007），repair 交互裁剪
 btrfs-progs-imp-00062	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
-btrfs-progs-imp-00063	implicit	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-imp-00063	implicit	裁剪	同 btrfs-progs-imp-00061（check --force 赋值行）
 btrfs-progs-imp-00064	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00065	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）
 btrfs-progs-imp-00066	implicit	裁剪	同上（btrfs 工具交互/特性面，见各行）

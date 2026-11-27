@@ -1,20 +1,20 @@
 row_id	ledger	state	note
 lvm2-00034	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00035	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00053	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00053	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00054	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00055	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00056	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00057	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00059	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00055	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00056	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00057	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00059	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00067	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00068	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00069	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00070	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00072	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00074	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00076	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00077	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00072	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00074	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00076	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00077	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00078	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00079	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00080	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
@@ -23,42 +23,42 @@ lvm2-00083	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报
 lvm2-00084	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00085	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00086	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00088	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00089	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00103	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00088	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00089	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00103	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00105	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00106	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00111	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00113	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00113	sites	裁剪	裁剪：vgchange 子命令面（激活/persist/locktype/systemid/pesize）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00241	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00244	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00245	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00245	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00246	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00247	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00257	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00257	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00258	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00259	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00259	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00261	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00262	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00263	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00264	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00264	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00279	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00281	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00286	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00296	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00298	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00299	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00299	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00321	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00322	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00323	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00324	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00325	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00326	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00326	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00327	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00339	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00340	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00341	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00348	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00339	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00340	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00341	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00348	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00381	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00394	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00402	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
@@ -82,28 +82,28 @@ lvm2-00420	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报
 lvm2-00421	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00422	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00423	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00424	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00424	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00425	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00426	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00427	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00430	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00431	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00432	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00442	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00442	sites	裁剪	裁剪：toollib 前端共享拒绝/提示面（vgcreate/PR/wcache/vdo/integrity/选择器规则）——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00445	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00450	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00451	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00452	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00467	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00475	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00476	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00476	sites	裁剪	裁剪：reporter 输出格式与告警面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00477	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
 lvm2-00478	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
-lvm2-00479	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00480	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00481	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00482	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00483	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00479	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00480	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00481	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00482	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00483	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
 lvm2-00488	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00490	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-00499	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00499	sites	裁剪	裁剪：reporter 输出格式与告警面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现

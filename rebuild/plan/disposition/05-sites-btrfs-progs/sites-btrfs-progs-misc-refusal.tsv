@@ -3,8 +3,8 @@ btrfs-progs-00534	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 
 btrfs-progs-00535	sites	裁剪	同上
 btrfs-progs-00536	sites	裁剪	同上
 btrfs-progs-00537	sites	裁剪	同上
-btrfs-progs-00538	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00539	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00538	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
+btrfs-progs-00539	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00540	sites	裁剪	同上
 btrfs-progs-00541	sites	裁剪	同上
 btrfs-progs-00542	sites	裁剪	同上
@@ -15,7 +15,7 @@ btrfs-progs-00548	sites	裁剪	同上
 btrfs-progs-00554	sites	裁剪	同上
 btrfs-progs-00555	sites	裁剪	同上
 btrfs-progs-00556	sites	裁剪	同上
-btrfs-progs-00557	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00557	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00558	sites	裁剪	同上
 btrfs-progs-00559	sites	裁剪	同上
 btrfs-progs-00563	sites	裁剪	同上
@@ -53,7 +53,7 @@ btrfs-progs-00622	sites	裁剪	同上
 btrfs-progs-00626	sites	裁剪	同上
 btrfs-progs-00628	sites	裁剪	同上
 btrfs-progs-00631	sites	裁剪	同上
-btrfs-progs-00636	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00636	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00642	sites	裁剪	同上
 btrfs-progs-00643	sites	裁剪	同上
 btrfs-progs-00644	sites	裁剪	同上
@@ -66,22 +66,22 @@ btrfs-progs-00653	sites	裁剪	同上
 btrfs-progs-00654	sites	裁剪	同上
 btrfs-progs-00655	sites	裁剪	同上
 btrfs-progs-00656	sites	裁剪	同上
-btrfs-progs-00658	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00658	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00660	sites	裁剪	同上
-btrfs-progs-00662	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00662	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00664	sites	裁剪	同上
 btrfs-progs-00666	sites	裁剪	同上
 btrfs-progs-00668	sites	裁剪	同上
 btrfs-progs-00670	sites	裁剪	同上
 btrfs-progs-00673	sites	裁剪	同上
-btrfs-progs-00675	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00675	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00677	sites	裁剪	同上
 btrfs-progs-00679	sites	裁剪	同上
 btrfs-progs-00681	sites	裁剪	同上
 btrfs-progs-00684	sites	裁剪	同上
 btrfs-progs-00686	sites	裁剪	同上
-btrfs-progs-00689	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00691	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00689	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
+btrfs-progs-00691	sites	裁剪	裁剪：btrfstune 未消费特性（change-csum 清 csum、convert-bgt 块组树转换、quota rescan、seeding、tune CLI/usage）——档案表消费面只登记 resize/check/attrs/mkfs（crates/core/src/fs/catalog.rs），特性绑定不存在
 btrfs-progs-00695	sites	裁剪	同上
 btrfs-progs-00698	sites	裁剪	同上
 btrfs-progs-00700	sites	裁剪	同上

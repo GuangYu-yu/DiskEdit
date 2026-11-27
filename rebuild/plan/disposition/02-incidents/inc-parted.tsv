@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-parted-inc-00001	incidents	待判	换版重放：本行在上游新版本新增或改写
-parted-inc-00002	incidents	待判	换版重放：本行在上游新版本新增或改写
+parted-inc-00001	incidents	裁剪	换版重放：ChangeLog 详注 CVE-2026-89085/89088 为 libparted/fs/fat 内嵌 FAT 调整库堆溢出（_init_fats/fat_table_read/duplicate_legacy_root_dir，PED_ASSERT 防御）；该库不在依赖面，vfat 扩容按不支持拒绝（SA2-014），C 内存防御由 Rust 所有权承担
+parted-inc-00002	incidents	拒绝	换版重放：同 parted-inc-00018——nilfs2 探测未登记族按未知拒绝（SA1-017），sigsegv 属 C 内存崩溃面由 Rust 所有权承担
 parted-inc-00003	incidents	拒绝	C set/disk_set 空旗标崩溃修复属纯实现细节，防御由 Rust 所有权/类型承担；set 无旗标在本实现为正常拒绝路径（tests/case_runner.rs::add_delete_and_set_rewrite_both_copies）
 parted-inc-00004	incidents	裁剪	 gettext 本地化面不实现；本实现提示面为自身文案无 i18n（提示面缺失不适用——无翻译管线可裁剪）
 parted-inc-00005	incidents	裁剪	libparted-fs-resize 内嵌 FAT 调整库不在依赖面；vfat 扩容按不支持拒绝（SA2-014）

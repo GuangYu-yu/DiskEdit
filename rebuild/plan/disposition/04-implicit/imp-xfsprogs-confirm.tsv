@@ -3,7 +3,7 @@ xfsprogs-imp-00007	implicit	认领	mkfs.xfs force_overwrite/check_overwrite ↔ 
 xfsprogs-imp-00008	implicit	认领	同上
 xfsprogs-imp-00009	implicit	认领	同上
 xfsprogs-imp-00010	implicit	认领	同上
-xfsprogs-imp-00011	implicit	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-imp-00011	implicit	认领	换版重放：同 xfsprogs-imp-00007（libxfs_get_topology 携 force_overwrite 属建卷覆写检查装配；SA1-005/SA2-012，写前占用+已有数据闸）
 xfsprogs-imp-00013	implicit	认领	同上
 xfsprogs-imp-00014	implicit	认领	同上
 xfsprogs-imp-00015	implicit	认领	同上

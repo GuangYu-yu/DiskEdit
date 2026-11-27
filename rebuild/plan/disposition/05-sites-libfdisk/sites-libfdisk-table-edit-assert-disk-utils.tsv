@@ -22,7 +22,7 @@ libfdisk-00967	sites	裁剪	同上
 libfdisk-00968	sites	裁剪	同上
 libfdisk-00973	sites	裁剪	同上
 libfdisk-00975	sites	裁剪	同上
-libfdisk-00976	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00976	sites	裁剪	fdisk 菜单 resize 对话框（2.42.4 新增交互面）——交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）；resize 能力本身已实现（SA1-014）。依据：SA1-010、特性依据=交互面
 libfdisk-00986	sites	裁剪	同上
 libfdisk-01006	sites	认领	dump 面定案：info JSON 为唯一结构化输出，不提供 sfdisk 脚本 dump 格式。依据：SA1-010、SA1-007
 libfdisk-01009	sites	认领	同上

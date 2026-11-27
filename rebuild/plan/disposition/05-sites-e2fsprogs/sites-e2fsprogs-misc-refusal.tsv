@@ -1,4 +1,4 @@
 row_id	ledger	state	note
 e2fsprogs-02107	sites	裁剪	裁剪：库/辅助工具内部输出与拒绝（print_ext2_info/syntax_err_report）——随外部工具自带，不接线
-e2fsprogs-02108	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-02108	sites	裁剪	裁剪：plausible.c “last mounted on/created on” 打印——库/辅助工具内部输出随外部工具自带，不接线（同 02107）
 e2fsprogs-02130	sites	裁剪	同上

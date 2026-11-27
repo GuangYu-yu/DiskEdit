@@ -1,28 +1,28 @@
 row_id	ledger	state	note
-lvm2-imp-00001	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00001	implicit	认领	换版重放：同 lvm2-imp-00002（lvresize force 装配 ↔ 本实现固定步序 写表→pvresize→lvextend -r，不传递 force 旁路；SA2-017）
 lvm2-imp-00002	implicit	认领	lvresize force ↔ 本实现固定步序 写表→pvresize→lvextend -r（SA2-017），不传递 force 旁路
 lvm2-imp-00003	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00004	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00005	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00006	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00004	implicit	裁剪	换版重放：vgchange PROMPT 等级交互面；LVM 纳入面仅 --grow-lv（SA2-017），交互确认裁剪
+lvm2-imp-00005	implicit	裁剪	同 lvm2-imp-00004（vgchange DONT_PROMPT_OVERRIDE）
+lvm2-imp-00006	implicit	裁剪	同 lvm2-imp-00004（vgchange 中断 pvmove 问答）
 lvm2-imp-00007	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00008	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00009	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00010	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00011	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00010	implicit	裁剪	同 lvm2-imp-00004（vgchange clustered 属性问答）
+lvm2-imp-00011	implicit	裁剪	同 lvm2-imp-00004（vgchange 锁类型问答）
 lvm2-imp-00012	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00013	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00014	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00015	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00016	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00017	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00013	implicit	裁剪	同 lvm2-imp-00004（vgchange 停用已激活 VG 需 force）
+lvm2-imp-00014	implicit	裁剪	同 lvm2-imp-00004（vgchange 清持久保留问答）
+lvm2-imp-00015	implicit	裁剪	同 lvm2-imp-00004（lvmcmdline force 等级解析）
+lvm2-imp-00016	implicit	裁剪	同 lvm2-imp-00004（force_ARG 等级 switch）
+lvm2-imp-00017	implicit	裁剪	同 lvm2-imp-00004（force 等级日志）
 lvm2-imp-00018	implicit	裁剪	yes/no 参数解析交互面；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
-lvm2-imp-00021	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00022	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00021	implicit	裁剪	换版重放：lvmcmdline "cannot be used in interactive mode"；本实现为非交互 CLI，无交互模式面（确认语义由闸门+显式 --yes，src/app/cli/parse.rs::--yes）
+lvm2-imp-00022	implicit	裁剪	换版重放：force_access_clustered 集群访问旁路面；cluster/lockd 面不存在（SA2-017 仅 PV 链）
 lvm2-imp-00024	implicit	裁剪	pvcreate/pvremove 初始化与擦除确认面；未纳入（LVM 仅 grow；SA2-017）
-lvm2-imp-00025	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00025	implicit	裁剪	换版重放：toollib pvcreate force 装配面；pvcreate 未纳入（LVM 仅 grow，SA2-017）
 lvm2-imp-00026	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00027	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00027	implicit	裁剪	同 lvm2-imp-00025（pp->force 装配行）
 lvm2-imp-00028	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00029	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00030	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
@@ -45,23 +45,23 @@ lvm2-imp-00046	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入
 lvm2-imp-00048	implicit	认领	fsadm force/yes 装配 ↔ 扩容语义已有：直接 lvextend -r 固定参数（SA2-017），force 旁路不复制
 lvm2-imp-00049	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00050	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00051	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00052	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00053	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00054	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00055	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00056	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00057	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00058	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00059	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00060	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00061	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00062	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00051	implicit	裁剪	换版重放：lv_manip confirm_mount_change（fs 缩步确认）状态位；lvresize -r 内部交互确认，本实现非交互固定步序（SA2-017），交互应答裁剪
+lvm2-imp-00052	implicit	裁剪	同 lvm2-imp-00051（confirm_mount_change=1）
+lvm2-imp-00053	implicit	裁剪	同 lvm2-imp-00051（confirm_mount_change=0）
+lvm2-imp-00054	implicit	裁剪	同 lvm2-imp-00051（!lp->yes && confirm_mount_change 分支）
+lvm2-imp-00055	implicit	裁剪	同 lvm2-imp-00051（"Continue with file system reduce steps" 问答）
+lvm2-imp-00056	implicit	裁剪	同 lvm2-imp-00051（扩步确认状态位）
+lvm2-imp-00057	implicit	裁剪	同 lvm2-imp-00051（confirm_mount_change=1 扩步）
+lvm2-imp-00058	implicit	裁剪	同 lvm2-imp-00051（!lp->yes 分支扩步）
+lvm2-imp-00059	implicit	裁剪	同 lvm2-imp-00051（"Continue with file system extend steps" 问答）
+lvm2-imp-00060	implicit	认领	换版重放：同 lvm2-imp-00048（fsadm_cmd CHECK 装配 ↔ 直接 lvextend -r 固定参数（SA2-017），force/yes 旁路不复制；检查退出码契约由 SA2-001 承接）
+lvm2-imp-00061	implicit	认领	换版重放：同 lvm2-imp-00048（fsadm_cmd RESIZE 装配 ↔ lvextend -r 固定参数；SA2-017）
+lvm2-imp-00062	implicit	认领	换版重放：同 lvm2-imp-00048（fsadm_cmd RESIZE 缩路径装配；本实现 PV 链只扩不缩，SA2-017）
 lvm2-imp-00063	implicit	裁剪	lv remove/cache/pool/snapshot 依赖删除确认面；未纳入（LVM 仅 grow；SA2-017）
 lvm2-imp-00064	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00065	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00066	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00067	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00067	implicit	裁剪	换版重放：同 lvm2-imp-00051（force < DONT_PROMPT 交互等级分支）
 lvm2-imp-00068	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00069	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00070	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
@@ -79,18 +79,18 @@ lvm2-imp-00081	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入
 lvm2-imp-00082	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00083	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00084	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00085	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00086	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00085	implicit	裁剪	换版重放：lv_remove_check_in_use 占用在用检查；lvremove 未纳入（LVM 仅 grow，SA2-017），检查器等价防线见 SA1-004 占用闸
+lvm2-imp-00086	implicit	裁剪	同 lvm2-imp-00085（external origin 递归删除检查）
 lvm2-imp-00087	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00088	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00089	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00090	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00091	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00092	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
-lvm2-imp-00093	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00094	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00095	implicit	待判	换版重放：本行在上游新版本新增或改写
-lvm2-imp-00096	implicit	待判	换版重放：本行在上游新版本新增或改写
+lvm2-imp-00093	implicit	裁剪	换版重放：activate_and_wipe_lvlist 激活+擦除面；擦除类操作不存在——本实现从不擦除已有数据（SA1-005/SA1-006），wipe 面裁剪
+lvm2-imp-00094	implicit	裁剪	同 lvm2-imp-00093（wp.force 装配）
+lvm2-imp-00095	implicit	裁剪	同 lvm2-imp-00093（activate_and_wipe_lv 定义）
+lvm2-imp-00096	implicit	裁剪	同 lvm2-imp-00093（转发行）
 lvm2-imp-00097	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00099	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
 lvm2-imp-00100	implicit	裁剪	force_access_clustered 集群面；未纳入

@@ -9,7 +9,7 @@ e2fsprogs-00777	sites	裁剪	同上
 e2fsprogs-00799	sites	裁剪	同上
 e2fsprogs-00800	sites	裁剪	同上
 e2fsprogs-00801	sites	裁剪	同上
-e2fsprogs-00802	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00802	sites	裁剪	裁剪：e2fsck 内部失败清理路径（extents/journal/rehash/util）——随外部工具自带，本实现不实现 e2fsck，只消费其退出码（SA2-001/002）
 e2fsprogs-00803	sites	裁剪	同上
 e2fsprogs-00806	sites	裁剪	同上
 e2fsprogs-00809	sites	裁剪	同上
@@ -37,7 +37,7 @@ e2fsprogs-00859	sites	裁剪	同上
 e2fsprogs-00861	sites	裁剪	同上
 e2fsprogs-00863	sites	裁剪	同上
 e2fsprogs-00865	sites	裁剪	同上
-e2fsprogs-00886	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00886	sites	裁剪	裁剪：e2fsck 内部失败清理路径（extents/journal/rehash/util）——随外部工具自带，本实现不实现 e2fsck，只消费其退出码（SA2-001/002）
 e2fsprogs-00887	sites	裁剪	同上
 e2fsprogs-00888	sites	裁剪	同上
 e2fsprogs-00895	sites	裁剪	同上
@@ -100,7 +100,7 @@ e2fsprogs-01758	sites	裁剪	同上
 e2fsprogs-01759	sites	裁剪	同上
 e2fsprogs-01760	sites	裁剪	同上
 e2fsprogs-01761	sites	裁剪	同上
-e2fsprogs-01762	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-01762	sites	裁剪	裁剪：e2fsck 内部失败清理路径（extents/journal/rehash/util）——随外部工具自带，本实现不实现 e2fsck，只消费其退出码（SA2-001/002）
 e2fsprogs-01767	sites	裁剪	同上
 e2fsprogs-01768	sites	裁剪	同上
 e2fsprogs-01769	sites	裁剪	同上
@@ -129,4 +129,4 @@ e2fsprogs-01993	sites	裁剪	同上
 e2fsprogs-02004	sites	裁剪	同上
 e2fsprogs-02005	sites	裁剪	同上
 e2fsprogs-02006	sites	裁剪	同上
-e2fsprogs-02007	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-02007	sites	裁剪	裁剪：e2fsck 内部失败清理路径（extents/journal/rehash/util）——随外部工具自带，本实现不实现 e2fsck，只消费其退出码（SA2-001/002）

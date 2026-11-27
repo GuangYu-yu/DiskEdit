@@ -14,8 +14,8 @@ e2fsprogs-imp-00316	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局�
 e2fsprogs-imp-00317	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00318	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00319	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
-e2fsprogs-imp-00320	implicit	待判	换版重放：本行在上游新版本新增或改写
-e2fsprogs-imp-00321	implicit	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-imp-00320	implicit	裁剪	换版重放：同 e2fsprogs-imp-00313（EXT4_MAX_ORPHAN_FILE_SIZE ext2fs 内部布局常数；尺寸边界由工具+回读承担 SA2-001/002/003）
+e2fsprogs-imp-00321	implicit	裁剪	同 e2fsprogs-imp-00313（EXT4_DEFAULT_ORPHAN_FILE_SIZE）
 e2fsprogs-imp-00322	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00323	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs
 e2fsprogs-imp-00324	implicit	裁剪	同上（ext2fs/mke2fs/e2fsck 内部布局与调度常数）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs

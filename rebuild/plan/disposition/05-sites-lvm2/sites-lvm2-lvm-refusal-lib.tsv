@@ -4,11 +4,11 @@ lvm2-00508	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00524	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00525	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00526	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
-lvm2-00527	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00527	sites	认领	认领：SA2-017——扩容 extent 算术与可分配余量的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00528	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（resize.rs::pv_chain_step）
 lvm2-00529	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（resize.rs::pv_chain_step）
 lvm2-00530	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00531	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00531	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（src/app/decide/resize.rs::pv_chain_step）
 lvm2-00537	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00543	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00545	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -17,16 +17,16 @@ lvm2-00549	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00550	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00551	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00552	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00557	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00559	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00557	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-00559	sites	裁剪	裁剪：VDO 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00563	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00567	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00568	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00569	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00571	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-00572	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00572	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
 lvm2-00573	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00577	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00577	sites	裁剪	裁剪：库内部资源/路径错误通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00580	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00581	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00585	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -43,9 +43,9 @@ lvm2-00595	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00596	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00597	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00600	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00602	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00602	sites	认领	认领：SA2-017——扩容 extent 算术与可分配余量的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00604	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00608	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00608	sites	认领	认领：SA2-017——扩容 extent 算术与可分配余量的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00616	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00617	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00618	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
@@ -53,11 +53,11 @@ lvm2-00621	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00624	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00631	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00632	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00633	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00633	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00634	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00635	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00635	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00636	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00637	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00637	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00638	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00639	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00641	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -66,7 +66,7 @@ lvm2-00643	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00645	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00646	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00649	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00650	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00650	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00652	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00658	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00660	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -84,61 +84,61 @@ lvm2-00675	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00676	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00677	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00679	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00681	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00681	sites	裁剪	裁剪：fsadm/reiserfs 后端选择面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；新版内建 fs 处理；本实现固定 lvextend -r 消费（SA2-017）
 lvm2-00690	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00692	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00697	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
 lvm2-00700	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00701	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00702	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00701	sites	裁剪	裁剪：stripe 布局面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本链目标为单 PV 线性 LV（SA2-017）
+lvm2-00702	sites	裁剪	裁剪：stripe 布局面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本链目标为单 PV 线性 LV（SA2-017）
 lvm2-00706	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00709	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00710	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00711	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00712	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00713	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00709	sites	裁剪	裁剪：VDO 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00710	sites	裁剪	裁剪：snapshot 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00711	sites	裁剪	裁剪：snapshot 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00712	sites	裁剪	裁剪：snapshot 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00713	sites	裁剪	裁剪：snapshot 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00714	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00715	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00717	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00715	sites	裁剪	裁剪：VDO 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00717	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00718	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00719	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00720	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00721	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00724	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00731	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00732	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00733	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00734	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00731	sites	认领	认领：SA2-017——活动性/占用前置校验：判定层 select_lv 对非活动 LV 拒绝（src/app/lvm.rs::select_lv，LvmError::Inactive），工具侧随 lvextend 消费交付（R0386）
+lvm2-00732	sites	裁剪	裁剪：RAID/integrity/mirror 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00733	sites	裁剪	裁剪：VDO 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00734	sites	裁剪	裁剪：VDO 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00735	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00736	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00738	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00739	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00740	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00741	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00742	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00744	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00745	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00746	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00747	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00749	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00750	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00751	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00752	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00755	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00758	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00762	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00766	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00770	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00771	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00772	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00774	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00776	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00780	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00782	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00786	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00788	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00791	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00793	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00736	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00738	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00739	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00740	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00741	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00742	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00744	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00745	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00746	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00747	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00749	sites	裁剪	裁剪：fsadm/reiserfs 后端选择面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；新版内建 fs 处理；本实现固定 lvextend -r 消费（SA2-017）
+lvm2-00750	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00751	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00752	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00755	sites	裁剪	裁剪：LUKS/crypt 内层面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00758	sites	裁剪	裁剪：LUKS/crypt 内层面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00762	sites	裁剪	裁剪：lvmlockd/cluster/lock_args 面与历史 LV 维护——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00766	sites	裁剪	裁剪：cache pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00770	sites	裁剪	裁剪：dm 激活/内核驱动面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现不激活 LV（select_lv 非活动即拒绝并提示手动激活，src/app/lvm.rs::select_lv）
+lvm2-00771	sites	裁剪	裁剪：dm 激活/内核驱动面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现不激活 LV（select_lv 非活动即拒绝并提示手动激活，src/app/lvm.rs::select_lv）
+lvm2-00772	sites	裁剪	裁剪：lvresize 缩容 fs 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现 LVM 缩容只缩 PV 元数据（src/app/lvm.rs::shrink_pv，判定层先证已分配段在其内），不经 lvm 链缩文件系统
+lvm2-00774	sites	裁剪	裁剪：dm 激活/内核驱动面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本实现不激活 LV（select_lv 非活动即拒绝并提示手动激活，src/app/lvm.rs::select_lv）
+lvm2-00776	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00780	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00782	sites	裁剪	裁剪：LUKS/crypt 内层面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00786	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00788	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00791	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
+lvm2-00793	sites	认领	认领：SA2-017——lvextend -r 扩内层文件系统的前置/失败面随消费交付，硬失败经非零退出映射（R0386）；真机锚 tests/qemu_suite.rs::s23
 lvm2-00796	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00797	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00798	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -146,7 +146,7 @@ lvm2-00801	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00803	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00804	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00805	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00806	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00806	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00817	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00818	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00819	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -155,24 +155,24 @@ lvm2-00821	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00822	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00823	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00826	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00827	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00827	sites	裁剪	裁剪：thin pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00829	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00834	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00835	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00837	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00839	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00839	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00843	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00844	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00846	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00848	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00849	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00850	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00848	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00849	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00850	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00854	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00855	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00857	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00858	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00859	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00860	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00860	sites	裁剪	裁剪：pvmove/layer 面与段拆分——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00861	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00862	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00865	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -180,22 +180,22 @@ lvm2-00866	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00867	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00868	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00869	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-00870	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00871	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00870	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00871	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00873	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00874	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00876	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00882	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00889	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00889	sites	裁剪	裁剪：stripe 布局面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现；本链目标为单 PV 线性 LV（SA2-017）
 lvm2-00890	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-00892	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00893	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00894	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00895	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00896	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00896	sites	裁剪	裁剪：cache pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00901	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00904	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00906	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00906	sites	裁剪	裁剪：thin pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00909	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00910	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00911	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -204,14 +204,14 @@ lvm2-00913	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-00916	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00917	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00918	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00919	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00919	sites	裁剪	裁剪：thin pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00920	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00921	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00922	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00923	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00924	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00926	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00928	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00928	sites	裁剪	裁剪：thin pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00929	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00930	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00931	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -221,12 +221,12 @@ lvm2-00935	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道
 lvm2-00945	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00950	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00951	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00953	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-00954	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00953	sites	裁剪	裁剪：vgextend/vgcreate VG 建立面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-00954	sites	裁剪	裁剪：vgextend/vgcreate VG 建立面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00957	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00958	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00959	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-00962	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-00962	sites	裁剪	裁剪：vgrename/vgmerge 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-00964	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00965	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-00966	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -260,42 +260,42 @@ lvm2-01016	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-01017	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01018	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01019	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01020	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01022	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01023	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01020	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
+lvm2-01022	sites	裁剪	裁剪：vgrename/vgmerge 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01023	sites	裁剪	裁剪：vgrename/vgmerge 面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01031	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01032	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01033	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01034	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01035	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-01036	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01036	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
 lvm2-01037	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01039	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01040	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01042	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-01043	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01043	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01046	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01050	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01054	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01055	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01056	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-01057	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01057	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
 lvm2-01060	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01062	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01064	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01067	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01064	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01067	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01070	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01075	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01080	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
-lvm2-01083	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01089	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01092	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01098	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01101	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01083	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01089	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01092	sites	裁剪	裁剪：vg_validate 内部哈希/存储失败通道——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01098	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01101	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01103	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01104	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01105	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01106	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01106	sites	认领	认领：SA2-017——重复 PV 设备/身份歧义的等价拒绝在判定层：报表与目标身份不可证明即拒绝（src/app/lvm.rs::parse_pv_vg/parse_lvs_on_pv，DeviceMatch Unknown→Failed）
 lvm2-01107	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01114	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01115	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -304,7 +304,7 @@ lvm2-01121	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-01122	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01126	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（resize.rs::pv_chain_step）
 lvm2-01128	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01129	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01129	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除；等价拒绝在判定层（src/app/decide/resize.rs，R0385-R0387）与链内退出码（SA2-017，R0386）
 lvm2-01130	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01131	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01132	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -314,7 +314,7 @@ lvm2-01136	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-01137	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01138	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01140	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01141	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01141	sites	裁剪	裁剪：lvmlockd/cluster/lock_args 面与历史 LV 维护——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01142	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01144	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01149	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
@@ -323,26 +323,26 @@ lvm2-01151	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配
 lvm2-01153	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01154	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01155	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01156	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01157	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01158	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01159	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01160	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01156	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01157	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01158	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01159	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01160	sites	裁剪	裁剪：mda 清理/修复维护面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01168	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01170	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01171	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01176	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01177	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01178	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01179	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01180	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01182	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01183	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01179	sites	认领	认领：SA2-017——'VG 不存在'的等价拒绝在判定层（src/app/lvm.rs::parse_pv_vg 无报表行即拒绝，LvmError::Refused）
+lvm2-01180	sites	裁剪	裁剪：cache pool 特性面——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
+lvm2-01182	sites	认领	认领：SA2-017——'VG 不存在'的等价拒绝在判定层（src/app/lvm.rs::parse_pv_vg 无报表行即拒绝，LvmError::Refused）
+lvm2-01183	sites	裁剪	裁剪：lvmlockd/cluster/lock_args 面与历史 LV 维护——档案表只登记 grow-lv 链（SA2-017，写表→pvresize→lvextend -r），其余 lvm 子命令与库内部错误通道不实现
 lvm2-01188	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01189	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
 lvm2-01191	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
-lvm2-01192	sites	待判	换版重放：本行在上游新版本新增或改写
-lvm2-01193	sites	待判	换版重放：本行在上游新版本新增或改写
+lvm2-01192	sites	认领	认领：SA2-017——重复 PV 设备/身份歧义的等价拒绝在判定层：报表与目标身份不可证明即拒绝（src/app/lvm.rs::parse_pv_vg/parse_lvs_on_pv，DeviceMatch Unknown→Failed）
+lvm2-01193	sites	认领	认领：SA2-017——重复 PV 设备/身份歧义的等价拒绝在判定层：报表与目标身份不可证明即拒绝（src/app/lvm.rs::parse_pv_vg/parse_lvs_on_pv，DeviceMatch Unknown→Failed）
 lvm2-01194	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01195	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住
 lvm2-01196	sites	裁剪	裁剪：lvm 库内部错误通道（lib/metadata 分配/段/镜像/快照/改名/删除/锁定路径）——本实现不实现 lvm 库，只消费 grow-lv 链（SA2-017），非零退出由 R0386 兜住

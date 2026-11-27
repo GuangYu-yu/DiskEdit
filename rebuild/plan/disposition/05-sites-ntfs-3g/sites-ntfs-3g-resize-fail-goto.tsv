@@ -1,5 +1,5 @@
 row_id	ledger	state	note
 ntfs-3g-00016	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00023	sites	待判	换版重放：本行在上游新版本新增或改写
-ntfs-3g-00024	sites	待判	换版重放：本行在上游新版本新增或改写
+ntfs-3g-00023	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；坏簇重定位/簇分配失败面在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
+ntfs-3g-00024	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；坏簇重定位/簇分配失败面在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00030	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21

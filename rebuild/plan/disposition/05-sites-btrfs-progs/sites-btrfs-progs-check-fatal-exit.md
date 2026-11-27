@@ -9,3 +9,10 @@ src/platform/linux/tools.rs::check_arguments（check --readonly）、src/app/exe
 
 ## 撤回条件
 决定提供 btrfs 修复写路径或 check 参数面变化时重审。
+
+## 换版重放补充（btrfs-progs 6.6.3→7.3）
+
+换版重放在本批新增/改写 2 行（state=待判），已全部翻态：裁剪 2；note 见同名 tsv。
+- 判断：新增行为 check 新选项面（--skip-qgroup-accounting 与 --repair/--qgroup-report 组合）的致命出口——固定 `btrfs check --readonly` 下不可达，非零退出码统一按 check 失败映射。
+- 依据：src/app/execute/diagnose.rs::run；src/platform/linux/tools.rs::check_arguments（check --readonly 固定参数）。
+- 撤回条件：本实现接入 --repair/--qgroup-report 等新选项消费面时重审。

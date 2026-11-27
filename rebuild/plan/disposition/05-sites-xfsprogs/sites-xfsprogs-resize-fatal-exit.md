@@ -10,3 +10,10 @@ SA2-004/005；src/app/execute/filesystem.rs::run_online_native/verify_xfs_size�
 
 ## 撤回条件
 同 resize-error-report：选项段消费或 SA2 边界变化时重审。
+
+## 换版重放补充（xfsprogs 6.6.0→7.3.0）
+
+换版重放在本批新增/改写 1 行（state=待判），已全部翻态：裁剪 1；note 见同名 tsv。
+- 判断：新增行为 -r realtime 段出口（failed to access realtime device）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，realtime 段不在消费面。
+- 依据：SA2-004/005；src/app/execute/filesystem.rs::online_invocation/verify_xfs_size。
+- 撤回条件：本实现引入 -r/-l 等选项段消费或 SA2-004/005 边界被推翻时重审。

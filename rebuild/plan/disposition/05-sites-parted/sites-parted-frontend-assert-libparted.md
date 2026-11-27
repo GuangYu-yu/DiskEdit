@@ -35,3 +35,11 @@
 ## 差异与拆分
 
 - 本批无差异（D-建议）行；结论混合时拆分建议见 plan/disposition/reports/chunk-C-parted.md。
+
+## 换版重放补充（2026-11-27：parted 3.6→3.8）
+
+- 本批新增/改写 7 行：裁剪 6 行（00761/00762/00776/00777 fs/r/fat 断言——parted fs 操作面不入范围，SA1-017/SA2-014；00910/00911 fs/r/hfs cache 断言——SA1-017）；拒绝 1 行（01792 ped_malloc 参数断言——C 库内不变量，Rust 所有权/类型承担，SA1-021）。
+
+**依据**：plan/baseline/incident-classes.tsv（行内引 SA id）；plan/baseline/refusal-map.tsv；行原文 plan/baseline/reference/sites/*.tsv；上游源码对照 /tmp/refsrc（新）与 /tmp/src（旧）。
+
+**撤回条件**：SA1-016/017 重开（出现必须识别对应老盘标/登记新文件系统族的外部契约，须先补探测、写回用例与拒绝矩阵）或 SA2-014 重开（上游 fatresize 修复分区设备视图断言且 -s 语义安全）时，对应行转为认领并重审。01792 撤回条件：Rust 架构承担失效（如引入等价 C 分配层）时重评。

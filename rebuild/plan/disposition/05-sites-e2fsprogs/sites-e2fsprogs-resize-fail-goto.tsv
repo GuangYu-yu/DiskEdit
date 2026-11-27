@@ -14,7 +14,7 @@ e2fsprogs-00012	sites	裁剪	同上
 e2fsprogs-00013	sites	裁剪	同上
 e2fsprogs-00014	sites	裁剪	同上
 e2fsprogs-00015	sites	裁剪	同上
-e2fsprogs-00016	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00016	sites	裁剪	裁剪：resize2fs 内部失败清理路径——本实现不实现 resize2fs，按固定次序消费其退出码并以 dumpe2fs 回读证实（SA2-001 次序、SA2-002 短文件系统落已写待恢复、SA2-003 回读只收填满目标）
 e2fsprogs-00017	sites	裁剪	同上
 e2fsprogs-00018	sites	裁剪	同上
 e2fsprogs-00019	sites	裁剪	同上
@@ -26,7 +26,7 @@ e2fsprogs-00024	sites	裁剪	同上
 e2fsprogs-00025	sites	裁剪	同上
 e2fsprogs-00026	sites	裁剪	同上
 e2fsprogs-00027	sites	裁剪	同上
-e2fsprogs-00029	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00029	sites	裁剪	裁剪：resize2fs 内部失败清理路径——本实现不实现 resize2fs，按固定次序消费其退出码并以 dumpe2fs 回读证实（SA2-001 次序、SA2-002 短文件系统落已写待恢复、SA2-003 回读只收填满目标）
 e2fsprogs-00030	sites	裁剪	同上
 e2fsprogs-00031	sites	裁剪	同上
 e2fsprogs-00032	sites	裁剪	同上

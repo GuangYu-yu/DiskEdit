@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-xfsprogs-00450	sites	待判	换版重放：本行在上游新版本新增或改写
+xfsprogs-00450	sites	裁剪	裁剪：mkfs.xfs " FAILED (%d)" 管道打印——随外部工具自带，只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）

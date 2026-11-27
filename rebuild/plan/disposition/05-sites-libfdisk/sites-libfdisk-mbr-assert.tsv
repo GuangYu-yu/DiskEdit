@@ -56,7 +56,7 @@ libfdisk-00268	sites	认领	同上
 libfdisk-00269	sites	认领	同上
 libfdisk-00270	sites	认领	同上
 libfdisk-00279	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022
-libfdisk-00280	sites	待判	换版重放：本行在上游新版本新增或改写
+libfdisk-00280	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；标签类型不变量由枚举结构性排除。所属 dos_verify_disklabel 的重叠/越界一致性校验由判定层重叠校验与 inspect 损伤类别承担（crates/core/src/table/edit.rs）。依据：SA1-022、SA1-027
 libfdisk-00281	sites	拒绝	同上
 libfdisk-00284	sites	拒绝	同上
 libfdisk-00285	sites	拒绝	同上

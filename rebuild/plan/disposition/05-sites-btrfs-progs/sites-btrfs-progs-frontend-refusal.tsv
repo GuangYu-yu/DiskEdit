@@ -8,41 +8,41 @@ btrfs-progs-00019	sites	裁剪	同上
 btrfs-progs-00020	sites	裁剪	同上
 btrfs-progs-00023	sites	裁剪	同上
 btrfs-progs-00025	sites	裁剪	同上
-btrfs-progs-00026	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00027	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00026	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00027	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00028	sites	裁剪	同上
 btrfs-progs-00029	sites	裁剪	同上
 btrfs-progs-00031	sites	裁剪	同上
 btrfs-progs-00032	sites	裁剪	同上
-btrfs-progs-00033	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00034	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00035	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00036	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00037	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00038	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00039	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00040	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00041	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00042	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00043	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00044	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00045	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00046	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00033	sites	认领	认领：resize 参数面尺寸串校验（parse_resize_args 长度上限）——本实现自建尺寸串（SA2-016 按带单位 KiB：src/app/execute/filesystem.rs::btrfs_size/grow_plan/shrink），上游 parse 面在同接口生效
+btrfs-progs-00034	sites	裁剪	裁剪：devid 前缀/devid 查找形态——本实现只发 `max` 与绝对目标 `<N>k`（单设备目标，SA2-016），多设备在判定层按占用拒绝（B17，plan/06-防漂移执行手册.md）
+btrfs-progs-00035	sites	认领	认领：resize 参数面尺寸串解析（parse_resize_args 解析失败即拒）——SA2-016 按带单位的大小（KiB）resize（src/app/execute/filesystem.rs::btrfs_size/grow_plan/shrink）
+btrfs-progs-00036	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00037	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00038	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00039	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00040	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00041	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00042	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00043	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00044	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00045	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00046	sites	裁剪	裁剪：--offline 离线扩容面（check_offline_resize_args/offline_resize）——本实现按 SA2-016 走挂载后在线 resize，--offline 选项不在消费面（src/app/execute/filesystem.rs::online_invocation）
 btrfs-progs-00047	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write
 btrfs-progs-00048	sites	认领	同上
-btrfs-progs-00052	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00054	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00056	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00058	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00052	sites	裁剪	裁剪：devid 前缀/devid 查找形态——本实现只发 `max` 与绝对目标 `<N>k`（单设备目标，SA2-016），多设备在判定层按占用拒绝（B17，plan/06-防漂移执行手册.md）
+btrfs-progs-00054	sites	裁剪	裁剪：按增量扩缩形态（-X/+X 相对量与 overflow 越界校验）——本实现只发 `max` 与绝对目标 `<N>k`（SA2-016），增量形态不在消费面（src/app/execute/filesystem.rs::btrfs_size/grow_plan）
+btrfs-progs-00056	sites	裁剪	裁剪：按增量扩缩形态（-X/+X 相对量与 overflow 越界校验）——本实现只发 `max` 与绝对目标 `<N>k`（SA2-016），增量形态不在消费面（src/app/execute/filesystem.rs::btrfs_size/grow_plan）
+btrfs-progs-00058	sites	裁剪	裁剪：--enqueue/--offline 新选项组合校验——本实现不消费 --enqueue/--offline（SA2-016 在线 resize；src/app/execute/filesystem.rs::online_invocation）
 btrfs-progs-00059	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write
-btrfs-progs-00060	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00061	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00060	sites	裁剪	裁剪：文件镜像 resize 形态（file containing a BTRFS image → --offline）——本实现只对挂载目录发在线 resize（SA2-016；src/app/execute/filesystem.rs::online_invocation）
+btrfs-progs-00061	sites	认领	认领：resize 调用时独占操作检查错误路径（unable to check status of exclusive operation）——SA2-006/007 消费边界内生效，非零退出按失败/已写待恢复（src/app/execute/filesystem.rs::online_invocation）
 btrfs-progs-00062	sites	认领	同上
 btrfs-progs-00063	sites	认领	同上
 btrfs-progs-00064	sites	认领	同上
 btrfs-progs-00065	sites	认领	同上
-btrfs-progs-00066	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00067	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00066	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00067	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00068	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00069	sites	裁剪	同上
 btrfs-progs-00070	sites	裁剪	同上
@@ -52,8 +52,8 @@ btrfs-progs-00075	sites	裁剪	同上
 btrfs-progs-00077	sites	裁剪	同上
 btrfs-progs-00079	sites	裁剪	同上
 btrfs-progs-00081	sites	裁剪	同上
-btrfs-progs-00083	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00085	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00083	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00085	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00087	sites	裁剪	同上
 btrfs-progs-00088	sites	裁剪	同上
 btrfs-progs-00089	sites	裁剪	同上
@@ -64,7 +64,7 @@ btrfs-progs-00095	sites	裁剪	同上
 btrfs-progs-00097	sites	裁剪	同上
 btrfs-progs-00099	sites	裁剪	同上
 btrfs-progs-00106	sites	裁剪	同上
-btrfs-progs-00107	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00107	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00110	sites	裁剪	同上
 btrfs-progs-00113	sites	裁剪	同上
 btrfs-progs-00118	sites	裁剪	同上
@@ -76,14 +76,14 @@ btrfs-progs-00131	sites	裁剪	同上
 btrfs-progs-00132	sites	裁剪	同上
 btrfs-progs-00133	sites	裁剪	同上
 btrfs-progs-00134	sites	裁剪	同上
-btrfs-progs-00135	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00135	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00136	sites	裁剪	同上
 btrfs-progs-00137	sites	裁剪	同上
 btrfs-progs-00138	sites	裁剪	同上
 btrfs-progs-00140	sites	裁剪	同上
 btrfs-progs-00142	sites	裁剪	同上
-btrfs-progs-00143	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00144	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00143	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00144	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00145	sites	裁剪	同上
 btrfs-progs-00146	sites	裁剪	同上
 btrfs-progs-00147	sites	裁剪	同上
@@ -96,12 +96,12 @@ btrfs-progs-00159	sites	裁剪	同上
 btrfs-progs-00160	sites	裁剪	同上
 btrfs-progs-00162	sites	裁剪	同上
 btrfs-progs-00164	sites	裁剪	同上
-btrfs-progs-00167	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00168	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00167	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00168	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00169	sites	裁剪	同上
-btrfs-progs-00171	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00173	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00171	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00173	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
 btrfs-progs-00175	sites	裁剪	同上
 btrfs-progs-00179	sites	裁剪	同上
-btrfs-progs-00181	sites	待判	换版重放：本行在上游新版本新增或改写
-btrfs-progs-00183	sites	待判	换版重放：本行在上游新版本新增或改写
+btrfs-progs-00181	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00183	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）

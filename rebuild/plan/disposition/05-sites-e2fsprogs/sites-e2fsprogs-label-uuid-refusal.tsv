@@ -93,11 +93,11 @@ e2fsprogs-00311	sites	裁剪	同上
 e2fsprogs-00314	sites	裁剪	同上
 e2fsprogs-00315	sites	差异	D15：set label/ext 卷标超长时前置拒绝（exit 3），不采纳 tune2fs 的“截断+警告”——依据 crates/core/src/fs/attrs.rs::label_problem、src/app/decide/edit.rs::content_property、tests/cases/mod.rs::set_label_on_ext_refuses_an_over-long_label。
 e2fsprogs-00316	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
-e2fsprogs-00319	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00319	sites	裁剪	裁剪：tune2fs quota 特性开关与 inode 尺寸改写的“卸载才可改”校验——参数面不接线（本实现 attrs 面只有卷标与 UUID，tune2fs -L/-U/-l 固定形式）；挂载中目标由占用闸更早拒绝（B4/B17）
 e2fsprogs-00320	sites	裁剪	同上
 e2fsprogs-00322	sites	认领	认领：同向拒绝——挂载中的 ext 本实现经占用闸在任何写之前拒绝 UUID 改写，不走 tune2fs 的挂载检查。依据 src/app/decide/edit.rs::precheck、src/platform/linux/mod.rs::block_occupancy、B4/B17 占用闸。
 e2fsprogs-00323	sites	认领	认领：UUID 形状前置校验已实现——非 UUID 文本在判定层拒绝，不落到工具。依据 src/app/decide/edit.rs::is_uuid（含单测）、tests/cases/mod.rs 的 set uuid 拒侧用例。
 e2fsprogs-00324	sites	认领	同上
-e2fsprogs-00325	sites	待判	换版重放：本行在上游新版本新增或改写
+e2fsprogs-00325	sites	裁剪	裁剪：tune2fs quota 特性开关与 inode 尺寸改写的“卸载才可改”校验——参数面不接线（本实现 attrs 面只有卷标与 UUID，tune2fs -L/-U/-l 固定形式）；挂载中目标由占用闸更早拒绝（B4/B17）
 e2fsprogs-00326	sites	裁剪	同上
 e2fsprogs-00327	sites	裁剪	同上
