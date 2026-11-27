@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+libfdisk-01000	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk TUI）

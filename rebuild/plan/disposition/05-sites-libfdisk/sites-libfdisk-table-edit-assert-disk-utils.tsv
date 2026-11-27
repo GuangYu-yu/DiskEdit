@@ -26,7 +26,6 @@ libfdisk-00959	sites	裁剪	同上
 libfdisk-00965	sites	认领	dump 面定案：info JSON 为唯一结构化输出，不提供 sfdisk 脚本 dump 格式。依据：SA1-010、SA1-007
 libfdisk-00968	sites	认领	同上
 libfdisk-00969	sites	认领	同上
-libfdisk-01000	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk TUI） 建议拆分:sites-libfdisk-table-edit-assert-sfdisk
 libfdisk-01002	sites	裁剪	同上
 libfdisk-01003	sites	裁剪	同上
 libfdisk-01004	sites	裁剪	同上

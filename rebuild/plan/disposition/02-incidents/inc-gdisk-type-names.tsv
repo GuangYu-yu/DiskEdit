@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+gdisk-inc-00040	incidents	裁剪	Apple 类型 GUID 展示名映射不在本实现面；类型以 GUID 数据输出（TypeSelector）

@@ -1,0 +1,7 @@
+row_id	ledger	state	note
+lvm2-00466	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
+lvm2-00467	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
+lvm2-00468	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付
+lvm2-00469	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（resize.rs::pv_chain_step）
+lvm2-00470	sites	认领	认领：SA2-017——pvresize 边界校验由链内 pvresize 交付，硬失败经非零退出映射（R0386）；判定层尺寸核验（resize.rs::pv_chain_step）
+lvm2-00638	sites	认领	认领：SA2-017——扩缩尺寸/extent 算术的等价拒绝在判定层（src/app/decide/resize.rs::pv_chain_step；refusal-map R0679/R0680/R0681），工具侧拒绝随 grow-lv 链交付

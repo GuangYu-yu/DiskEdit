@@ -79,7 +79,6 @@ e2fsprogs-00274	sites	裁剪	同上
 e2fsprogs-00281	sites	裁剪	同上
 e2fsprogs-00285	sites	裁剪	同上
 e2fsprogs-00286	sites	裁剪	同上
-e2fsprogs-00289	sites	拒绝	拒绝：在线改标路径（挂载点 FS_IOC_SETLABEL）不采纳——本实现对占用中目标一律在任何写之前拒绝，挂载中的 ext 改标须先卸载或用工具自身。依据 src/app/decide/edit.rs::precheck（Refusal::Occupied）、src/platform/linux/mod.rs::block_occupancy、B4/B17 占用闸。建议拆分: sites-e2fsprogs-label-uuid-set-surface
 e2fsprogs-00292	sites	拒绝	同上
 e2fsprogs-00297	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
 e2fsprogs-00298	sites	裁剪	同上
@@ -87,17 +86,13 @@ e2fsprogs-00301	sites	裁剪	同上
 e2fsprogs-00304	sites	裁剪	同上
 e2fsprogs-00305	sites	裁剪	同上
 e2fsprogs-00306	sites	裁剪	同上
-e2fsprogs-00307	sites	认领	认领：同向拒绝——挂载状态无法确定时 tune2fs 拒绝改写；本实现占用探测 Unknown 一律拒绝（Refusal::OccupancyUnknown），不猜事实。依据 src/app/decide/edit.rs::precheck、I5/B4。建议拆分: sites-e2fsprogs-label-uuid-set-surface
 e2fsprogs-00308	sites	认领	同上
 e2fsprogs-00310	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
 e2fsprogs-00313	sites	裁剪	同上
 e2fsprogs-00316	sites	裁剪	同上
-e2fsprogs-00317	sites	差异	D15：set label/ext 卷标超长时前置拒绝（exit 3），不采纳 tune2fs 的“截断+警告”——依据 crates/core/src/fs/attrs.rs::label_problem、src/app/decide/edit.rs::content_property、tests/cases/mod.rs::set_label_on_ext_refuses_an_over-long_label。建议拆分: sites-e2fsprogs-label-uuid-set-surface
 e2fsprogs-00318	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
 e2fsprogs-00321	sites	裁剪	同上
 e2fsprogs-00322	sites	裁剪	同上
-e2fsprogs-00324	sites	认领	认领：同向拒绝——挂载中的 ext 本实现经占用闸在任何写之前拒绝 UUID 改写，不走 tune2fs 的挂载检查。依据 src/app/decide/edit.rs::precheck、src/platform/linux/mod.rs::block_occupancy、B4/B17 占用闸。建议拆分: sites-e2fsprogs-label-uuid-set-surface
-e2fsprogs-00325	sites	认领	认领：UUID 形状前置校验已实现——非 UUID 文本在判定层拒绝，不落到工具。依据 src/app/decide/edit.rs::is_uuid（含单测）、tests/cases/mod.rs 的 set uuid 拒侧用例。建议拆分: sites-e2fsprogs-label-uuid-set-surface
 e2fsprogs-00326	sites	认领	同上
 e2fsprogs-00327	sites	裁剪	裁剪：tune2fs 特性开关/外部 journal 设备/MMP/inode 尺寸/扩展选项/e2label/findfs/e2undo 的参数面与内部拒绝——本实现 attrs 面只有卷标与 UUID（tune2fs -L/-U/-l 固定形式），其余选项不接线（命令面冻结 + 档案表 attrs 列）
 e2fsprogs-00328	sites	裁剪	同上

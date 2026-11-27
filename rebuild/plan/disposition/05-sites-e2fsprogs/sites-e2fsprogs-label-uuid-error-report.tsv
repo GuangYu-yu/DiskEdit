@@ -45,7 +45,6 @@ e2fsprogs-00282	sites	裁剪	同上
 e2fsprogs-00283	sites	裁剪	同上
 e2fsprogs-00284	sites	裁剪	同上
 e2fsprogs-00287	sites	裁剪	同上
-e2fsprogs-00288	sites	拒绝	拒绝：在线改标路径（挂载点 FS_IOC_SETLABEL）不采纳——本实现对占用中目标一律在任何写之前拒绝，挂载中的 ext 改标须先卸载或用工具自身。依据 src/app/decide/edit.rs::precheck（Refusal::Occupied）、src/platform/linux/mod.rs::block_occupancy、B4/B17 占用闸。建议拆分: sites-e2fsprogs-label-uuid-set-surface
 e2fsprogs-00290	sites	拒绝	同上
 e2fsprogs-00291	sites	拒绝	同上
 e2fsprogs-00293	sites	拒绝	同上

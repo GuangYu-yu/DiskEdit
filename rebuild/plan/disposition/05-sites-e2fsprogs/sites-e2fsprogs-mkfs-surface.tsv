@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+e2fsprogs-00481	sites	差异	D15：mkfs/ext 卷标超长时在擦除任何字节前按 16 字节 s_volume_name 容量拒绝，不采纳 mke2fs 的“截断后建卷”——依据 src/app/decide/mkfs.rs 的 label_problem 前置闸、crates/core/src/fs/attrs.rs::label_problem。

@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+btrfs-progs-00975	sites	认领	认领：check 运行前的占用/挂载闸（已挂载且无 --force 即拒绝、mount status 不可查即报错）——调用时生效的拒绝面，退出码消费（src/app/execute/diagnose.rs::run）；本实现 check 固定只读参数（src/platform/linux/tools.rs::check_arguments）

@@ -38,7 +38,6 @@ e2fsprogs-01759	sites	裁剪	同上
 e2fsprogs-01761	sites	裁剪	同上
 e2fsprogs-01827	sites	裁剪	同上
 e2fsprogs-01831	sites	裁剪	同上
-e2fsprogs-01845	sites	认领	认领：e2fsck 退出码产出端（FSCK_OK=0 / FSCK_UNCORRECTED=4 / FSCK_ERROR=4 / FSCK_CANCELED=32 / 致命出口）。本实现按 SA2-001 消费——0/1/2 为成功（1/2=已修复），其余一律按失败；check 形态非零报问题。依据 src/app/execute/filesystem.rs::exit_is_clean、src/app/execute/diagnose.rs::run、tests/online.rs::a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial。建议拆分: sites-e2fsprogs-check-exit-contract
 e2fsprogs-01847	sites	认领	同上
 e2fsprogs-01867	sites	裁剪	裁剪：e2fsck 自身 usage/内存耗尽出口与辅助程序（extend/flushb/iscan/scantest/sigcatcher/logfile/region）的 exit——本实现以固定参数（-f -n / -fp）调用 e2fsck，usage 出口不可达，任何非零码已由退出码映射兜住；不实现 e2fsck，只消费退出码（SA2-001/002）
 e2fsprogs-01870	sites	裁剪	同上
@@ -48,7 +47,6 @@ e2fsprogs-01878	sites	裁剪	同上
 e2fsprogs-01888	sites	裁剪	同上
 e2fsprogs-01890	sites	裁剪	同上
 e2fsprogs-01892	sites	裁剪	同上
-e2fsprogs-01913	sites	认领	认领：e2fsck 退出码产出端（FSCK_OK=0 / FSCK_UNCORRECTED=4 / FSCK_ERROR=4 / FSCK_CANCELED=32 / 致命出口）。本实现按 SA2-001 消费——0/1/2 为成功（1/2=已修复），其余一律按失败；check 形态非零报问题。依据 src/app/execute/filesystem.rs::exit_is_clean、src/app/execute/diagnose.rs::run、tests/online.rs::a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial。建议拆分: sites-e2fsprogs-check-exit-contract
 e2fsprogs-01914	sites	认领	同上
 e2fsprogs-01915	sites	认领	同上
 e2fsprogs-01960	sites	认领	同上

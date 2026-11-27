@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+btrfs-progs-00492	sites	认领	认领：btrfstune fsid 变更（-f -U 指定值 / -f -u 生成）的拒绝与失败路径，调用时生效、退出码消费——uuid_program(Btrfs)=Btrfstune（crates/core/src/fs/attrs.rs）、src/app/execute/filesystem.rs content_property

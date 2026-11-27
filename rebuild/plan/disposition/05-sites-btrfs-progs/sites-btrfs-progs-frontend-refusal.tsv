@@ -13,15 +13,12 @@ btrfs-progs-00027	sites	裁剪	同上
 btrfs-progs-00028	sites	裁剪	同上
 btrfs-progs-00030	sites	裁剪	同上
 btrfs-progs-00031	sites	裁剪	同上
-btrfs-progs-00032	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
 btrfs-progs-00033	sites	认领	同上
 btrfs-progs-00035	sites	认领	同上
 btrfs-progs-00038	sites	裁剪	裁剪：devid 前缀/按增量扩缩的 resize 形态——本实现只发 `max` 与 `<N>k`（单设备目标），多设备在判定层按占用拒绝（B17 多设备证据），devid/增量面超出消费范围
 btrfs-progs-00040	sites	裁剪	同上
-btrfs-progs-00042	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
 btrfs-progs-00044	sites	认领	同上
 btrfs-progs-00046	sites	裁剪	裁剪：devid 前缀/按增量扩缩的 resize 形态——本实现只发 `max` 与 `<N>k`（单设备目标），多设备在判定层按占用拒绝（B17 多设备证据），devid/增量面超出消费范围
-btrfs-progs-00048	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
 btrfs-progs-00049	sites	认领	同上
 btrfs-progs-00050	sites	认领	同上
 btrfs-progs-00051	sites	认领	同上

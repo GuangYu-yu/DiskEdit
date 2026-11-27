@@ -34,7 +34,6 @@ dosfstools-00253	sites	认领	同上
 dosfstools-00255	sites	认领	同上
 dosfstools-00258	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
 dosfstools-00293	sites	拒绝	同上
-dosfstools-00295	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面 建议拆分:sites-dosfstools-mkfs-fatal-exit-cli
 dosfstools-00297	sites	裁剪	同上
 dosfstools-00299	sites	裁剪	同上
 dosfstools-00301	sites	裁剪	同上

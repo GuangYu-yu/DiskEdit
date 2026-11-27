@@ -1,5 +1,4 @@
 row_id	ledger	state	note
-libfdisk-00194	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022 建议拆分:sites-libfdisk-mbr-assert-chain
 libfdisk-00195	sites	拒绝	同上
 libfdisk-00196	sites	拒绝	同上
 libfdisk-00197	sites	拒绝	同上

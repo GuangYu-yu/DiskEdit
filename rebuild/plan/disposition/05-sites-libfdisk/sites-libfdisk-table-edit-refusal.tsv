@@ -2,7 +2,6 @@ row_id	ledger	state	note
 libfdisk-00067	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
 libfdisk-00105	sites	裁剪	同上
 libfdisk-00106	sites	裁剪	同上
-libfdisk-00113	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027 建议拆分:sites-libfdisk-table-edit-refusal-frontend
 libfdisk-00121	sites	认领	同上
 libfdisk-00122	sites	认领	同上
 libfdisk-00126	sites	认领	同上

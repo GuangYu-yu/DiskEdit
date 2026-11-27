@@ -1,6 +1,4 @@
 row_id	ledger	state	note
-ntfs-3g-00006	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住；建议拆分:sites-ntfs-3g-resize-cli-surface
-ntfs-3g-00009	sites	裁剪	裁剪：ntfsresize CLI/出口面（usage/version/err_exit 助手/main 出口）——固定参数消费（SA2-009）参数面不可达，非零退出由退出码映射兜住；建议拆分:sites-ntfs-3g-resize-cli-surface
 ntfs-3g-00017	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00018	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00020	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
@@ -31,6 +29,4 @@ ntfs-3g-00060	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消�
 ntfs-3g-00061	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00062	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
 ntfs-3g-00063	sites	认领	认领：SA2-015——卷尺寸回读（真机锚 tests/qemu_suite.rs::s21_ntfs_shrink）；待实现：产品收缩路径对称回读闸（缺回读证实，见 chunk-G 报告工作项）
-ntfs-3g-00064	sites	裁剪	裁剪：--no-action 干跑/建议路径不在消费链——固定参数不含（SA2-009）；建议拆分:sites-ntfs-3g-resize-cli-surface
 ntfs-3g-00065	sites	认领	认领：SA2-009/015——ntfsresize 固定参数消费（扩 -f -f / 缩 -f --size <bytes>，src/app/execute/filesystem.rs::grow_plan/shrink）；尺寸校验/卷回读/坏簇重定位提示在链内交付，硬失败经退出码映射；真机锚 tests/qemu_suite.rs::s18/s21
-ntfs-3g-00067	sites	裁剪	裁剪：--no-action 干跑/建议路径不在消费链——固定参数不含（SA2-009）；建议拆分:sites-ntfs-3g-resize-cli-surface

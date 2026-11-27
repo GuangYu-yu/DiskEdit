@@ -16,7 +16,7 @@ btrfs-progs-doc-00014	docs	裁剪	同 btrfs-progs-doc-00012
 btrfs-progs-doc-00015	docs	裁剪	同 btrfs-progs-doc-00012
 btrfs-progs-doc-00016	docs	裁剪	同 btrfs-progs-doc-00012
 btrfs-progs-doc-00017	docs	裁剪	同 btrfs-progs-doc-00012
-btrfs-progs-doc-00018	docs	认领	label show/update 在 btrfs attrs 面（catalog.rs BTRFS Program；SA2-012）；"≤256 字节无换行"约束由上游自保，本实现按 SA2-011 稳定字段回读
+btrfs-progs-doc-00018	docs	认领	"label show/update 在 btrfs attrs 面（catalog.rs BTRFS Program；SA2-012）；""≤256 字节无换行""约束由上游自保，本实现按 SA2-011 稳定字段回读"
 btrfs-progs-doc-00019	docs	认领	同 btrfs-progs-doc-00018（label 读写经档案表登记程序）
 btrfs-progs-doc-00020	docs	认领	同 btrfs-progs-doc-00018
 btrfs-progs-doc-00021	docs	裁剪	btrfs filesystem mkswapfile 不在依赖面
@@ -34,7 +34,7 @@ btrfs-progs-doc-00032	docs	认领	同 btrfs-progs-doc-00028
 btrfs-progs-doc-00033	docs	认领	同 btrfs-progs-doc-00028（devid 形态由单设备载体承接）
 btrfs-progs-doc-00034	docs	认领	同 btrfs-progs-doc-00028（max 形态由 grow 承接，observe/mod.rs SizeSpec::Grow）
 btrfs-progs-doc-00035	docs	认领	同 btrfs-progs-doc-00028
-btrfs-progs-doc-00036	docs	认领	同 btrfs-progs-doc-00028（"不动分区尺寸"由唯一表写承接 I3；分区与卷尺寸一致性由 SA2-016 拼接门保证）
+btrfs-progs-doc-00036	docs	认领	"同 btrfs-progs-doc-00028（""不动分区尺寸""由唯一表写承接 I3；分区与卷尺寸一致性由 SA2-016 拼接门保证）"
 btrfs-progs-doc-00037	docs	裁剪	btrfs filesystem show 扫描面不实现（识别以档案表为唯一事实源 SA1-017）
 btrfs-progs-doc-00038	docs	裁剪	同 btrfs-progs-doc-00037
 btrfs-progs-doc-00039	docs	裁剪	同 btrfs-progs-doc-00037
@@ -78,7 +78,6 @@ btrfs-progs-doc-00076	docs	裁剪	man5 balance filter 面，不在依赖面
 btrfs-progs-doc-00077	docs	裁剪	同 btrfs-progs-doc-00076
 btrfs-progs-doc-00078	docs	裁剪	同 btrfs-progs-doc-00076
 btrfs-progs-doc-00079	docs	裁剪	同 btrfs-progs-doc-00076
-btrfs-progs-doc-00080	docs	裁剪	mkfs.btrfs 上游选项/注记面；本实现 mkfs 以档案表固定参数调用（SA2-012），建议拆分:docs-btrfs-mkfs
 btrfs-progs-doc-00081	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00082	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00083	docs	裁剪	同 btrfs-progs-doc-00080
@@ -102,7 +101,7 @@ btrfs-progs-doc-00100	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00101	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00102	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00103	docs	裁剪	同 btrfs-progs-doc-00080
-btrfs-progs-doc-00104	docs	认领	上游默认拒绝覆盖既有文件系统、须 -f，与 SA1-005"覆盖须显式 --overwrite-data"取向一致；本实现 mkfs 同样默认拒绝覆盖
+btrfs-progs-doc-00104	docs	认领	"上游默认拒绝覆盖既有文件系统、须 -f，与 SA1-005""覆盖须显式 --overwrite-data""取向一致；本实现 mkfs 同样默认拒绝覆盖"
 btrfs-progs-doc-00105	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00106	docs	裁剪	同 btrfs-progs-doc-00080
 btrfs-progs-doc-00107	docs	裁剪	同 btrfs-progs-doc-00080

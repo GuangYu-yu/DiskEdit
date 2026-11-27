@@ -7,7 +7,7 @@ testdisk-00006	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC
 testdisk-00007	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
 testdisk-00010	sites	认领	条目数 0/>4096 拒绝 ↔ 条目数异常按损坏处理（默认几何 128）；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
 testdisk-00011	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
-testdisk-00012	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00012	sites	认领	认领：GPT 条目数组 16384B 下限校验待实现（标签 缺校验；见 00-root-causes.md 工作项 2）
 testdisk-00013	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
 testdisk-00014	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
 testdisk-00018	sites	裁剪	RAID 超级块内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs

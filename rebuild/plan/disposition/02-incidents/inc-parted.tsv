@@ -9,7 +9,6 @@ parted-inc-00007	incidents	认领	SA1-009：已诊断错误一律非零退出码
 parted-inc-00008	incidents	认领	SA1-001：备份头重定位+规范化并入同一表写并回读（R0602/R0607；tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write）
 parted-inc-00009	incidents	认领	SA3-003：截断/撕裂盘按分类回退可读副本，读路径不崩溃不猜（crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup）
 parted-inc-00010	incidents	拒绝	ped_device 缓存生命周期是 C 设备缓存实现细节；Rust 无全局设备缓存，防御由所有权承担
-parted-inc-00011	incidents	裁剪	mkpart 按文件系统名自动映射类型码的特性不存在；类型须显式给出（observe/mod.rs TypeSelector Guid/0xNN），建议拆分:inc-parted-type-map
 parted-inc-00012	incidents	认领	SA1-002/SA1-003：只读命令零写入，PMBR 只在表写中重写（tests/case_runner.rs::read_only_commands_leave_the_target_bytes_unchanged、new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one）
 parted-inc-00013	incidents	认领	SA1-013：写表后按分区 BLKPG 同步内核视图（tests/online.rs::online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem）
 parted-inc-00014	incidents	认领	GPT-004/GPT-016：条目数组 CRC 两侧逐侧校验、不再只信主头（gpt/header.rs+gpt/parse.rs；SA3-003 分类不猜）

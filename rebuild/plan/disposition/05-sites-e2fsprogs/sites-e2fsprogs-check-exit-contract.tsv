@@ -1,0 +1,3 @@
+row_id	ledger	state	note
+e2fsprogs-01845	sites	认领	认领：e2fsck 退出码产出端（FSCK_OK=0 / FSCK_UNCORRECTED=4 / FSCK_ERROR=4 / FSCK_CANCELED=32 / 致命出口）。本实现按 SA2-001 消费——0/1/2 为成功（1/2=已修复），其余一律按失败；check 形态非零报问题。依据 src/app/execute/filesystem.rs::exit_is_clean、src/app/execute/diagnose.rs::run、tests/online.rs::a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial。
+e2fsprogs-01913	sites	认领	认领：e2fsck 退出码产出端（FSCK_OK=0 / FSCK_UNCORRECTED=4 / FSCK_ERROR=4 / FSCK_CANCELED=32 / 致命出口）。本实现按 SA2-001 消费——0/1/2 为成功（1/2=已修复），其余一律按失败；check 形态非零报问题。依据 src/app/execute/filesystem.rs::exit_is_clean、src/app/execute/diagnose.rs::run、tests/online.rs::a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial。

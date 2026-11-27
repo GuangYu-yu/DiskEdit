@@ -1,0 +1,2 @@
+row_id	ledger	state	note
+dosfstools-00295	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
