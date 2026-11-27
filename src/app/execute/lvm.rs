@@ -100,6 +100,19 @@ fn action(steps: &[Step]) -> Result<(Action, Region), ExecError> {
     ))
 }
 
+/// 缩 PV 的边界判据：已分配 extent 的末端超出目标尺寸即拒绝。
+///
+/// 这个判据必须能用"删除即红"的用例守住：把它退化成无条件放行，
+/// 缩 PV 会截断仍在使用的 extent。
+fn shrink_allocated_check(allocated: u64, bytes: u64) -> Result<(), ExecError> {
+    if allocated > bytes {
+        return Err(ExecError::InvalidPlan(format!(
+            "the PV's allocated extents end at {allocated} bytes, past the shrink target {bytes} bytes"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn execute_plan(
     platform: &dyn Platform,
     target: &Path,
@@ -151,14 +164,7 @@ pub(super) fn execute_plan(
         })?;
         let allocated = lvm::pv_allocated_end_bytes(platform, dev)
             .map_err(|error| (lvm_exec_error(error), false))?;
-        if allocated > *bytes {
-            return Err((
-                ExecError::InvalidPlan(format!(
-                    "the PV's allocated extents end at {allocated} bytes, past the shrink target {bytes} bytes"
-                )),
-                false,
-            ));
-        }
+        shrink_allocated_check(allocated, *bytes).map_err(|error| (error, false))?;
     }
 
     session
@@ -193,4 +199,29 @@ pub(super) fn execute_plan(
 
 fn lvm_exec_error(error: LvmError) -> ExecError {
     ExecError::Io(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: I13
+    #[test]
+    fn a_shrink_past_the_allocated_end_is_rejected() {
+        let error =
+            shrink_allocated_check(4_194_304, 1_048_576).expect_err("已分配末端超过目标必须拒绝");
+        assert!(
+            error
+                .to_string()
+                .contains("past the shrink target 1048576 bytes"),
+            "实际错误：{error}"
+        );
+    }
+
+    // covers: I13
+    #[test]
+    fn a_shrink_covering_the_allocated_end_is_accepted() {
+        shrink_allocated_check(4_194_304, 4_194_304).expect("目标等于已分配末端应成立");
+        shrink_allocated_check(4_194_304, 8_388_608).expect("目标大于已分配末端应成立");
+    }
 }
