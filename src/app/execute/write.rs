@@ -8,7 +8,7 @@ use diskedit_core::region::{Region, RegionSet};
 
 use super::ExecError;
 use super::digest::{Digest, Hasher};
-use super::token::Recorded;
+use super::token::{Recorded, SessionId};
 use crate::platform::TargetHandle;
 
 /// 单次回读的块大小。
@@ -18,17 +18,22 @@ const VERIFY_CHUNK: usize = 1 << 20;
 pub struct WriteChannel<'a> {
     target: &'a mut dyn TargetHandle,
     declared: RegionSet,
+    session: SessionId,
     written: Vec<(Region, Digest)>,
     writes_done: usize,
     fail_after: Option<usize>,
 }
 
 impl<'a> WriteChannel<'a> {
-    /// 以本步声明区间建立通道。
-    pub fn new(target: &'a mut dyn TargetHandle, declared: &[Region]) -> Self {
+    /// 以本步声明区间与本步记录会话建立通道。
+    ///
+    /// 通道只接受该会话铸造的令牌；别的会话的令牌在这里被拒绝，复制或跨步
+    /// 复用无法通过校验。
+    pub fn new(target: &'a mut dyn TargetHandle, declared: &[Region], session: SessionId) -> Self {
         Self {
             target,
             declared: RegionSet::from_regions(declared.iter().copied()),
+            session,
             written: Vec::new(),
             writes_done: 0,
             fail_after: None,
@@ -72,7 +77,11 @@ impl<'a> WriteChannel<'a> {
         region: Region,
         bytes: &[u8],
     ) -> Result<(), ExecError> {
-        let _ = token;
+        if token.session() != self.session {
+            return Err(ExecError::InvalidPlan(
+                "the write token was minted by a different record session".to_owned(),
+            ));
+        }
         if !self.declared.covers(region) {
             return Err(ExecError::InvalidPlan(format!(
                 "write region [{}, {}) not declared by this step",
@@ -219,6 +228,14 @@ mod tests {
         Recorded::mint(&Mint::new(), 1)
     }
 
+    fn channel<'a>(
+        target: &'a mut MemoryTarget,
+        declared: &[Region],
+        token: &Recorded,
+    ) -> WriteChannel<'a> {
+        WriteChannel::new(target, declared, token.session())
+    }
+
     // covers: I3
     #[test]
     fn a_write_outside_the_declared_regions_is_rejected() {
@@ -226,10 +243,11 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 512).expect("区间")];
-        let mut channel = WriteChannel::new(&mut target, &declared);
+        let token = token();
+        let mut channel = channel(&mut target, &declared, &token);
         let region = Region::sized(512, 512).expect("区间");
         let error = channel
-            .write(&token(), region, &[0u8; 512])
+            .write(&token, region, &[0u8; 512])
             .expect_err("未声明的区间必须被拒绝");
         assert!(
             error.to_string().contains("not declared"),
@@ -244,10 +262,11 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 8192).expect("区间")];
-        let mut channel = WriteChannel::new(&mut target, &declared);
+        let token = token();
+        let mut channel = channel(&mut target, &declared, &token);
         let region = Region::sized(4096, 512).expect("区间");
         let error = channel
-            .write(&token(), region, &[0u8; 512])
+            .write(&token, region, &[0u8; 512])
             .expect_err("越过目标长度的写入必须被拒绝");
         assert!(
             error.to_string().contains("past the target length"),
@@ -262,11 +281,31 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 1024).expect("区间")];
-        let mut channel = WriteChannel::new(&mut target, &declared);
+        let token = token();
+        let mut channel = channel(&mut target, &declared, &token);
         let region = Region::sized(0, 512).expect("区间");
         channel
-            .write(&token(), region, &[0x5au8; 512])
+            .write(&token, region, &[0x5au8; 512])
             .expect("区间内的写入应成功");
         channel.verify_written().expect("回读摘要应一致");
+    }
+
+    // covers: I4
+    #[test]
+    fn a_token_from_another_session_is_rejected() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 512).expect("区间")];
+        let foreign = token();
+        let mut channel = WriteChannel::new(&mut target, &declared, SessionId::next());
+        let region = Region::sized(0, 512).expect("区间");
+        let error = channel
+            .write(&foreign, region, &[0u8; 512])
+            .expect_err("别的会话的令牌必须被拒绝");
+        assert!(
+            error.to_string().contains("different record session"),
+            "实际错误：{error}"
+        );
     }
 }

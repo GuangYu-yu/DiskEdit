@@ -13,6 +13,7 @@ use diskedit_core::record::{
 use diskedit_core::region::Region;
 
 use super::digest::Hasher;
+use super::token::SessionId;
 use super::{ExecError, Recorded};
 use crate::app::observe::records::{RECORD_FILE, hex16};
 use crate::platform::{Platform, StateLock};
@@ -25,11 +26,16 @@ pub const LOCK_FILE: &str = "record.lock";
 /// 元组字段私有，模块外无法构造；持有者才能铸造 [`Recorded`]。
 ///
 /// [`Recorded`]: super::token::Recorded
-pub struct Mint(());
+pub struct Mint(SessionId);
 
 impl Mint {
-    pub(crate) const fn new() -> Self {
-        Self(())
+    pub(crate) fn new() -> Self {
+        Self(SessionId::next())
+    }
+
+    /// 本次会话的标识；令牌携带它，写通道据此拒绝跨会话的令牌。
+    pub(crate) const fn session(&self) -> SessionId {
+        self.0
     }
 }
 
@@ -200,7 +206,12 @@ impl<'a> RecordSession<'a> {
 
     /// 本步原像已落盘，可以写目标字节。
     pub fn token(&self) -> Recorded {
-        Recorded::mint(&self.mint, 1)
+        Recorded::mint(&self.mint, u64::from(self.sequence))
+    }
+
+    /// 本会话的标识；写通道用它核对令牌来源。
+    pub const fn session(&self) -> SessionId {
+        self.mint.session()
     }
 
     /// 追加提交帧、落盘并删除记录。

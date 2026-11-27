@@ -572,7 +572,7 @@ pub(super) fn execute_plan(
                         false,
                     )
                 })?];
-                let mut channel = WriteChannel::new(handle.as_mut(), &declared);
+                let mut channel = WriteChannel::new(handle.as_mut(), &declared, session.session());
                 wipe(&mut channel, &token, &ranges).map_err(|error| (error, true))?;
                 channel.barrier().map_err(|error| (error, true))?;
             }

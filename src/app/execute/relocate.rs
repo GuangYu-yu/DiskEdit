@@ -13,6 +13,7 @@ use diskedit_core::table::relocate::{self, ChunkSpan};
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
 use super::digest::{Hasher, read_region};
+use super::token::SessionId;
 use super::transaction::{LOCK_FILE, Mint};
 use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
 use crate::app::decide::step::TableSegment;
@@ -179,7 +180,7 @@ fn execute(
 
     let mut wrote = false;
     if cursor < total {
-        let mut channel = WriteChannel::new(handle.as_mut(), &data.regions);
+        let mut channel = WriteChannel::new(handle.as_mut(), &data.regions, session.session());
         let mut rolling = Hasher::new();
         hash_prefix_in_channel(
             &channel,
@@ -221,7 +222,7 @@ fn execute(
         .register_table(&registered)
         .map_err(|(error, _)| (error, wrote))?;
 
-    let mut channel = WriteChannel::new(handle.as_mut(), &table.regions);
+    let mut channel = WriteChannel::new(handle.as_mut(), &table.regions, session.session());
     for segment in segments {
         channel
             .write(&token, segment.region, &segment.bytes)
@@ -605,7 +606,14 @@ impl<'a> Session<'a> {
     }
 
     fn token(&self) -> Recorded {
-        Recorded::mint(&self.mint, 1)
+        Recorded::mint(
+            &self.mint,
+            u64::try_from(self.frames.len()).unwrap_or(u64::MAX),
+        )
+    }
+
+    fn session(&self) -> SessionId {
+        self.mint.session()
     }
 
     fn table_registered(&self) -> bool {
