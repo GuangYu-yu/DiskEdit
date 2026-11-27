@@ -103,7 +103,7 @@ pub(super) fn execute_plan(
         .map_err(|error| (error, false))?;
 
     let token = session.token();
-    let mut channel = WriteChannel::new(handle.as_mut(), &step.regions);
+    let mut channel = WriteChannel::new(handle.as_mut(), &step.regions, session.session());
     let mut wrote = false;
     for segment in segments {
         channel

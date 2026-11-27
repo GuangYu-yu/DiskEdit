@@ -345,6 +345,9 @@ impl TargetKind {
     }
 }
 
+/// 镜像文件没有内核扇区事实时使用的逻辑块大小。
+pub const IMAGE_SECTOR_SIZE: u64 = 512;
+
 /// 目标在宿主上的占用结论。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Occupancy {
@@ -510,6 +513,15 @@ pub trait TargetHandle {
 
     /// 块设备的逻辑扇区字节数；普通文件没有这一事实。
     fn sector_size(&self) -> Option<u64>;
+
+    /// 解析目标的逻辑块大小。
+    ///
+    /// 块设备以内核回报为准，内核读不到时这里是 `None`：没有可信值，调用方必须
+    /// 显式处理，不能当成 512。镜像没有内核扇区事实，按镜像格式的固定块大小。
+    fn resolved_sector_size(&self) -> Option<u64> {
+        self.sector_size()
+            .or_else(|| matches!(self.kind(), TargetKind::File).then_some(IMAGE_SECTOR_SIZE))
+    }
 
     /// 目标是否为空。
     fn is_empty(&self) -> bool {
@@ -677,4 +689,79 @@ pub trait Platform: Send + Sync {
 
     /// 对状态文件取独占锁；离开作用域即释放。
     fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 只提供形态与扇区事实的句柄，用于校验块大小解析规则。
+    struct Probe {
+        kind: TargetKind,
+        sector: Option<u64>,
+    }
+
+    impl TargetHandle for Probe {
+        fn path(&self) -> &Path {
+            Path::new("probe")
+        }
+
+        fn len(&self) -> u64 {
+            0
+        }
+
+        fn kind(&self) -> TargetKind {
+            self.kind
+        }
+
+        fn sector_size(&self) -> Option<u64> {
+            self.sector
+        }
+
+        fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> PlatformResult<usize> {
+            Ok(0)
+        }
+
+        fn write_at(&mut self, _offset: u64, _buf: &[u8]) -> PlatformResult<usize> {
+            Ok(0)
+        }
+
+        fn barrier(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn refresh_partitions(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+    }
+
+    // covers: I5
+    #[test]
+    fn an_image_without_a_kernel_sector_fact_uses_the_image_default() {
+        let probe = Probe {
+            kind: TargetKind::File,
+            sector: None,
+        };
+        assert_eq!(probe.resolved_sector_size(), Some(IMAGE_SECTOR_SIZE));
+    }
+
+    // covers: I5
+    #[test]
+    fn a_block_device_without_a_reported_sector_has_no_trusted_value() {
+        let probe = Probe {
+            kind: TargetKind::BlockDevice,
+            sector: None,
+        };
+        assert_eq!(probe.resolved_sector_size(), None);
+    }
+
+    // covers: I5
+    #[test]
+    fn a_reported_sector_size_wins_over_the_image_default() {
+        let probe = Probe {
+            kind: TargetKind::BlockDevice,
+            sector: Some(4096),
+        };
+        assert_eq!(probe.resolved_sector_size(), Some(4096));
+    }
 }

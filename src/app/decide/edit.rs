@@ -556,10 +556,15 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 Ok(used) => used,
                 Err(error) => return refuse_edit(&error.to_string()),
             };
+            let Some(last_lba) = total_lba.checked_sub(1) else {
+                return Decision::Refuse(Refusal::ArgumentOutOfRange {
+                    what: "the MBR table reports zero total sectors".to_owned(),
+                });
+            };
             let placed = match place(
                 &used,
                 1,
-                total_lba.saturating_sub(1),
+                last_lba,
                 add.align,
                 snapshot.target.sector_size,
                 sectors,

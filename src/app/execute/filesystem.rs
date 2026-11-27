@@ -426,7 +426,7 @@ fn run_online_carrier(
             false,
         ));
     };
-    let sector_size = target_sector_size(platform, online.disk).unwrap_or(512);
+    let sector_size = target_sector_size(platform, online.disk).map_err(|error| (error, false))?;
     let request = OnlineRequest {
         mount_point: online.mount_point.to_path_buf(),
         device: online.device.to_path_buf(),
@@ -572,7 +572,7 @@ pub(super) fn execute_plan(
                         false,
                     )
                 })?];
-                let mut channel = WriteChannel::new(handle.as_mut(), &declared);
+                let mut channel = WriteChannel::new(handle.as_mut(), &declared, session.session());
                 wipe(&mut channel, &token, &ranges).map_err(|error| (error, true))?;
                 channel.barrier().map_err(|error| (error, true))?;
             }
@@ -811,7 +811,11 @@ pub(super) fn target_sector_size(platform: &dyn Platform, target: &Path) -> Resu
     let handle = platform
         .open_target_read_only(target)
         .map_err(ExecError::from)?;
-    Ok(handle.sector_size().unwrap_or(512))
+    handle.resolved_sector_size().ok_or_else(|| {
+        ExecError::Unsupported(
+            "the target's logical sector size is not reported; refusing to assume one".to_owned(),
+        )
+    })
 }
 
 /// 换区重建之前从旧首部读出的身份。

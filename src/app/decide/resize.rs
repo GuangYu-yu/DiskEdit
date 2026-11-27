@@ -200,11 +200,20 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         });
     }
 
+    let Some(new_bytes) = new_end
+        .checked_sub(start)
+        .and_then(|count| count.checked_add(1))
+        .and_then(|count| count.checked_mul(sector))
+    else {
+        return Decision::Refuse(Refusal::TableEdit {
+            why: "the resized partition's byte range overflows the address space".to_owned(),
+        });
+    };
     let geometry = FsGeometry {
         number,
         start_lba: start,
         old_bytes: current,
-        new_bytes: (new_end - start + 1).saturating_mul(sector),
+        new_bytes,
         sector,
     };
     // ext 收缩写前闸：最小尺寸在离线采集阶段由只读探针取到。
@@ -567,7 +576,14 @@ fn pv_chain_step(
                         why: format!("LV {} reports 0 bytes — nothing to extend", selection.path),
                     });
                 }
-                let delta = geometry.new_bytes.saturating_sub(geometry.old_bytes);
+                let delta = geometry
+                    .new_bytes
+                    .checked_sub(geometry.old_bytes)
+                    .ok_or_else(|| Refusal::TableEdit {
+                        why: "the new size is smaller than the current size, so there is no \
+                                  growth to hand to the LV"
+                            .to_owned(),
+                    })?;
                 let extents = delta / selection.extent_bytes;
                 if extents == 0 {
                     return Err(Refusal::TableEdit {
@@ -1656,12 +1672,19 @@ fn plan_relocations(
         if entry.partition_type_guid.is_zero() || entry.starting_lba <= old_end {
             continue;
         }
-        let sectors = entry.ending_lba - entry.starting_lba + 1;
+        let sectors = entry
+            .ending_lba
+            .checked_sub(entry.starting_lba)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| beyond_table("the partition's sector count overflows the LBA range"))?;
         let new_start = entry
             .starting_lba
             .checked_add(delta)
             .ok_or_else(|| beyond_table("the relocation target overflows the LBA range"))?;
-        if new_start.saturating_add(sectors - 1) > last_usable {
+        let new_end = new_start
+            .checked_add(sectors - 1)
+            .ok_or_else(|| beyond_table("the relocation target overflows the LBA range"))?;
+        if new_end > last_usable {
             return Err(beyond_table(format!(
                 "not enough room to relocate partition #{} — no space before last usable LBA {last_usable}",
                 index + 1

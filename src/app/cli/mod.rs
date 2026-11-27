@@ -216,6 +216,13 @@ fn capture_failed(
             );
             return exit::UNSUPPORTED;
         }
+        observe::CaptureError::SectorSizeUnknown => {
+            eprintln!(
+                "refused: the target does not report a logical sector size and none was \
+                 declared — pass --sector-size"
+            );
+            return exit::REFUSED;
+        }
         // 宿主本身不提供这项能力：不是目标拒绝，而是平台不支持。
         observe::CaptureError::Platform(platform::PlatformError::NotSupported(why)) => {
             eprintln!("unsupported: {why}");
@@ -234,6 +241,7 @@ fn capture_failed(
         observe::CaptureError::TooSmall { .. } => error.to_string(),
         observe::CaptureError::Unreadable { why } => why.clone(),
         observe::CaptureError::UnsupportedSector { .. } => unreachable!("上面已处理"),
+        observe::CaptureError::SectorSizeUnknown => unreachable!("上面已处理"),
         observe::CaptureError::DeclaredIdentityNotApplicable => unreachable!("上面已处理"),
         observe::CaptureError::SectorSizeOnBlockDevice => unreachable!("上面已处理"),
     };
