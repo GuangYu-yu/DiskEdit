@@ -35,6 +35,8 @@ pub struct GptView {
     pub disk_guid: String,
     pub last_usable_lba: u64,
     pub partitions: Vec<PartitionView>,
+    /// 主 GPT 头 `header_size` 之后的保留字节非零：表仍可用，但头部有损伤，供诊断告警。
+    pub reserved_damaged: bool,
 }
 
 /// MBR 视图。
@@ -212,9 +214,18 @@ fn read_gpt(handle: &dyn TargetHandle, sector_size: u64) -> PlatformResult<GptRe
                 disk_guid: guid_text(copy.header.disk_guid),
                 last_usable_lba: copy.header.last_usable_lba,
                 partitions,
+                reserved_damaged: reserved_damage(&header_bytes, copy.header.header_size),
             }))
         }
     }
+}
+
+/// 主 GPT 头 `header_size` 之后的保留字节是否有非零：规范要求其余字节为零，
+/// 非零说明头部被越界写过（不破坏 CRC 与解析，但值得在诊断里告警）。
+fn reserved_damage(header: &[u8], header_size: u32) -> bool {
+    header
+        .get(header_size as usize..)
+        .is_some_and(|rest| rest.iter().any(|&byte| byte != 0))
 }
 
 fn gpt_partition(
@@ -361,6 +372,17 @@ pub fn guid_text(guid: Guid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserved_gpt_header_damage_is_detected() {
+        let mut header = vec![0u8; 512];
+        assert!(!reserved_damage(&header, 92), "全零保留区不算损伤");
+        header[400] = 1;
+        assert!(reserved_damage(&header, 92), "保留区非零应判损伤");
+        // header_size 覆盖到的字节不参与保留区判断。
+        header[400] = 0;
+        assert!(!reserved_damage(&header, 512));
+    }
 
     #[test]
     fn guid_renders_the_canonical_mixed_endian_form() {

@@ -207,7 +207,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         new_bytes: (new_end - start + 1).saturating_mul(sector),
         sector,
     };
-    // ext 收缩写前闸：`resize2fs -P` 的最小尺寸在离线采集阶段取到（只读探针）。
+    // ext 收缩写前闸：最小尺寸在离线采集阶段由只读探针取到。
     // 目标小于最小值即拒绝，探针本身失败按"最小值未知"拒绝；两者都发生在任何
     // 写盘之前。基线在 layout/dry_run/MBR 三处各有一份，判据相同（R0211/R0382/R0416）。
     if shrink && !resize.no_fs && partition.content == ContentKind::Filesystem(FsKind::Ext) {

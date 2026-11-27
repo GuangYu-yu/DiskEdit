@@ -18,7 +18,10 @@ fn read(relative: &str) -> String {
 /// 双语对账覆盖的文档：英文（生成或手写）与中文译本。
 const BILINGUAL: &[(&str, &str)] = &[
     ("docs/en/reference.md", "docs/zh/reference.md"),
-    ("docs/en/capability-matrix.md", "docs/zh/capability-matrix.md"),
+    (
+        "docs/en/capability-matrix.md",
+        "docs/zh/capability-matrix.md",
+    ),
     ("docs/en/exit-codes.md", "docs/zh/exit-codes.md"),
     ("docs/en/internals.md", "docs/zh/internals.md"),
     ("docs/en/interop.md", "docs/zh/interop.md"),
@@ -37,7 +40,9 @@ fn generated_docs_match_their_sources() {
         .collect();
     let pairs: Vec<(&str, &str, &str, &str)> = texts
         .iter()
-        .map(|(en, en_text, zh, zh_text)| (en.as_str(), en_text.as_str(), zh.as_str(), zh_text.as_str()))
+        .map(|(en, en_text, zh, zh_text)| {
+            (en.as_str(), en_text.as_str(), zh.as_str(), zh_text.as_str())
+        })
         .collect();
     expected.push((
         diskedit::docsgen::I18N_CATALOGUE,

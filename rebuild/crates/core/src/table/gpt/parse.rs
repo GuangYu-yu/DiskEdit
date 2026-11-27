@@ -8,6 +8,9 @@ use super::entries::{PartitionEntry, parse_entries, validate_entries};
 use super::header::GptHeader;
 use super::write::array_crc;
 
+/// 条目数组字节总量的下限（规范实现要求至少 16 KiB）。
+const MIN_ARRAY_BYTES: usize = 16_384;
+
 /// 主副本与备份副本。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GptCopyKind {
@@ -137,6 +140,13 @@ fn parse_copy(
             return ParsedCopy::Damaged(TableError::InvalidGeometry("entry array size overflow"));
         }
     };
+    // 条目数组字节总量下限：规范实现（testdisk 等）要求至少 16 KiB。更小的数组
+    // 意味着条目表被截断或被伪造，按几何不成立拒绝，不继续把短数组当完整表读。
+    if logical < MIN_ARRAY_BYTES {
+        return ParsedCopy::Damaged(TableError::InvalidGeometry(
+            "entry array is smaller than 16384 bytes",
+        ));
+    }
     if logical > array.len() {
         return ParsedCopy::Damaged(TableError::BufferTooSmall {
             needed: logical,
@@ -173,6 +183,11 @@ pub fn validate_geometry(
     view: GptCopyKind,
 ) -> Result<GptState, TableError> {
     let invalid = TableError::InvalidGeometry;
+    // 规范版本上限：1.2（0x0001_0200）。更高版本可能改变条目语义，拒绝识别而不是
+    // 按已知布局猜读（testdisk 同口径）。
+    if header.revision > 0x0001_0200 {
+        return Err(invalid("revision is newer than 1.2"));
+    }
     let expected_my_lba = match view {
         GptCopyKind::Primary => PRIMARY_HEADER_LBA,
         GptCopyKind::Backup => last_lba,
@@ -396,6 +411,34 @@ mod tests {
             .serialize(SECTOR)
             .expect("序列化应成功");
         (primary, array.clone(), backup, array)
+    }
+
+    #[test]
+    fn a_revision_above_1_2_is_rejected() {
+        let last = 2047;
+        let (_, array, _, _) = pair(last);
+        let mut header = primary_header(last, last, array_crc(&array[..128 * 128]));
+        header.revision = 0x0001_0201;
+        let sector = header.serialize(SECTOR).expect("序列化应成功");
+        assert_eq!(
+            parse_primary(&sector, &array, last, SS),
+            ParsedCopy::Damaged(TableError::InvalidGeometry("revision is newer than 1.2"))
+        );
+    }
+
+    #[test]
+    fn an_entry_array_below_16_kib_is_rejected() {
+        let last = 2047;
+        let mut header = primary_header(last, last, 0);
+        header.number_of_partition_entries = 64;
+        let sector = header.serialize(SECTOR).expect("序列化应成功");
+        let array = vec![0u8; 64 * 128];
+        assert_eq!(
+            parse_primary(&sector, &array, last, SS),
+            ParsedCopy::Damaged(TableError::InvalidGeometry(
+                "entry array is smaller than 16384 bytes"
+            ))
+        );
     }
 
     #[test]

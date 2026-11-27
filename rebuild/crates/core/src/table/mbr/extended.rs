@@ -4,7 +4,7 @@
 //! （相对当前 EBR 的起点）。读取由调用方提供的闭包完成，因此本模块仍是纯函数。
 
 use super::super::TableError;
-use super::primary::{MBR_ENTRY_BASE, MBR_ENTRY_BYTES, MbrEntry};
+use super::primary::{MBR_ENTRY_BASE, MBR_ENTRY_BYTES, MBR_SIGNATURE_OFFSET, MbrEntry};
 
 /// 扩展链允许的最大逻辑分区数。
 pub const MAX_LOGICAL: usize = 128;
@@ -33,6 +33,11 @@ pub fn walk_extended(
                 needed: MBR_ENTRY_BASE + 2 * MBR_ENTRY_BYTES,
                 actual: sector.len(),
             });
+        }
+        // 每一级 EBR 先验 0x55AA 再推进：链中段坏签名的扇区不是 EBR，按签名缺失
+        // 拒绝，不把它当空表继续走（否则会把后续垃圾扇区误读成逻辑分区）。
+        if sector[MBR_SIGNATURE_OFFSET] != 0x55 || sector[MBR_SIGNATURE_OFFSET + 1] != 0xAA {
+            return Err(TableError::MbrSignatureMissing);
         }
         let link = parse_entry(&sector[MBR_ENTRY_BASE..MBR_ENTRY_BASE + MBR_ENTRY_BYTES]);
         let data = parse_entry(
@@ -112,6 +117,22 @@ mod tests {
         let image = ebr(None, Some((0x83, 1, 10)));
         let entries = walk_extended(100, |_| Ok(image.clone())).expect("应可遍历");
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn rejects_a_mid_chain_sector_without_the_boot_signature() {
+        // 首 EBR 正常，链接指向的下一级 EBR 丢了 0x55AA：整条链按签名缺失拒绝。
+        let first = ebr(Some((0x0F, 50, 0)), Some((0x83, 1, 10)));
+        let mut second = ebr(None, Some((0x83, 1, 10)));
+        second[MBR_SIGNATURE_OFFSET] = 0;
+        let result = walk_extended(100, |lba| {
+            if lba == 100 {
+                Ok(first.clone())
+            } else {
+                Ok(second.clone())
+            }
+        });
+        assert_eq!(result, Err(TableError::MbrSignatureMissing));
     }
 
     #[test]

@@ -68,6 +68,14 @@ pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
                 query.content.as_str()
             ),
         },
+        Some(_) if is_pre_run_refusal(&output) => DiagnoseResult::Refused {
+            message: format!(
+                "check refused on partition #{} ({}) before examining the filesystem: {}",
+                query.partition,
+                query.content.as_str(),
+                output.trim()
+            ),
+        },
         Some(_) => DiagnoseResult::Problems {
             message: format!(
                 "check reported problems on partition #{} ({}){}",
@@ -85,8 +93,35 @@ pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
     }
 }
 
-/// 检查句柄：块设备视图或既有分区设备。
-#[derive(Debug)]
+/// 非零退出里区分"运行前拒绝"与"检查发现问题"。
+///
+/// fsck 类工具在真正检查之前就可能拒绝运行（目标已挂载、设备忙、无权限、参数
+/// 不认），这些不是文件系统问题。它们的退出码与"发现问题"常常相同，只能依据
+/// 工具落盘的诊断措辞区分；无任何输出也按拒绝处理（没有检查证据就不是问题结论）。
+fn is_pre_run_refusal(output: &str) -> bool {
+    if output.trim().is_empty() {
+        return true;
+    }
+    const MARKERS: &[&str] = &[
+        "is mounted",
+        "already mounted",
+        "device is busy",
+        "is busy",
+        "permission denied",
+        "operation not permitted",
+        "could not open",
+        "cannot open",
+        "no such file or directory",
+        "not a valid",
+        "bad magic",
+        "invalid argument",
+        "usage:",
+    ];
+    let lower = output.to_ascii_lowercase();
+    MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// 检查句柄：块设备视图或既有分区设备。#[derive(Debug)]
 struct Device {
     path: PathBuf,
     binding: Option<crate::platform::LoopBinding>,
@@ -119,5 +154,27 @@ fn suffix(output: &str) -> String {
         String::new()
     } else {
         format!(": {output}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_pre_run_refusal;
+
+    #[test]
+    fn refusal_markers_split_from_reported_problems() {
+        assert!(is_pre_run_refusal(""), "无输出按拒绝处理");
+        assert!(
+            is_pre_run_refusal("ERROR: sda1 is mounted"),
+            "已挂载是运行前拒绝"
+        );
+        assert!(
+            is_pre_run_refusal("check: xvda: not a valid btrfs filesystem"),
+            "非该文件系统是运行前拒绝"
+        );
+        assert!(
+            !is_pre_run_refusal("Pass 1: Checking inodes, blocks, and sizes\nInode 12: ..."),
+            "真正的检查诊断属于问题"
+        );
     }
 }

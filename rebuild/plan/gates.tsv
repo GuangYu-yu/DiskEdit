@@ -41,3 +41,5 @@ G8b	 human	build	1	 	 	cargo build --release
 G12	 model	lint	1	 	plan/baseline/sites-census.tsv	python plan/instruments/audit.py census-per-site --census plan/baseline/defense-census.tsv --ledger plan/baseline/incident-classes.tsv --map plan/disposition/site-map.tsv --out plan/baseline/sites-census.tsv
 G13	 model	lint	1	 	plan/baseline/tool-versions.tsv	python plan/instruments/audit.py drift-check --defs plan/baseline/tool-versions.tsv --out plan/baseline/drift
 G14	 model	lint	1	 	plan/baseline/reference/docs.tsv	python plan/instruments/audit.py check-disposition --ref plan/baseline/reference --disp plan/disposition
+G15	 model	lint	1	 	plan/baseline/negative-declarations.tsv	python plan/instruments/negative_static.py
+G15b	 model	test	1	 	plan/baseline/negative-declarations.tsv	cargo test --test negative_declarations

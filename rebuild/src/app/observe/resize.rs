@@ -44,7 +44,7 @@ pub struct ResizeSnapshot {
     pub partition_mount: Option<PartitionMount>,
     /// 设备形态下所选分区是否是活动 swap。
     pub swap_active: Option<bool>,
-    /// 收缩 ext 时的最小字节估算（`resize2fs -P` 块数 × `dumpe2fs -h` 块大小）。
+    /// 收缩 ext 时的最小字节估算（只读探针报的最小块数 × 超级块报的块大小）。
     /// 非 ext、非收缩、`--no-fs`、在线形态或工具缺失时为 `None`；探针本身失败为
     /// `Some(Err)`，由判定层折成 `MinimumSizeUnknown` 拒绝。
     pub min_bytes: Option<Result<u64, String>>,
@@ -438,7 +438,7 @@ fn is_shrink_request(resize: &ResizeRequest, partition: &PartitionView) -> bool 
     }
 }
 
-/// 只读探针：`resize2fs -P` 的块数 × `dumpe2fs -h` 的块大小（与基线口径一致）。
+/// 只读探针：最小块数 × 超级块块大小（与基线口径一致）。
 fn probe_min_bytes(
     platform: &dyn Platform,
     target: &TargetFacts,
@@ -467,7 +467,7 @@ fn probe_min_bytes(
         .map_err(|error| error.to_string())?;
     if run.code != Some(0) {
         return Err(format!(
-            "resize2fs -P exited {:?}: {}",
+            "the minimum-size probe (-P) exited {:?}: {}",
             run.code,
             run.stderr.trim()
         ));
@@ -477,22 +477,23 @@ fn probe_min_bytes(
         "Estimated minimum size of the filesystem:",
     )
     .ok_or_else(|| {
-        "resize2fs -P did not report \"Estimated minimum size of the filesystem\"".to_owned()
+        "the minimum-size probe (-P) did not report \"Estimated minimum size of the filesystem\""
+            .to_owned()
     })?;
     let run = platform
         .run(Program::Dumpe2fs, &["-h".to_owned(), device])
         .map_err(|error| error.to_string())?;
     if run.code != Some(0) {
         return Err(format!(
-            "dumpe2fs -h exited {:?}: {}",
+            "the superblock probe (-h) exited {:?}: {}",
             run.code,
             run.stderr.trim()
         ));
     }
     let block_size = leading_number(&format!("{}{}", run.stdout, run.stderr), "Block size:")
-        .ok_or_else(|| "dumpe2fs -h did not report \"Block size\"".to_owned())?;
+        .ok_or_else(|| "the superblock probe (-h) did not report \"Block size\"".to_owned())?;
     blocks.checked_mul(block_size).ok_or_else(|| {
-        format!("resize2fs -P × dumpe2fs block size overflows ({blocks} × {block_size})")
+        format!("minimum-size probe × block size overflows ({blocks} × {block_size})")
     })
 }
 

@@ -1066,20 +1066,35 @@ pub(super) fn shrink(
             }
             Ok(())
         }
-        FsKind::Ntfs => run_sequence(
-            platform,
-            &[(
-                Program::Ntfsresize,
-                vec![
-                    "-f".to_owned(),
-                    "--size".to_owned(),
-                    bytes.to_string(),
-                    dev.clone(),
-                ],
-            )],
-            token,
-        )
-        .map(|_| ()),
+        FsKind::Ntfs => {
+            // 收缩后做对称回读：只读卷信息探针报当前卷尺寸，必须不大于请求值。
+            // 工具报成功不等于卷真的缩了；字段缺失即拒绝，不猜默认值。
+            run_sequence(
+                platform,
+                &[(
+                    Program::Ntfsresize,
+                    vec![
+                        "-f".to_owned(),
+                        "--size".to_owned(),
+                        bytes.to_string(),
+                        dev.clone(),
+                    ],
+                )],
+                token,
+            )?;
+            let probe = run_sequence(
+                platform,
+                &[(
+                    Program::Ntfsresize,
+                    vec!["--info".to_owned(), "--force".to_owned(), dev],
+                )],
+                token,
+            )?;
+            if let Some((Program::Ntfsresize, run)) = probe {
+                verify_ntfs_size(&run, bytes).map_err(|error| (error, true))?;
+            }
+            Ok(())
+        }
         // 多设备 btrfs 收缩不受支持：任何成员设备都不能单独改小。占用证据在挂载前
         // 由目标自己的 superblock 给出（B17），所以未挂载也能拒绝，且不写任何字节。
         FsKind::Btrfs => {
@@ -1379,6 +1394,30 @@ fn leading_field(text: &str, name: &str) -> Option<u64> {
         if !first.is_ascii_whitespace() {
             return None;
         }
+        rest.split_whitespace().next()?.parse().ok()
+    })
+}
+
+/// NTFS 收缩后的对称回读：只读卷信息探针的 `Current volume size` 必须
+/// 不大于请求字节数（工具可能缩到略小于请求的可用尺寸）。字段缺失即拒绝，不猜。
+fn verify_ntfs_size(run: &ToolRun, expected: u64) -> Result<(), ExecError> {
+    let total = ntfs_current_size(&run.stdout).ok_or_else(|| {
+        ExecError::Postcondition(
+            "the ntfs info probe did not report \"Current volume size\"".to_owned(),
+        )
+    })?;
+    if total > expected {
+        return Err(ExecError::Postcondition(format!(
+            "the filesystem is still {total} bytes, more than the requested {expected} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// 卷信息探针的 `Current volume size: <bytes> bytes (...)` 行取值。
+fn ntfs_current_size(text: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("Current volume size:")?;
         rest.split_whitespace().next()?.parse().ok()
     })
 }
@@ -1745,6 +1784,32 @@ mod tests {
     #[test]
     fn lvm_mkfs_has_no_tool() {
         assert!(mkfs_invocation(MkfsKind::Lvm2Pv, None).is_none());
+    }
+
+    #[test]
+    fn ntfs_shrink_readback_requires_current_volume_size() {
+        let run = ToolRun {
+            code: Some(0),
+            stdout: "Current volume size: 104857600 bytes (105 MB)\n".to_owned(),
+            stderr: String::new(),
+        };
+        assert!(
+            verify_ntfs_size(&run, 104_857_600).is_ok(),
+            "恰好相等应通过"
+        );
+        assert!(
+            verify_ntfs_size(&run, 104_857_599).is_err(),
+            "卷仍大于请求值应拒绝"
+        );
+        let missing = ToolRun {
+            code: Some(0),
+            stdout: "Volume: data\n".to_owned(),
+            stderr: String::new(),
+        };
+        assert!(
+            verify_ntfs_size(&missing, 104_857_600).is_err(),
+            "字段缺失必须拒绝而不猜"
+        );
     }
 
     #[test]

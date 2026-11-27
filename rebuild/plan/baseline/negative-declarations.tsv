@@ -1,0 +1,10 @@
+# 负向声明账本：每条"从不做 X"登记于此，由检查器强制。
+# 列：decl_id  SA id  声明一句话  检查器(static/behavioral)  检查对象
+# static → plan/instruments/negative_static.py 按禁用记号扫源码；
+# behavioral → tests/negative_declarations.rs 按检查对象前缀驱动。
+# 新增第 16 条声明 = 加一行；检查器按 checker 与 target 前缀自动分派。
+N1	SA1-006	从不向设备发送 discard 或 TRIM	static	blkdiscard,fstrim,BLKDISCARD,BLKSECDISCARD
+N2	SA1-010	不提供 JSON/sfdisk 导入子命令	behavioral	cli:import
+N3	SA1-016	mac/sun/dvh/amiga/bsd 等老盘标统一按未知拒绝	behavioral	probe:old-label
+N4	SA1-017	未登记文件系统签名按未知拒绝	behavioral	probe:unknown-fs
+N5	SA1-020	不提供菜单式备份/恢复文件	behavioral	cli:backup-menu

@@ -85,6 +85,26 @@
 
 **汇总口径**：真代码改动 7 处（#1-5、7、8，#9 可选提示面），测试/仪器 7 处（含各项自带测试锚），1 项程序化核对 + 1 项纯账面。做完这 15 处并 G11-G15 全绿，静态部分"没有可借鉴的了"即可宣告（黑盒 SA3 对账仍是最终合账前提）。
 
+## 3.6 销账记录（2026-11-27 完成）
+
+15 处逐项落点与验证：
+
+| # | 结论 | 落点 / 测试锚 |
+| --- | --- | --- |
+| 1 | 已修 | `mbr/extended.rs::walk_extended` 逐级验 0x55AA（`rejects_a_mid_chain_sector_without_the_boot_signature`） |
+| 2 | 已修 | `gpt/parse.rs` 条目数组 <16384B 拒绝（`an_entry_array_below_16_kib_is_rejected`） |
+| 3 | 已修 | `gpt/parse.rs::validate_geometry` revision >1.2 拒绝（`a_revision_above_1_2_is_rejected`） |
+| 4 | 已修 | `edit.rs::set_mbr_boot` 拒扩展容器（`boot_flag_on_an_extended_container_is_refused`） |
+| 5 | 既有 | 决策层 `fs/attrs.rs::label_problem` 已做 vfat 11 字节/ASCII 前置（单测在 `attrs.rs`），无需改 |
+| 6 | 认领真·已修 | 构建 e2fsprogs 1.47.4 取 `resize2fs -P` 真值（`plan/evidence/G6-truth.log`）；`observe/resize.rs::offline_min_bytes` 采集 + `decide/resize.rs` 构造 `BelowMinimumSize`/`MinimumSizeUnknown`（`tests/online.rs::offline_ext_shrink_*`） |
+| 7 | 已修 | `execute/filesystem.rs` NTFS 收缩后只读卷信息回读（`verify_ntfs_size` + `ntfs_shrink_readback_requires_current_volume_size`） |
+| 8 | 已修 | `execute/diagnose.rs::is_pre_run_refusal` 区分运行前拒绝/磁盘问题（`refusal_markers_split_from_reported_problems`），SA2-018 入账 |
+| 9 | 已修 | 主 GPT 头保留字节非零 → `layout` 的 `damaged` 诊断（`observe/table.rs::reserved_damage` 单测）；revision 越界由 #3 直接拒绝 |
+| 10 | 已修 | `incident-classes.tsv` SA2-018 + `06` 附录 A 同步，G11 50 类全绿 |
+| 11-15 | 已修 | 单台负向声明仪器：`plan/baseline/negative-declarations.tsv` + `plan/instruments/negative_static.py` + `tests/negative_declarations.rs`，注册 G15/G15b |
+
+**门禁**：G11（50 类）、G12（2255 站点 100% 映射）、G13（1 一致 / 9 missing 跳过）、G14（12679 行 0 待判）、G15（静态 0 命中）、G15b（行为 1 通过）全绿；`cargo test --all-targets` 24 组全绿；`clippy -D warnings`、`fmt --check` 干净。
+
 ## 4. 硬约束收敛映射（每项落点）
 
 - **架构**：1–5 归 parse/policy 校验单点（表结构校验不散落调用点）；标签类归决策层 `content_property` 前置；7 归"完成=回读证实"架构的 FsKind::Ntfs 对称补点。

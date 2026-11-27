@@ -33,9 +33,11 @@ fn build(snapshot: &Snapshot) -> Result<LayoutReport, Refusal> {
         }
     };
     let partitions: Vec<LayoutPartition> = partition_views.iter().map(layout_partition).collect();
+    // GPT 头保留字节损伤：表可用，但在诊断里标 damaged 提示头部被越界写过。
+    let damaged = matches!(&snapshot.table, TableView::Gpt(view) if view.reserved_damaged);
     Ok(LayoutReport {
         label,
-        damaged: false,
+        damaged,
         sector_size: snapshot.sector_size(),
         size_bytes: snapshot.target.bytes,
         disk_guid,

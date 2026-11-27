@@ -703,7 +703,11 @@ pub fn set_mbr_type(lba0: &[u8], number: u32, os_type: u8) -> Result<Vec<u8>, Ed
 pub fn set_mbr_boot(lba0: &[u8], number: u32, on: bool) -> Result<Vec<u8>, EditError> {
     primary_slot(number)?;
     let index = slot_index(number);
-    require_live_mbr(lba0, number, index)?;
+    let current = require_live_mbr(lba0, number, index)?;
+    // 扩展容器记录不是可引导分区：置 boot 只对主分区成立（参考 libfdisk 同口径拒绝）。
+    if MBR_CONTAINER_TYPES.contains(&current) {
+        return Err(EditError::ContainerTypeByte(current));
+    }
     let mut out = lba0.to_vec();
     if on {
         for other in 0..4usize {
@@ -1011,6 +1015,15 @@ mod tests {
         assert_eq!(
             set_mbr_hidden(&lba0, 2, true),
             Err(EditError::NoHiddenCounterpart(0x83))
+        );
+    }
+
+    #[test]
+    fn boot_flag_on_an_extended_container_is_refused() {
+        let lba0 = mbr_bytes(&[(TYPE_EXTENDED, 2048, 1024)]);
+        assert_eq!(
+            set_mbr_boot(&lba0, 1, true),
+            Err(EditError::ContainerTypeByte(TYPE_EXTENDED))
         );
     }
 

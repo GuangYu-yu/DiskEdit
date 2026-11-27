@@ -36,7 +36,10 @@ fn sections_of(text: &str) -> Vec<DocSection<'_>> {
     for line in text.lines() {
         if line.starts_with('#') {
             paragraph_open = false;
-            out.push(DocSection { heading: line, paragraphs: Vec::new() });
+            out.push(DocSection {
+                heading: line,
+                paragraphs: Vec::new(),
+            });
             continue;
         }
         let empty = line.trim().is_empty();
@@ -71,7 +74,9 @@ fn json_escape(text: &str) -> String {
 /// `pairs` 是 `(英文路径, 英文正文, 中文路径, 中文正文)`。不对齐即 panic——
 /// 生成器本身就是守卫，失败消息指出缺哪一段，写盘不会发生。
 pub fn i18n_catalogue(pairs: &[(&str, &str, &str, &str)]) -> String {
-    let mut out = String::from("{\n  \"generated_by\": \"docsgen\",\n  \"note\": \"Bilingual section ledger: every English section needs a Chinese section in the same order with the same paragraph count. Generated file; do not edit by hand.\",\n  \"regenerate\": \"DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs\",\n  \"documents\": [\n");
+    let mut out = String::from(
+        "{\n  \"generated_by\": \"docsgen\",\n  \"note\": \"Bilingual section ledger: every English section needs a Chinese section in the same order with the same paragraph count. Generated file; do not edit by hand.\",\n  \"regenerate\": \"DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs\",\n  \"documents\": [\n",
+    );
     for (index, (en_path, en_text, zh_path, zh_text)) in pairs.iter().enumerate() {
         let en_sections = sections_of(en_text);
         let zh_sections = sections_of(zh_text);
@@ -88,11 +93,7 @@ pub fn i18n_catalogue(pairs: &[(&str, &str, &str, &str)]) -> String {
             json_escape(zh_path)
         ));
         for (position, (en, zh)) in en_sections.iter().zip(&zh_sections).enumerate() {
-            let is_command = en
-                .heading
-                .trim_start_matches('#')
-                .trim()
-                .starts_with('`');
+            let is_command = en.heading.trim_start_matches('#').trim().starts_with('`');
             if is_command {
                 assert_eq!(
                     en.heading, zh.heading,
@@ -115,7 +116,11 @@ pub fn i18n_catalogue(pairs: &[(&str, &str, &str, &str)]) -> String {
                 json_escape(en.heading),
                 json_escape(zh.heading),
                 en.paragraphs.len(),
-                if position + 1 == en_sections.len() { "" } else { "," }
+                if position + 1 == en_sections.len() {
+                    ""
+                } else {
+                    ","
+                }
             ));
         }
         out.push_str(&format!(
