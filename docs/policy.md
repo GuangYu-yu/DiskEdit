@@ -50,6 +50,10 @@ A branch that only refuses is not an empty branch. It produces an observable err
 
 Removing a fallback requires a test that proves the current behavior, a recorded decision that the case is outside the promised scope, and a check that normal paths are unchanged. The change is made one item at a time, with the behavior change recorded. A branch that looks unused is not enough reason to delete it; a refusal that looks like it does nothing is not an empty branch.
 
+## Keeping a low-cost path
+
+A path is not kept because it was cheap to write. It is kept when it belongs to a documented command or an existing promise, adds no durable state, no new format, platform, or dependency, and fails by refusing rather than continuing. Recognition without operation, a clearer refusal, and a display-time clamp can stay. A degraded path that guesses, a compatibility shim, or a second way to perform the same operation is a promise even when the code is short; it follows the same review as a feature. If keeping it means supporting it indefinitely, it is not low-cost.
+
 ## Deciding
 
 The first question is whether the fact can be known. Sector size, partition geometry, device identity, probe results, and whether an external step completed are not values to guess. A wrong guess in a write, shrink, delete, or rebuild is not a failed command; it is damaged data.
