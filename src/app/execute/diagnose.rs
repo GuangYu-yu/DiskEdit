@@ -1,0 +1,180 @@
+//! 只读诊断的执行：把检查请求变成一个可检查的设备节点并运行外部程序。
+//!
+//! 检查不写目标字节；镜像分区先绑定临时块设备视图，诊断结束即解除。结果只分
+//! 四类，由报告层映射成退出码。
+
+use std::path::PathBuf;
+
+use crate::app::decide::report::{CheckQuery, CheckTarget};
+use crate::platform::{Platform, PlatformError};
+
+/// 一次检查的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiagnoseResult {
+    /// 检查完成且没有报告问题。
+    Clean { message: String },
+    /// 检查完成并报告了问题。
+    Problems { message: String },
+    /// 缺少所需程序。
+    Missing { message: String },
+    /// 拒绝执行：绑定检查视图或启动工具失败。
+    Refused { message: String },
+    /// 环境或 I/O 故障，未结论。
+    Environment { message: String },
+}
+
+/// 运行一次 `check`。
+pub fn run(platform: &dyn Platform, query: &CheckQuery) -> DiagnoseResult {
+    if !platform.tool_available(query.program) {
+        return DiagnoseResult::Missing {
+            message: format!(
+                "{} is not available on this host",
+                platform.tool_name(query.program)
+            ),
+        };
+    }
+    let device = match resolve(platform, &query.target) {
+        Ok(device) => device,
+        Err(error) => {
+            return DiagnoseResult::Refused {
+                message: format!("check failed: {error}"),
+            };
+        }
+    };
+    let mut args: Vec<String> = platform
+        .check_arguments(query.program)
+        .iter()
+        .map(|flag| (*flag).to_owned())
+        .collect();
+    args.push(device.device().display().to_string());
+    let run = match platform.run(query.program, &args) {
+        Ok(run) => run,
+        Err(error) => {
+            return DiagnoseResult::Refused {
+                message: format!("check failed: {error}"),
+            };
+        }
+    };
+    let output = [run.stdout.trim(), run.stderr.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    match run.code {
+        Some(0) => DiagnoseResult::Clean {
+            message: format!(
+                "check done on partition #{} ({})",
+                query.partition,
+                query.content.as_str()
+            ),
+        },
+        Some(_) if is_pre_run_refusal(&output) => DiagnoseResult::Refused {
+            message: format!(
+                "check refused on partition #{} ({}) before examining the filesystem: {}",
+                query.partition,
+                query.content.as_str(),
+                output.trim()
+            ),
+        },
+        Some(_) => DiagnoseResult::Problems {
+            message: format!(
+                "check reported problems on partition #{} ({}){}",
+                query.partition,
+                query.content.as_str(),
+                suffix(&output)
+            ),
+        },
+        None => DiagnoseResult::Environment {
+            message: format!(
+                "check failed: the tool terminated without an exit status{}",
+                suffix(&output)
+            ),
+        },
+    }
+}
+
+/// 非零退出里区分"运行前拒绝"与"检查发现问题"。
+///
+/// fsck 类工具在真正检查之前就可能拒绝运行（目标已挂载、设备忙、无权限、参数
+/// 不认），这些不是文件系统问题。它们的退出码与"发现问题"常常相同，只能依据
+/// 工具落盘的诊断措辞区分；无任何输出也按拒绝处理（没有检查证据就不是问题结论）。
+fn is_pre_run_refusal(output: &str) -> bool {
+    if output.trim().is_empty() {
+        return true;
+    }
+    const MARKERS: &[&str] = &[
+        "is mounted",
+        "already mounted",
+        "device is busy",
+        "is busy",
+        "permission denied",
+        "operation not permitted",
+        "could not open",
+        "cannot open",
+        "no such file or directory",
+        "not a valid",
+        "bad magic",
+        "invalid argument",
+        "usage:",
+    ];
+    let lower = output.to_ascii_lowercase();
+    MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+/// 检查句柄：块设备视图或既有分区设备。#[derive(Debug)]
+struct Device {
+    path: PathBuf,
+    binding: Option<crate::platform::LoopBinding>,
+}
+
+impl Device {
+    fn device(&self) -> &std::path::Path {
+        match &self.binding {
+            Some(binding) => binding.device(),
+            None => &self.path,
+        }
+    }
+}
+
+fn resolve(platform: &dyn Platform, target: &CheckTarget) -> Result<Device, PlatformError> {
+    match target {
+        CheckTarget::PartitionDevice { disk, number } => Ok(Device {
+            path: platform.partition_device(disk, *number)?,
+            binding: None,
+        }),
+        CheckTarget::ImageRegion { path, offset, len } => Ok(Device {
+            path: path.clone(),
+            binding: Some(platform.bind_loop(path, *offset, *len)?),
+        }),
+    }
+}
+
+fn suffix(output: &str) -> String {
+    if output.is_empty() {
+        String::new()
+    } else {
+        format!(": {output}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_pre_run_refusal;
+
+    #[test]
+    fn refusal_markers_split_from_reported_problems() {
+        assert!(is_pre_run_refusal(""), "无输出按拒绝处理");
+        assert!(
+            is_pre_run_refusal("ERROR: sda1 is mounted"),
+            "已挂载是运行前拒绝"
+        );
+        assert!(
+            is_pre_run_refusal("check: xvda: not a valid btrfs filesystem"),
+            "非该文件系统是运行前拒绝"
+        );
+        assert!(
+            !is_pre_run_refusal("Pass 1: Checking inodes, blocks, and sizes\nInode 12: ..."),
+            "真正的检查诊断属于问题"
+        );
+    }
+}

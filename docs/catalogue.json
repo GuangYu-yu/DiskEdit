@@ -1,0 +1,88 @@
+{
+  "generated_by": "docsgen",
+  "note": "Bilingual section ledger: every English section needs a Chinese section in the same order with the same paragraph count. Generated file; do not edit by hand.",
+  "regenerate": "DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs",
+  "documents": [
+    {
+      "en": "docs/en/reference.md",
+      "zh": "docs/zh/reference.md",
+      "sections": [
+        { "en": "# diskedit command reference", "zh": "# diskedit 命令参考", "paragraphs": 1 },
+        { "en": "## Commands", "zh": "## 命令", "paragraphs": 0 },
+        { "en": "### `layout`", "zh": "### `layout`", "paragraphs": 3 },
+        { "en": "### `records list`", "zh": "### `records list`", "paragraphs": 3 },
+        { "en": "### `records verify`", "zh": "### `records verify`", "paragraphs": 3 },
+        { "en": "### `records show`", "zh": "### `records show`", "paragraphs": 3 },
+        { "en": "### `undo`", "zh": "### `undo`", "paragraphs": 3 },
+        { "en": "### `replay`", "zh": "### `replay`", "paragraphs": 3 },
+        { "en": "### `release`", "zh": "### `release`", "paragraphs": 3 },
+        { "en": "### `resize`", "zh": "### `resize`", "paragraphs": 3 },
+        { "en": "### `move`", "zh": "### `move`", "paragraphs": 3 },
+        { "en": "### `copy`", "zh": "### `copy`", "paragraphs": 3 },
+        { "en": "### `delete`", "zh": "### `delete`", "paragraphs": 3 },
+        { "en": "### `set`", "zh": "### `set`", "paragraphs": 3 },
+        { "en": "### `check`", "zh": "### `check`", "paragraphs": 3 },
+        { "en": "### `mkfs`", "zh": "### `mkfs`", "paragraphs": 3 },
+        { "en": "## Low-level", "zh": "## 底层命令", "paragraphs": 0 },
+        { "en": "### `new`", "zh": "### `new`", "paragraphs": 3 },
+        { "en": "### `add`", "zh": "### `add`", "paragraphs": 3 },
+        { "en": "## options", "zh": "## 选项", "paragraphs": 1 }
+      ]
+    },
+    {
+      "en": "docs/en/capability-matrix.md",
+      "zh": "docs/zh/capability-matrix.md",
+      "sections": [
+        { "en": "# diskedit capability matrix", "zh": "# diskedit 能力矩阵", "paragraphs": 2 },
+        { "en": "## Programs", "zh": "## 程序", "paragraphs": 2 },
+        { "en": "## Runtime gate", "zh": "## Runtime gate", "paragraphs": 2 }
+      ]
+    },
+    {
+      "en": "docs/en/exit-codes.md",
+      "zh": "docs/zh/exit-codes.md",
+      "sections": [
+        { "en": "# diskedit exit status", "zh": "# diskedit 退出状态", "paragraphs": 2 }
+      ]
+    },
+    {
+      "en": "docs/en/internals.md",
+      "zh": "docs/zh/internals.md",
+      "sections": [
+        { "en": "# Behaviour boundaries and limits", "zh": "# 行为边界与限制", "paragraphs": 1 },
+        { "en": "## Platform capability gate", "zh": "## 平台能力闸门", "paragraphs": 1 },
+        { "en": "## Execution placement", "zh": "## 执行放置", "paragraphs": 7 },
+        { "en": "## Occupancy boundary", "zh": "## 占用边界", "paragraphs": 1 },
+        { "en": "## LVM finish boundary", "zh": "## LVM 收尾边界", "paragraphs": 2 },
+        { "en": "## Concurrency boundary", "zh": "## 并发边界", "paragraphs": 1 },
+        { "en": "## Device identity boundary", "zh": "## 设备身份边界", "paragraphs": 1 },
+        { "en": "## Identity check of a recovery scene", "zh": "## 恢复场景的身份检查", "paragraphs": 1 },
+        { "en": "## Disk GUID credential in a record", "zh": "## 记录中的磁盘 GUID 凭据", "paragraphs": 1 },
+        { "en": "## Placement of the recovery record", "zh": "## 恢复记录的位置", "paragraphs": 1 },
+        { "en": "## Directory-entry persistence on Windows", "zh": "## Windows 上的目录项持久性", "paragraphs": 1 },
+        { "en": "## Resume boundary", "zh": "## 续跑边界", "paragraphs": 1 },
+        { "en": "## External tools", "zh": "## 外部工具", "paragraphs": 3 },
+        { "en": "## Tool behaviour and criteria", "zh": "## 工具行为与判据", "paragraphs": 4 },
+        { "en": "## OpenWrt combined layout", "zh": "## OpenWrt 组合布局", "paragraphs": 1 },
+        { "en": "## Verification scope", "zh": "## 验证范围", "paragraphs": 2 },
+        { "en": "## Options", "zh": "## 选项", "paragraphs": 2 }
+      ]
+    },
+    {
+      "en": "docs/en/interop.md",
+      "zh": "docs/zh/interop.md",
+      "sections": [
+        { "en": "# Interop: other image formats, remote targets, sparse images", "zh": "# 互操作：其他镜像格式、远程目标、稀疏镜像", "paragraphs": 1 },
+        { "en": "## qcow2 / vmdk / vdi images", "zh": "## qcow2 / vmdk / vdi 镜像", "paragraphs": 2 },
+        { "en": "# run this tool against disk.raw", "zh": "# 对 disk.raw 运行本工具", "paragraphs": 2 },
+        { "en": "## Exporting a disk as qcow2", "zh": "## 把磁盘导出为 qcow2", "paragraphs": 2 },
+        { "en": "## Sparse and preallocated images", "zh": "## 稀疏与预分配镜像", "paragraphs": 2 },
+        { "en": "## Remote images and remote disks", "zh": "## 远程镜像与远程磁盘", "paragraphs": 2 },
+        { "en": "## Rootless use through the VM carrier", "zh": "## 经 VM 载体免 root 运行", "paragraphs": 2 },
+        { "en": "### Building a bundle", "zh": "### 构建 bundle", "paragraphs": 3 },
+        { "en": "## Forced NTFS resize on a damaged volume", "zh": "## 对损坏卷强制 NTFS resize", "paragraphs": 2 },
+        { "en": "## Boundaries shared by every recipe", "zh": "## 所有配方共同遵循的边界", "paragraphs": 1 }
+      ]
+    }
+  ]
+}
