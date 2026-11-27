@@ -1,71 +1,62 @@
+本文件是 `docs/en/capability-matrix.md` 的中文译本，不参与生成物逐字比对；能力表以英文版与 `diskedit_core::fs::catalog` 为准。
+重新生成英文原版：`DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`。
+CI 把工作树与生成器输出逐字比对；本文件只维护中文译文，英文事实以生成器和 `docs/en/capability-matrix.md` 为准。
+
 # diskedit 能力矩阵
 
-由 `src/docs.rs` 从 `CommandDef.capabilities` 与 `CapabilitySnapshot::design(platform, media)` 生成。
-用 `DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync` 重新生成；
-CI 会重新生成，并在工作树不一致时失败。不要手工编辑。
+本工具可识别的每一种内容各占一行。单元格给出文件系统档案表报告的支持类别；
+每类能力执行的步骤序列同样由该表声明。
 
-## 能力状态
+| 内容 | 扩容 | 收缩 | 属性 | 检查 | 建卷 |
+|---|---|---|---|---|---|
+| `squashfs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `erofs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `ext` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| `xfs` | 支持 | 不支持 | 支持 | 支持 | 支持 |
+| `btrfs` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| `f2fs` | 支持 | 不支持 | 不支持 | 支持 | 支持 |
+| `exfat` | 不支持 | 不支持 | 支持 | 支持 | 支持 |
+| `vfat` | 支持 | 不支持 | 支持 | 支持 | 支持 |
+| `ntfs` | 支持 | 支持 | 支持 | 支持 | 支持 |
+| `hfsplus` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `apfs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `bcachefs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `jfs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `reiserfs` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `udf` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `swap` | 支持 | 不支持 | 支持 | 不支持 | 支持 |
+| `lvm2_pv` | 不适用 | 支持 | 不支持 | 不支持 | 不支持 |
+| `luks` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `bitlocker` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| `unknown` | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
 
-| 能力 | linux / 块设备 | linux / 镜像 | windows / 块设备 | windows / 镜像 | 其他 / 块设备 | 其他 / 镜像 |
-|---|---|---|---|---|---|---|
-| ReadTarget | 支持 | 支持 | 不支持 | 支持 | 不支持 | 支持 |
-| WriteTable | 支持 | 支持 | 不支持 | 不支持 | 不支持 | 不支持 |
-| SectorIo | 支持 | 支持 | 不支持 | 不支持 | 不支持 | 不支持 |
-| ExternalTool | 支持 | 支持 | 不支持 | 不支持 | 不支持 | 不支持 |
-| KernelResync | 支持 | 不适用 | 不支持 | 不适用 | 不支持 | 不适用 |
-| ExclusiveLock | 支持 | 支持 | 设计限制 | 设计限制 | 不支持 | 不支持 |
-| AtomicReplace | 支持 | 支持 | 不支持 | 不支持 | 不支持 | 不支持 |
-| DirPersist | 支持 | 支持 | 设计限制 | 设计限制 | 不支持 | 不支持 |
-| StableIdentity | 支持 | 支持 | 不支持 | 支持 | 不支持 | 支持 |
+## 程序
 
-## 命令
+档案表引用到的外部程序（按身份）：
 
-| 命令 | linux / 块设备 | linux / 镜像 | windows / 块设备 | windows / 镜像 | 其他 / 块设备 | 其他 / 镜像 |
-|---|---|---|---|---|---|---|
-| `info` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 允许 | 阻止：ReadTarget（不支持） | 允许 |
-| `inspect` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） |
-| `records list` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） |
-| `records verify` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） |
-| `records scan` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） | 阻止：ReadTarget（不支持） | 阻止：AtomicReplace（不支持） |
-| `resize` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `move` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `copy` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `delete` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `set` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `check` | 允许 | 允许 | 阻止：ReadTarget（不支持） | 阻止：ExternalTool（不支持） | 阻止：ReadTarget（不支持） | 阻止：ExternalTool（不支持） |
-| `mkfs` | 允许 | 允许 | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） |
-| `resizefs` | 允许 | 允许 | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） | 阻止：AtomicReplace（不支持） |
-| `recover` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `new` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
-| `add` | 允许 | 允许 | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） | 阻止：WriteTable（不支持） |
+`E2fsck`, `Resize2fs`, `Dumpe2fs`, `Mke2fs`, `Tune2fs`, `Ntfsresize`, `Ntfsfix`, `Ntfslabel`, `FsckF2fs`, `ResizeF2fs`, `XfsGrowfs`, `XfsRepair`, `XfsAdmin`, `Btrfs`, `Btrfstune`, `Fatresize`, `Fatlabel`, `FsckVfat`, `Exfatlabel`, `FsckExfat`, `Mkswap`, `Swaplabel`, `Pvs`, `Lvs`, `Vgs`, `Pvresize`, `MkfsVfat`, `MkfsExfat`, `MkfsNtfs`, `MkfsXfs`, `MkfsBtrfs`, `MkfsF2fs`, `Mount`, `Umount`, `Losetup`, `Sfdisk`, `Partx`, `Blkid`
 
-`admitted` 表示能力闸门对该形态没有报告缺口。不带 WWN、EUI 或可重复序列号的
-块设备（nbd、rbd、dm、md）在此仍记为允许，但它的写命令需要 `--identity NAME`；
-续跑或释放该记录需要同一个名字，只读的记录命令（`inspect`、`records list`、
-`records verify`）也接受这个名字来定位与核对记录。
+## Runtime gate
 
-## 运行时闸门
+写入只在 Linux 上支持；其他平台拒绝会写入的命令，只读入口仍可运行。镜像的
+表区写入从不需要 root，块设备需要。
 
-闸门只评估本次构建能打开的目标形态。本表列出它在 Linux 上评估的 2 种目标形态（`HostPlatform::openable_media`）：linux / 块设备, linux / 镜像。其他形态不进入闸门的决策——`cmd::capability_gap` 只遍历可打开集合。
-该表由 Linux 能力集生成；非 Linux 构建的可打开集合在运行时由 `HostPlatform::openable_media` 决定，此处不复制它。
+| 命令 | 镜像文件 | 块设备 | 其他平台 |
+|---|---|---|---|
+| `layout` | 可以 | 可以 | 可以 |
+| `records list` | 可以 | 可以 | 可以 |
+| `records verify` | 可以 | 可以 | 可以 |
+| `records show` | 可以 | 可以 | 可以 |
+| `undo` | 可以 | 可以（需 root） | 拒绝（6） |
+| `replay` | 可以 | 可以（需 root） | 拒绝（6） |
+| `release` | 可以 | 可以（需 root） | 拒绝（6） |
+| `resize` | 可以 | 可以（需 root） | 拒绝（6） |
+| `move` | 可以 | 可以（需 root） | 拒绝（6） |
+| `copy` | 可以 | 可以（需 root） | 拒绝（6） |
+| `delete` | 可以 | 可以（需 root） | 拒绝（6） |
+| `set` | 可以 | 可以（需 root） | 拒绝（6） |
+| `check` | 可以 | 可以 | 可以 |
+| `mkfs` | 可以 | 可以（需 root） | 拒绝（6） |
+| `new` | 可以 | 可以（需 root） | 拒绝（6） |
+| `add` | 可以 | 可以（需 root） | 拒绝（6） |
 
-| 命令 | linux / 块设备 | linux / 镜像 |
-|---|---|---|
-| `info` | 允许 | 允许 |
-| `inspect` | 允许 | 允许 |
-| `records list` | 允许 | 允许 |
-| `records verify` | 允许 | 允许 |
-| `records scan` | 允许 | 允许 |
-| `resize` | 允许 | 允许 |
-| `move` | 允许 | 允许 |
-| `copy` | 允许 | 允许 |
-| `delete` | 允许 | 允许 |
-| `set` | 允许 | 允许 |
-| `check` | 允许 | 允许 |
-| `mkfs` | 允许 | 允许 |
-| `resizefs` | 允许 | 允许 |
-| `recover` | 允许 | 允许 |
-| `new` | 允许 | 允许 |
-| `add` | 允许 | 允许 |
-
-进程级退出会打印失败的原因句。退出码 3 与退出码 4 之后还有第二行 `— this run changed no persistent state`；退出码 6 打印 `unsupported: <cause>`，不追加该行。

@@ -7,8 +7,8 @@
 - **镜像与块设备走同一条代码路径**：`.img` 与 `/dev/sdX` 的差别只在目标的打开方式。
 - **GPT/MBR 由本工具自己解析与写入**，不经过 libparted 或 sfdisk。GPT 提交依次写备条目数组、备头、主条目数组、主头，每步 `sync`，任意落点断电都至少留一份自洽副本，不一致由 CRC 检出。块设备上分区处于挂载状态时内核重读必然失败，该路径改用 `sfdisk --no-reread` 写表，再由 `partx -u` 同步内核。
 - **文件系统交给各自的官方工具**：mkfs、fsck、resize、label、UUID 都在 offset loop（`losetup`）上执行。
-- **长作业可续跑**：搬移、扩容或 mkfs 中途中断后，重跑同一条命令即按恢复记录续跑。`inspect` 与 `records` 报告现场，`recover` 回滚已记下的写入，`recover --release` 放弃现场。
-- **输出可被脚本读**：`info`、`records list|verify|scan` 输出 JSON；`info --grow` 把搬移预览并进同一份报告。
+- **长作业可续跑**：搬移、扩容或 mkfs 中途中断后，重跑同一条命令即按恢复记录续跑。`records show` 与 `records list` 报告现场，`undo` 回滚已记下的写入，`release` 放弃现场。
+- **输出可被脚本读**：`layout --json`、`records list|verify` 输出 JSON。
 
 ## 运行要求
 
@@ -18,9 +18,9 @@
 
 | 操作 | 镜像文件 | 块设备 |
 |---|---|---|
-| `info` / `inspect` / `records` | 不需要 root | 不需要 root |
-| 分区表写入（`new`/`add`/`delete`/`resize`/`copy`/`set`/`recover`/`move`） | 不需要 root | 需要 root |
-| 文件系统层（`mkfs`/`resizefs`/`check`/`set label\|uuid`） | 需要 root，或由 VM 载体执行 | 需要 root |
+| `layout` / `records` | 不需要 root | 不需要 root |
+| 分区表写入（`new`/`add`/`delete`/`resize`/`copy`/`set`/`undo`/`replay`/`release`/`move`） | 不需要 root | 需要 root |
+| 文件系统层（`mkfs`/`resize --fs-only`/`check`/`set label\|uuid`） | 需要 root，或由 VM 载体执行 | 需要 root |
 
 `resize` 在含文件系统步骤时需要 root；`--no-fs` 表示不把文件系统增长算作后置条件，镜像上的扩容因此无需 root。目标文件系统无法识别（`unknown`）时，不带 `--no-fs` 一律拒绝——“认不出”不等于“里面没有东西”。
 
@@ -36,7 +36,7 @@
 cargo build --release
 ```
 
-产物为 `target/release/DiskEdit`（帮助与消息里以 `diskedit` 称呼它）。
+产物为 `target/release/diskedit`。
 
 ## 快速上手
 
@@ -45,17 +45,17 @@ truncate -s 8G disk.img
 diskedit new disk.img --table gpt --yes
 diskedit add disk.img 4G --yes
 sudo diskedit mkfs disk.img:1 ext4 --yes
-diskedit info disk.img | jq .
+diskedit layout disk.img --json | jq .
 ```
 
 `diskedit help` 给出的示例：
 
 ```bash
-diskedit info /dev/sdb
-diskedit info /dev/sdb:2 --grow
+diskedit layout /dev/sdb --json
+diskedit add /dev/sdb 10G --dry-run
 diskedit resize /dev/sdb:1 +2G --yes
 diskedit resize disk.img grow --allow-move --chunk 4 --yes
-diskedit recover /dev/sdb --yes
+diskedit undo /dev/sdb --yes
 ```
 
 `<TARGET>` 为镜像路径或块设备；`:N` 寻址第 N 个分区（1 起），`:last` 指最后一个可操作分区。`diskedit help <CMD>` 查看单命令详助。
@@ -86,7 +86,7 @@ diskedit recover /dev/sdb --yes
 
 ## 支持的文件系统
 
-识别（`info`）：ext、xfs、btrfs、f2fs、ntfs、vfat、exfat、swap、squashfs、erofs、hfsplus、apfs、lvm2_pv、luks、bitlocker、bcachefs、jfs、reiserfs、udf；都不匹配则为 `unknown`。后六种只做识别，`mkfs`/`check`/`resize` 均未接线（bcachefs 可跨多块设备，成员列表也不读取）。
+识别（`layout`）：ext、xfs、btrfs、f2fs、ntfs、vfat、exfat、swap、squashfs、erofs、hfsplus、apfs、lvm2_pv、luks、bitlocker、bcachefs、jfs、reiserfs、udf；都不匹配则为 `unknown`。后六种只做识别，`mkfs`/`check`/`resize` 均未接线（bcachefs 可跨多块设备，成员列表也不读取）。
 
 | FS | mkfs | 扩容 | 缩容 | check | label | uuid |
 |---|---|---|---|---|---|---|
@@ -101,7 +101,7 @@ diskedit recover /dev/sdb --yes
 | lvm2_pv | — | ✓ | ✓ | — | — | — |
 
 - `check` 一律只读（`e2fsck -n`、`ntfsfix -n`、`xfs_repair -n`、`btrfs check`、`fsck.vfat -n`、`fsck.exfat -n`、`fsck.f2fs`）；工具退出非零即检查失败（退出码 3）。
-- `resize` 按尺寸表达式扩缩 GPT 或 MBR 主分区（`+2G`、`-500M`、`10G`、`grow`）；收缩先离线跑文件系统步。MBR 覆盖 1..4，扩展容器与逻辑分区不在此列。`resize --dry-run` 只打印计划，不写盘。`resizefs` 只扩，在线 btrfs 形式也能缩。文件系统缩不动就不动表。
+- `resize` 按尺寸表达式扩缩 GPT 或 MBR 主分区（`+2G`、`-500M`、`10G`、`grow`）；收缩先离线跑文件系统步。MBR 覆盖 1..4，扩展容器与逻辑分区不在此列。`resize --dry-run` 只打印计划，不写盘。`resize --fs-only` 只扩文件系统（离线长满分区，或经挂载点在线扩容），在线 btrfs 形式也能缩。文件系统缩不动就不动表。
 - `mkfs` 拒绝 LVM PV，重建请用 `pvcreate(8)` / `wipefs(8)`。
 - `ntfs` 的 UUID 只能重新生成（`ntfslabel --new-serial`），不能指定；该序号不是 Windows 卷 UUID。
 - `swap` 的扩容是改完表项后用 `mkswap` 重建，UUID、PARTUUID 与分区号保持。
@@ -110,7 +110,7 @@ diskedit recover /dev/sdb --yes
 
 ## 输出与退出码
 
-`info` 与 `records list|verify|scan` 恒在 stdout 输出一份 JSON；失败时信封里加一个 `error` 字符串，无法确定的字段为 `null`。文档完整之前 stdout 不输出任何内容，读取方可以直接解析。
+`layout --json` 与 `records list|verify` 恒在 stdout 输出一份 JSON；失败时信封里加一个 `error` 字符串，无法确定的字段为 `null`。文档完整之前 stdout 不输出任何内容，读取方可以直接解析。
 
 | 退出码 | 含义 |
 |---|---|

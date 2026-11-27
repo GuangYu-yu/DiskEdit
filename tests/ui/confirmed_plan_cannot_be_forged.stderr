@@ -1,0 +1,13 @@
+error: cannot construct `ConfirmedPlan` with struct literal syntax due to private fields
+ --> tests/ui/confirmed_plan_cannot_be_forged.rs:6:17
+  |
+6 |     let _plan = ConfirmedPlan {
+  |                 ^^^^^^^^^^^^^
+7 |         steps: Vec::new(),
+  |         ----------------- private field
+8 |         digest: [0; 32],
+  |         --------------- private field
+9 |         identity: Fingerprint::strong([0; 32]),
+  |         -------------------------------------- private field
+  |
+  = note: ...and other private field `request_digest` that was not provided
