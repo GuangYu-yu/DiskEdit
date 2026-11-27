@@ -2,16 +2,13 @@
  "gate": "G15",
  "kind": "lint",
  "command": [
-  "python3",
-  "plan/instruments/audit.py",
-  "check-naming",
-  "--root",
-  "."
+  "python",
+  "plan/instruments/negative_static.py"
  ],
  "exit_code": 0,
- "commit": "a5d01f1",
- "tree": "58b3e07e4f403979",
- "at": "2026-11-27T10:31:19+00:00",
+ "commit": "50830a3",
+ "tree": "af64a9a915e2d88d",
+ "at": "2026-11-27T11:33:31+00:00",
  "counts": {
   "result_lines": 0,
   "passed": 0,
