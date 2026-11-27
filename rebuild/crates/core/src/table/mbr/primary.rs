@@ -53,13 +53,6 @@ impl Mbr {
             .copied()
             .find(|entry| entry.is_extended())
     }
-
-    pub fn primary_partitions(&self) -> impl Iterator<Item = MbrEntry> + '_ {
-        self.entries
-            .iter()
-            .copied()
-            .filter(|entry| !entry.is_empty() && !entry.is_extended())
-    }
 }
 
 /// 解析 LBA0：要求至少 512 字节且带 0x55AA 签名。
@@ -81,21 +74,6 @@ pub fn parse(sector: &[u8]) -> Result<Mbr, TableError> {
     Ok(Mbr { entries })
 }
 
-/// 把四个条目写回扇区，保留引导代码与其余字节，并置 0x55AA 签名。
-pub fn write_into(mbr: &Mbr, sector: &mut [u8; 512]) {
-    for (index, entry) in mbr.entries.iter().enumerate() {
-        let offset = MBR_ENTRY_BASE + index * MBR_ENTRY_BYTES;
-        let raw = &mut sector[offset..offset + MBR_ENTRY_BYTES];
-        raw.fill(0);
-        raw[0] = entry.boot;
-        raw[4] = entry.part_type;
-        raw[8..12].copy_from_slice(&entry.start_lba.to_le_bytes());
-        raw[12..16].copy_from_slice(&entry.size_lba.to_le_bytes());
-    }
-    sector[MBR_SIGNATURE_OFFSET] = 0x55;
-    sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
-}
-
 fn parse_entry(raw: &[u8]) -> MbrEntry {
     MbrEntry {
         boot: raw[0],
@@ -108,25 +86,6 @@ fn parse_entry(raw: &[u8]) -> MbrEntry {
 /// 规范的保护 MBR SizeInLBA：整盘 LBA 数减一，超出 32 位按饱和写。
 pub fn size_in_lba(total_lba: u64) -> u32 {
     total_lba.saturating_sub(1).min(u32::MAX as u64) as u32
-}
-
-/// 生成覆盖整盘的保护性 MBR（UEFI 保护 MBR 形态）。
-pub fn protective_mbr(total_lba: u64) -> [u8; 512] {
-    let mut sector = [0u8; 512];
-    sector[MBR_ENTRY_BASE + 4] = TYPE_PROTECTIVE;
-    sector[MBR_ENTRY_BASE + 8..MBR_ENTRY_BASE + 12].copy_from_slice(&1u32.to_le_bytes());
-    sector[MBR_ENTRY_BASE + 12..MBR_ENTRY_BASE + 16]
-        .copy_from_slice(&size_in_lba(total_lba).to_le_bytes());
-    sector[MBR_SIGNATURE_OFFSET] = 0x55;
-    sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
-    sector
-}
-
-/// 判断一条记录是否为保护分区：类型 0xEE 且覆盖从 LBA1 起的整盘。
-pub fn is_protective(entry: MbrEntry, total_lba: u64) -> bool {
-    entry.part_type == TYPE_PROTECTIVE
-        && entry.start_lba == 1
-        && entry.size_lba == size_in_lba(total_lba)
 }
 
 #[cfg(test)]
@@ -150,10 +109,8 @@ mod tests {
     fn parses_primary_entries() {
         let sector = sector_with(&[(0x83, 2048, 4096), (0x82, 8192, 1024)]);
         let mbr = parse(&sector).expect("应可解析");
-        let partitions: Vec<_> = mbr.primary_partitions().collect();
-        assert_eq!(partitions.len(), 2);
-        assert_eq!(partitions[0].start_lba, 2048);
-        assert_eq!(partitions[1].part_type, 0x82);
+        assert_eq!(mbr.entries[0].start_lba, 2048);
+        assert_eq!(mbr.entries[1].part_type, 0x82);
     }
 
     #[test]
@@ -172,14 +129,6 @@ mod tests {
         let sector = sector_with(&[(0x83, 2048, 100), (0x0F, 4096, 1000)]);
         let mbr = parse(&sector).expect("应可解析");
         assert_eq!(mbr.extended().map(|entry| entry.part_type), Some(0x0F));
-    }
-
-    #[test]
-    fn protective_mbr_covers_disk() {
-        let sector = protective_mbr(1_000_000);
-        let mbr = parse(&sector).expect("保护 MBR 应可解析");
-        assert!(is_protective(mbr.entries[0], 1_000_000));
-        assert_eq!(mbr.entries[0].size_lba, 999_999);
     }
 
     #[test]

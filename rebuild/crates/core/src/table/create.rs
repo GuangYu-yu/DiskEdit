@@ -587,6 +587,10 @@ mod tests {
     #[test]
     fn protective_mbr_is_rewritten_only_when_non_canonical() {
         let canonical = protective_mbr_image(&[0u8; 512], 2048);
+        // CHS 两字段写 UEFI 2.10 §5.2.3 Table 5.4 的推荐占位：
+        // StartCHS 0x000200、EndCHS 0xFFFFFF（固件按 GPT-009 不使用 CHS）
+        assert_eq!(&canonical[MBR_ENTRY_BASE + 1..MBR_ENTRY_BASE + 4], &[0x00, 0x02, 0x00]);
+        assert_eq!(&canonical[MBR_ENTRY_BASE + 5..MBR_ENTRY_BASE + 8], &[0xFF, 0xFF, 0xFF]);
         assert!(protective_mbr_content(&canonical, 2048).is_none());
 
         let mut stale = canonical.clone();

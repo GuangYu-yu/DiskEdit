@@ -971,6 +971,16 @@ mod tests {
         let (out, number) = add_mbr(&lba0, None, 4096, 5119, 0x83, 8192).expect("应可新增");
         assert_eq!(number, 2);
         assert_eq!(out[MBR_ENTRY_BASE + 16 + 4], 0x83);
+        // CHS 两字段写 LBA-only 占位（gdisk 同值；fdisk/parted 在 >1023 柱面溢出钳位
+        // 后也是同值）：起点 [FE FF FF]、终点 [FE FF FF]，与旧版 add_mdos_entry 一致
+        assert_eq!(
+            &out[MBR_ENTRY_BASE + 16 + 1..MBR_ENTRY_BASE + 16 + 4],
+            &[0xFE, 0xFF, 0xFF]
+        );
+        assert_eq!(
+            &out[MBR_ENTRY_BASE + 16 + 5..MBR_ENTRY_BASE + 16 + 8],
+            &[0xFE, 0xFF, 0xFF]
+        );
         assert!(matches!(
             add_mbr(&out, None, 3000, 3500, 0x83, 8192),
             Err(EditError::Overlaps { .. })
