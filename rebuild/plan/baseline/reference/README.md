@@ -12,7 +12,7 @@
 
 版本、上游 URL、SHA-256、覆盖文件数与范围见 [sources.tsv](sources.tsv)。固定
 版本优先对齐 QEMU 来宾发行版；gdisk 用可复现的 1.0.10（旧 `defense-census`
-记的是不可复现的 `master-2026-11-27`，见第 6 节）。
+记的是不可复现的 `master-2026-11-27`，见第 7 节）。
 
 | 层 | 工具 | 版本 |
 | --- | --- | --- |
@@ -35,8 +35,10 @@ T4 的条款文本摘录在 [specs.tsv](specs.tsv)，来源 URL 见
 | `abort` | 中止/panic | `abort(`/`panic(` |
 | `fail-goto` | 失败清理跳转 | `goto fail* / error* / err* / out* / done* / cleanup*` |
 | `fatal-exit` | 致命退出/用法 | `err(`/`errx(`/`die(`/`fatal(`/`Exit(`/`exit(`/`_exit(`/`usage(`（`exit(0)` 除外） |
-| `refusal` | 带拒绝语义的用户消息 | 错误通道 + 三行窗口内出现 cannot/invalid/unsupported/too small/exceed/overlap/corrupt/truncate/mounted/busy 等 |
-| `error-report` | 错误通道但不含拒绝词 | `err/errx/warn/warnx/die/perror/fprintf(stderr)/fputs(stderr)/cerr<<`/`log_error|warn|critical`/`display_message`/`screen_buffer_add` |
+| `refusal` | 带拒绝语义的用户消息 | 错误/消息通道 + 三行窗口内出现 cannot/invalid/unsupported/too small/exceed/overlap/corrupt/truncate/mounted/busy/error/not found 等 |
+| `error-report` | 错误通道但不含拒绝词 | 标准通道 `err/errx/warn/warnx/die/perror/fprintf(stderr)/fputs(stderr)/cerr<<`/`log_error|warn|critical`/`display_message`/`screen_buffer_add` + 工具私有通道 `ntfs_log_*`/`fix_problem`/`com_err`/`fdisk_warn*`/`fdisk_errx`/`Report` |
+| `message-entry` | problem 表消息条目 | e2fsck `problem*.c` 内每个 `N_("...")` 条目全量入账（`PROMPT_*` 交互修复语义的载体） |
+| `string-channel` | 字符串通道 | `printf/printw/_/puts/fputs` 调用且**引号内**含拒绝语义；仅当附近 ±2 行无其他站点时入账 |
 
 同一行命中多类时只记一行，`category` 取优先级最高者，全部命中写进 `tags`。
 `symbol` 是“最近一个函数样式行”的近似归属，不是编译器级符号解析。
@@ -45,21 +47,21 @@ T4 的条款文本摘录在 [specs.tsv](specs.tsv)，来源 URL 见
 
 - [docs.tsv](docs.tsv)：man/texi/rst 里的 `CAVEATS/BUGS/WARNING/NOTES/SECURITY/LIMITATIONS/KNOWN BUGS/KNOWN ISSUES/PRACTICAL USE` 段落；texi 另收含 warning/data loss/corrupt/unrecoverable 的行。按空行/宏/标题分块，一块一行。
 - [incidents.tsv](incidents.tsv)：NEWS/ChangeLog/RELEASE-NOTES/WHATS_NEW 里含 crash/corrupt/data loss/CVE/overflow/truncate/misalign/wrong/race 等风险词的分块。
-- [implicit.tsv](implicit.tsv)：`#define` 的 ALIGN/DEFAULT/MAX/MIN/SECTOR/MIB/CHUNK/TIMEOUT/RETRY/CONFIRM/FIRST/LAST，以及 `fsync|fdatasync|sync_file_range`、`BLKRRPART|BLKPG`、`O_EXCL|O_DIRECT|flock|F_SETLK`、`confirm|yes_no|ask_yes|interactive|force`。
+- [implicit.tsv](implicit.tsv)：`#define` 的 ALIGN/DEFAULT/MAX/MIN/SECTOR/MIB/CHUNK/TIMEOUT/RETRY/CONFIRM/FIRST/LAST，以及 `fsync|fdatasync|sync_file_range`、`BLKRRPART|BLKPG`、`O_EXCL|O_DIRECT|flock|F_SETLK`、`confirm|yes_no|ask_yes|interactive|force`、`PROMPT_FIX|PROMPT_RELOCATE|PROMPT_CONNECT|PROMPT_CREATE|PROMPT_DELETE`（e2fsck 交互修复提示）。
 
 ## 3. 规模
 
 | 文件 | 行数 |
 | --- | --- |
-| `sites/*.tsv` | 8,032 个站点 |
+| `sites/*.tsv` | 10,055 个站点 |
 | `docs.tsv` | 278 段 |
 | `incidents.tsv` | 750 条事故候选 |
-| `implicit.tsv` | 542 条隐式决定候选 |
+| `implicit.tsv` | 806 条隐式决定候选 |
 | `specs.tsv` | 29 条规范条款 |
 
-按工具与类别的精确计数见 [summary.tsv](summary.tsv)。风险分布：站点 high 5,713 /
-medium 2,319；文档 high 9 / medium 269；事故 high 379 / medium 371；隐式决定全
-medium 542。`risk` 是启发式分级，只用于排序，不是处置结论。
+按工具与类别的精确计数见 [summary.tsv](summary.tsv)。风险分布：站点 high 5,847 /
+medium 4,208；文档 high 9 / medium 269；事故 high 379 / medium 371；隐式决定全
+medium 806。`risk` 是启发式分级，只用于排序，不是处置结论。
 
 ## 4. 列定义
 
@@ -90,14 +92,35 @@ medium 542。`risk` 是启发式分级，只用于排序，不是处置结论。
   另加 **39 / 24 / 83**，合计 855 / 350 / 570。
 - libfdisk：核心 **527 / 0 / 84**，与旧行完全一致；`sfdisk.c`/`fdisk.c`/`cfdisk.c`
   另加 **62 / 0 / 27**，合计 589 / 0 / 111。
-- gdisk：1.0.10 在窄口径下仍是 **0 / 0 / 0**；但本账本录得 **180** 个站点
-  （29 fatal-exit、118 error-report、33 refusal）。这说明旧的 0 是**度量口径
-  盲区**，不是“没有防御面”。
+- gdisk：1.0.10 在窄口径下仍是 **0 / 0 / 0**；但本账本录得 **192** 个站点
+  （29 fatal-exit、95 error-report、67 refusal、1 string-channel）。这说明旧的 0 是
+  **度量口径盲区**，不是“没有防御面”。
 
 因此旧 `defense-census.tsv` 的 gdisk 行不应再作为“已覆盖”的证据；后续处置应
 以 `sites/gdisk.tsv` 为准。
 
-## 6. 明确的盲区（下一阶段才补）
+## 6. 零站点文件归类
+
+366 个 scope 文件中有 113 个没有任何站点行，已逐个核对，确认不是漏：
+
+- **纯头文件 64 个**：只有类型/常量/宏声明（`ext2_fs.h`、`gpt.h` 等）。
+- **测试夹具 7 个**：`libparted/tests/*.c`，不随产品走。
+- **已验证静默 42 个**：grep 反向核对确认其错误路径只走返回值、由调用方上报。
+  代表：parted 的 11 个 `fs/*` 薄后端（`fs/xfs/xfs.c` 等无一断言/异常）、
+  `architecture.c`、`labels/efi_crc32.c`、`pt-limit.c`、`parted/command.c`；
+  gdisk 的 `mbr.cc`/`diskio.cc`/`sgdisk.cc`/`crc32.cc`（返回码风格）；
+  e2fsck 的 `e2fsck.c`（纯编排，无消息调用）；lvm2 `lvextend.c`（委托
+  `lvresize.c`）；testdisk 的 `partgptw.c` 等写入器与 `analyse.c`（其中 24 处
+  assert 全部是**注释掉的**，`code_only` 已正确剥离）；dosfstools/f2fs 的设备
+  与配额辅助文件。
+
+另有 8 个文件最初被判零站点，实为**通道缺失**所致——补上
+`ntfs_log_*`/`fix_problem`/`com_err`/`fdisk_warn*`/`Report`/`printw` 与字符串
+通道后全部转正（ntfs-3g `bootsect.c`/`mst.c`/`bitmap.c`、xfs `db/command.c`、
+e2fsck `ehandler.c`/`pass3.c`/`quota.c`、gdisk `gptcurses.cc`）。"零站点清单 +
+反向 grep 核对"这个方法在换版本/换工具时必须重放。
+
+## 7. 明确的盲区（下一阶段才补）
 
 1. **只做了源码枚举，没有黑盒实测。** 组合行为、真实工具版本差异、失败后的半写
    状态仍要靠 QEMU/真机会话（对应原计划 SA3）。
@@ -113,7 +136,7 @@ medium 542。`risk` 是启发式分级，只用于排序，不是处置结论。
 8. **规范只覆盖 UEFI 2.10 第 5 章 + MS MBR/EBR**；ATA/SCSI 只取到对齐相关段落。
 9. `symbol` 是启发式近似；精确到函数需编译器/ctags 级解析。
 
-## 7. 重放
+## 8. 重放
 
 参考源码解包到 `/tmp/refsrc/src`（版本见 `sources.tsv`），然后：
 
@@ -125,11 +148,11 @@ REF_SRC=/tmp/refsrc/src python3 plan/baseline/reference/mine_reference.py
 `plan/census.json`。重放后可用以下命令核对规模：
 
 ```sh
-awk -F'\t' 'FNR>1{n++} END{print n}' plan/baseline/reference/sites/*.tsv   # 8032
+awk -F'\t' 'FNR>1{n++} END{print n}' plan/baseline/reference/sites/*.tsv   # 10055
 awk -F'\t' 'NR>1{n++} END{print n}' plan/baseline/reference/docs.tsv      # 278
 ```
 
-## 8. 下一阶段（处置，不在本轮）
+## 9. 下一阶段（处置，不在本轮）
 
 逐行把 `disposition` 从 `待判` 改成以下四态之一，并在 `note` 写理由与证据：
 

@@ -123,14 +123,20 @@ ERRSITE = re.compile(
     r"(?:\berr\s*\(|\berrx\s*\(|\bwarn\s*\(|\bwarnx\s*\(|\bdie\s*\(|\bperror\s*\("
     r"|fprintf\s*\(\s*stderr|fputs\s*\([^,]+,\s*stderr|ped_exception_throw|\bthrow\b"
     r"|\bExit\s*\(|\berror\s*\(|\bcerr\s*<<|std::cerr"
-    r"|\blog_(?:error|warn|warning|critical)\s*\("
+    r"|log_(?:error|warn|warning|critical)\s*\("
+    r"|\bntfs_log_(?:perror|error|warn|warning|critical|alert)\s*\("
+    r"|\bfix_problem\s*\("
+    r"|\bcom_err\s*\("
+    r"|\bfdisk_(?:warn|warnx|errx)\s*\("
+    r"|\bReport\s*\("
     r"|\b(?:display_message|screen_buffer_add)\s*\()"
 )
 ACTION = re.compile(
     r"cannot|can not|invalid|unsupported|not supported|refus|too (?:small|large|many)"
     r"|must (?:be|not)|requires?|no (?:space|room|free)|exceed|overflow|underflow"
     r"|corrupt|truncat|misalign|overlap|out of range|not enough|destroy|data loss"
-    r"|overwrit|irreversible|read.?only|mounted|busy|conflict",
+    r"|overwrit|irreversible|read.?only|mounted|busy|conflict|not found|unknown"
+    r"|\berror\b|failed|failure|\bbad\b",
     re.I,
 )
 FUNC = re.compile(
@@ -144,6 +150,28 @@ DOC_HEAD = re.compile(
     r"|practical use)$",
     re.I,
 )
+MSG_ENTRY = re.compile(r"_\s*\(\s*\"")
+STRCALL = re.compile(r"printf|printw|_\s*\(|\bfputs\b|\bputs\b")
+
+
+def quoted_action(line):
+    """引号内出现拒绝语义词（字符串通道：私有包装器/stdout 打印的拒绝消息）。"""
+    quote, escaped, start, spans = None, False, None, []
+    for i, ch in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote:
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                spans.append(line[start + 1:i])
+                quote = None
+            continue
+        if ch == '"':
+            quote, start = ch, i
+    return any(ACTION.search(s) for s in spans)
 
 
 def files_for(root, globs):
@@ -184,7 +212,7 @@ def risk_for(category, text):
         return "high"
     if re.search(r"corrupt|data loss|destroy|overwrit|truncat|irreversible", text, re.I):
         return "high"
-    if category == "refusal":
+    if category in {"refusal", "message-entry"}:
         return "high" if re.search(r"invalid|unsupported|cannot|refus|exceed", text, re.I) else "medium"
     return "medium"
 
@@ -250,6 +278,7 @@ def mine_tool(slug, spec):
         lines = read_lines(path)
         codes = code_only(lines)
         counters["files"] += 1
+        is_problem = path.name.startswith("problem")
         symbol = "-"
         for i, line in enumerate(lines):
             code = codes[i]
@@ -280,11 +309,21 @@ def mine_tool(slug, spec):
             elif ERRSITE.search(code):
                 tags.append("error-report")
                 counters["error-report"] += 1
+            if not tags and is_problem and MSG_ENTRY.search(code):
+                # e2fsck problem 表条目：用户可见消息本体，不含拒绝词也入账。
+                tags.append("message-entry")
+                counters["error-report"] += 1
+            if (not tags and STRCALL.search(code) and quoted_action(code)
+                    and not any(r["file"] == rel and abs(int(r["line"]) - (i + 1)) <= 2
+                                for r in rows)):
+                tags.append("string-channel")
+                counters["refusal"] += 1
             if not tags:
                 continue
             category = next(
                 (c for c in ["assert", "exception", "abort", "fail-goto",
-                             "fatal-exit", "refusal", "error-report"] if c in tags),
+                             "fatal-exit", "refusal", "message-entry",
+                             "error-report", "string-channel"] if c in tags),
                 tags[0],
             )
             seq += 1
@@ -475,6 +514,7 @@ IMPLICIT = [
     ("kernel-reload", re.compile(r"\b(?:BLKRRPART|BLKPG|BLKPG_[A-Z_]+)\b")),
     ("lock", re.compile(r"\b(?:O_EXCL|O_DIRECT|flock|F_SETLK|LOCK_EX)\b")),
     ("confirm", re.compile(r"\b(?:confirm|yes_no|ask_yes|interactive|force)\w*\b", re.I)),
+    ("prompt", re.compile(r"\bPROMPT_(?:FIX|RELOCATE|CONNECT|CREATE|DELETE|NONE)\b")),
 ]
 
 

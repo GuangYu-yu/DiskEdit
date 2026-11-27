@@ -209,55 +209,319 @@ e2fsprogs-imp-00033	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	2881	!pb->e
 e2fsprogs-imp-00034	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	3307	pb->eti.force_rebuild = 1;	medium	待判	
 e2fsprogs-imp-00035	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/pass1.c	3426	pb.eti.force_rebuild = 0;	medium	待判	
 e2fsprogs-imp-00036	e2fsprogs	1.47.0	T2	check	default	e2fsck/pass2.c	324	#define MAX_DEPTH 32000	medium	待判	
-e2fsprogs-imp-00037	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/problem.c	2530	reconfigure_bool(ctx, ptr, key, PR_FORCE_NO, "force_no");	medium	待判	
-e2fsprogs-imp-00038	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	23	#define MIN_CHECK 1	medium	待判	
-e2fsprogs-imp-00039	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	24	#define MAX_CHECK 2	medium	待判	
-e2fsprogs-imp-00040	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	89	" -f Force checking even if filesystem is marked clean\n"));	medium	待判	
-e2fsprogs-imp-00041	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	93	" -B blocksize Force blocksize when looking for superblock\n"	medium	待判	
-e2fsprogs-imp-00042	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	274	if (!ctx->interactive || ctx->mount_flags & EXT2_MF_BUSY)	medium	待判	
-e2fsprogs-imp-00043	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	413	log_out(ctx, "%s", _(", check forced.\n"));	medium	待判	
-e2fsprogs-imp-00044	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	839	ctx->interactive = 1;	medium	待判	
-e2fsprogs-imp-00045	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1487	if (!ctx->interactive)	medium	待判	
-e2fsprogs-imp-00046	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1489	_("need terminal for interactive repairs"));	medium	待判	
-e2fsprogs-imp-00047	e2fsprogs	1.47.0	T2	check	default	e2fsck/util.c	467	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
-e2fsprogs-imp-00048	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	135	#define EXT2_FIRST_INODE(s) EXT2_FIRST_INO(s)	medium	待判	
-e2fsprogs-imp-00049	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	440	#define EXT2_EXTENT_LAST_LEAF 0x0002	medium	待判	
-e2fsprogs-imp-00050	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	441	#define EXT2_EXTENT_FIRST_SIB 0x0003	medium	待判	
-e2fsprogs-imp-00051	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	442	#define EXT2_EXTENT_LAST_SIB 0x0004	medium	待判	
-e2fsprogs-imp-00052	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	451	#define EXT2_EXTENT_DOWN_AND_LAST 0x000D	medium	待判	
-e2fsprogs-imp-00053	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	783	#define EXT2_NEWRANGE_MIN_LENGTH (0x2)	medium	待判	
-e2fsprogs-imp-00054	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	1572	#define EXT2_INODE_SCAN_DEFAULT_BUFFER_BLOCKS 8	medium	待判	
-e2fsprogs-imp-00055	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	55	#define EXT2_DEFAULT_PREALLOC_BLOCKS 8	medium	待判	
-e2fsprogs-imp-00056	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	78	#define EXT2_GOOD_OLD_FIRST_INO 11	medium	待判	
-e2fsprogs-imp-00057	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	102	#define EXT2_MIN_BLOCK_LOG_SIZE 10	medium	待判	
-e2fsprogs-imp-00058	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	103	#define EXT2_MAX_BLOCK_LOG_SIZE 16	medium	待判	
-e2fsprogs-imp-00059	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	104	#define EXT2_MIN_BLOCK_SIZE (1 << EXT2_MIN_BLOCK_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00060	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	105	#define EXT2_MAX_BLOCK_SIZE (1 << EXT2_MAX_BLOCK_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00061	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	111	#define EXT2_FIRST_INO(s) (EXT2_SB(s)->s_first_ino)	medium	待判	
-e2fsprogs-imp-00062	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	117	#define EXT2_FIRST_INO(s) (((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \	medium	待判	
-e2fsprogs-imp-00063	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	125	#define EXT2_MIN_CLUSTER_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
-e2fsprogs-imp-00064	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	126	#define EXT2_MAX_CLUSTER_LOG_SIZE 29	medium	待判	
-e2fsprogs-imp-00065	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	127	#define EXT2_MIN_CLUSTER_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00066	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	128	#define EXT2_MAX_CLUSTER_SIZE (1 << EXT2_MAX_CLUSTER_LOG_SIZE)	medium	待判	
-e2fsprogs-imp-00067	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	139	#define EXT2_MIN_FRAG_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00068	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	140	#define EXT2_MAX_FRAG_SIZE EXT2_MAX_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00069	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	141	#define EXT2_MIN_FRAG_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
-e2fsprogs-imp-00070	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	280	#define EXT2_MIN_DESC_SIZE 32	medium	待判	
-e2fsprogs-imp-00071	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	281	#define EXT2_MIN_DESC_SIZE_64BIT 64	medium	待判	
-e2fsprogs-imp-00072	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	282	#define EXT2_MAX_DESC_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
-e2fsprogs-imp-00073	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	291	#define EXT2_MAX_BLOCKS_PER_GROUP(s) ((((unsigned) 1 << 16) - 8) * \	medium	待判	
-e2fsprogs-imp-00074	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	294	#define EXT2_MAX_CLUSTERS_PER_GROUP(s) (((unsigned) 1 << 16) - 8)	medium	待判	
-e2fsprogs-imp-00075	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	295	#define EXT2_MAX_INODES_PER_GROUP(s) (((unsigned) 1 << 16) - \	medium	待判	
-e2fsprogs-imp-00076	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	589	#define EXT2_DFL_MAX_MNT_COUNT 20	medium	待判	
-e2fsprogs-imp-00077	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	598	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
-e2fsprogs-imp-00078	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	620	#define EXT4_MAX_KEY_SIZE 64	medium	待判	
-e2fsprogs-imp-00079	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	626	#define EXT4_MAX_PASSPHRASE_SIZE 1024	medium	待判	
-e2fsprogs-imp-00080	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	627	#define EXT4_MAX_SALT_SIZE 256	medium	待判	
-e2fsprogs-imp-00081	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	800	#define EXT2_MAX_SUPP_REV EXT2_DYNAMIC_REV	medium	待判	
-e2fsprogs-imp-00082	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1180	#define EXT4_MMP_MAX_UPDATE_INTERVAL 300	medium	待判	
-e2fsprogs-imp-00083	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1185	#define EXT4_MMP_MIN_CHECK_INTERVAL 5	medium	待判	
-e2fsprogs-imp-00084	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1190	#define EXT4_MIN_INLINE_DATA_SIZE ((sizeof(__u32) * EXT2_N_BLOCKS))	medium	待判	
-e2fsprogs-imp-00085	e2fsprogs	1.47.0	T2	misc	default	lib/support/profile.c	135	#define PROFILE_LAST_FILESPEC(x) (((x) == NULL) || ((x)[0] == '\0'))	medium	待判	
+e2fsprogs-imp-00037	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	24	#define PROMPT_NONE 0	medium	待判	
+e2fsprogs-imp-00038	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	25	#define PROMPT_FIX 1	medium	待判	
+e2fsprogs-imp-00039	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	27	#define PROMPT_RELOCATE 3	medium	待判	
+e2fsprogs-imp-00040	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	30	#define PROMPT_CONNECT 6	medium	待判	
+e2fsprogs-imp-00041	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	31	#define PROMPT_CREATE 7	medium	待判	
+e2fsprogs-imp-00042	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	39	#define PROMPT_DELETE 15	medium	待判	
+e2fsprogs-imp-00043	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	119	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00044	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	123	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00045	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	129	PROMPT_RELOCATE, PR_LATCH_RELOC, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00046	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	140	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00047	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	154	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00048	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	159	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00049	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	164	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00050	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	169	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00051	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	179	PROMPT_NONE, PR_PREEN_OK | PR_NOCOLLATE, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00052	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	184	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00053	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	190	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00054	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	195	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00055	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	210	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00056	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00057	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	220	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00058	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00059	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	239	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00060	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	254	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00061	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	264	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00062	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	269	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00063	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	274	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00064	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	279	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00065	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	285	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00066	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	291	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00067	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	312	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00068	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	318	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00069	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	324	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00070	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	334	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00071	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	339	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00072	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	346	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00073	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	361	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00074	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	366	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00075	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	372	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00076	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	377	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00077	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	382	PROMPT_FIX, PR_PREEN_OK | PR_LATCH_BG_CHECKSUM, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00078	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	388	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00079	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	393	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00080	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	398	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00081	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	404	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00082	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	415	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00083	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	421	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00084	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	426	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00085	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	431	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00086	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	436	PROMPT_NONE, PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00087	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	441	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00088	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	451	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00089	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	457	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00090	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	463	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00091	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	470	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00092	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	475	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00093	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	480	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00094	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	490	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00095	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	495	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00096	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	506	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00097	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	511	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00098	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	516	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00099	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	521	PROMPT_NONE, PR_AFTER_CODE, PR_0_SB_CORRUPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00100	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	527	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00101	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	532	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00102	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	537	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00103	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	542	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00104	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	547	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00105	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	554	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00106	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	563	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00107	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	574	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00108	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	580	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00109	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	591	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00110	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	596	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00111	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	601	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00112	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	606	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00113	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	611	PROMPT_RELOCATE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00114	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	616	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00115	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	621	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00116	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	658	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00117	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	675	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK_PROMPT, 0, 0 },	medium	待判	
+e2fsprogs-imp-00118	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	686	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
+e2fsprogs-imp-00119	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	692	PROMPT_NONE, PR_AFTER_CODE, PR_1_BAD_PRIMARY_BLOCK, 0, 0 },	medium	待判	
+e2fsprogs-imp-00120	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	697	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00121	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	704	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00122	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	710	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00123	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	715	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00124	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	721	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00125	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	726	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00126	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	732	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00127	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	737	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00128	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	742	PROMPT_NONE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00129	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	747	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00130	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	752	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00131	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	758	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00132	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	764	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00133	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	770	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00134	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	776	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00135	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	781	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00136	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	787	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00137	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	793	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00138	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	815	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00139	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	820	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00140	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	830	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00141	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	836	PROMPT_FIX, PR_LATCH_LOW_DTIME, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00142	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	842	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00143	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	847	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00144	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	862	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00145	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	867	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00146	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	872	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00147	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	882	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00148	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	969	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00149	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	999	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00150	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1033	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00151	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1039	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00152	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1060	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00153	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1097	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00154	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1112	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00155	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1120	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00156	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1126	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00157	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1137	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00158	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1151	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00159	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1156	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00160	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1162	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00161	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1167	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00162	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1187	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00163	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1193	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00164	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1199	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00165	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1215	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00166	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1225	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00167	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1230	PROMPT_FIX, PR_NO_OK | PR_PREEN_NO | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00168	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1236	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00169	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1248	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00170	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1264	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00171	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1318	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00172	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1324	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00173	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1329	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00174	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1334	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00175	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1340	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00176	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1346	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00177	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1352	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00178	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1357	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00179	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1362	PROMPT_NONE, PR_LATCH_DBLOCK | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00180	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1367	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00181	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1373	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00182	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1379	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00183	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1384	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00184	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1389	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00185	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1394	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00186	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1399	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00187	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1407	"", PROMPT_DELETE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00188	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1412	N_("Couldn't clone file: %m\n"), PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00189	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1419	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00190	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1425	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00191	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1430	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00192	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1435	PROMPT_NONE, PR_LATCH_OPTIMIZE_EXT | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00193	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1440	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00194	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1445	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00195	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1462	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00196	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1468	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00197	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1503	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00198	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1509	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00199	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1515	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00200	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1520	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00201	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1525	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00202	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1576	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00203	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1582	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00204	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1597	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00205	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1602	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00206	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1608	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00207	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1613	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00208	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1619	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00209	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1625	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00210	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1641	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00211	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1647	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00212	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1668	PROMPT_NONE, PR_PREEN_OK | PR_NO_OK | PR_NO_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00213	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1673	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00214	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1698	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00215	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1703	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00216	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1708	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00217	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1713	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00218	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1718	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00219	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1727	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00220	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1737	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00221	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1763	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00222	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1778	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00223	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1793	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00224	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1798	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00225	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1820	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00226	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1825	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00227	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1830	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00228	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1856	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00229	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1869	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00230	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1885	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00231	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1890	PROMPT_CREATE, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00232	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1895	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00233	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1901	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00234	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1907	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00235	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1913	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00236	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1919	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00237	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1925	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00238	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1931	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00239	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1937	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00240	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1943	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00241	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1949	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00242	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1955	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00243	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1961	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00244	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1966	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00245	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1972	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00246	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1978	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00247	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1983	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00248	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1988	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00249	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	1993	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00250	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2014	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00251	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2025	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00252	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2032	PROMPT_NONE, PR_HEADER | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00253	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2038	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00254	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2043	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00255	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2048	PROMPT_NONE, PR_MSG_ONLY, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00256	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2053	PROMPT_NONE, PR_LATCH_OPTIMIZE_DIR | PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00257	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2058	PROMPT_NONE, PR_PREEN_NOHDR, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00258	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2065	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00259	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2077	PROMPT_CONNECT, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00260	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2082	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00261	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2089	PROMPT_NONE, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00262	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2093	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00263	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2098	PROMPT_FIX, 0, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00264	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2103	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00265	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2110	PROMPT_NONE, PR_HEADER, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00266	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2115	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00267	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2120	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00268	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2125	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00269	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2130	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00270	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2136	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00271	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2142	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00272	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2147	PROMPT_NONE, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00273	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2152	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00274	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2158	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00275	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2164	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00276	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2169	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00277	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2174	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00278	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2179	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00279	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2184	PROMPT_FIX, PR_PREEN_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00280	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2189	PROMPT_FIX, PR_PREEN_OK | PR_NO_OK | PR_PREEN_NOMSG, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00281	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2195	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00282	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2200	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00283	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2206	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00284	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2212	PROMPT_NONE, PR_FATAL, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00285	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2217	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00286	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2223	PROMPT_NONE, PR_LATCH_BBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00287	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2229	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00288	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2235	PROMPT_NONE, PR_LATCH_IBITMAP | PR_PREEN_OK | PR_PREEN_NOMSG,	medium	待判	
+e2fsprogs-imp-00289	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2242	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00290	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2248	PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00291	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2254	PROMPT_FIX, PR_LATCH_IBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00292	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2260	PROMPT_FIX, PR_LATCH_BBITMAP | PR_PREEN_OK, 0, 0, 0 },	medium	待判	
+e2fsprogs-imp-00293	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2305	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00294	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2315	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00295	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2320	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00296	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2340	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00297	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2345	PROMPT_NONE, 0 },	medium	待判	
+e2fsprogs-imp-00298	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/problem.c	2530	reconfigure_bool(ctx, ptr, key, PR_FORCE_NO, "force_no");	medium	待判	
+e2fsprogs-imp-00299	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2602	if (!(ptr->flags & PR_PREEN_OK) && (ptr->prompt != PROMPT_NONE))	medium	待判	
+e2fsprogs-imp-00300	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2608	if (ptr->prompt == PROMPT_NONE) {	medium	待判	
+e2fsprogs-imp-00301	e2fsprogs	1.47.0	T2	check	prompt	e2fsck/problem.c	2651	if (answer && (ptr->prompt != PROMPT_NONE) &&	medium	待判	
+e2fsprogs-imp-00302	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	23	#define MIN_CHECK 1	medium	待判	
+e2fsprogs-imp-00303	e2fsprogs	1.47.0	T2	check	default	e2fsck/super.c	24	#define MAX_CHECK 2	medium	待判	
+e2fsprogs-imp-00304	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	89	" -f Force checking even if filesystem is marked clean\n"));	medium	待判	
+e2fsprogs-imp-00305	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	93	" -B blocksize Force blocksize when looking for superblock\n"	medium	待判	
+e2fsprogs-imp-00306	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	274	if (!ctx->interactive || ctx->mount_flags & EXT2_MF_BUSY)	medium	待判	
+e2fsprogs-imp-00307	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	413	log_out(ctx, "%s", _(", check forced.\n"));	medium	待判	
+e2fsprogs-imp-00308	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	839	ctx->interactive = 1;	medium	待判	
+e2fsprogs-imp-00309	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1487	if (!ctx->interactive)	medium	待判	
+e2fsprogs-imp-00310	e2fsprogs	1.47.0	T2	check	confirm	e2fsck/unix.c	1489	_("need terminal for interactive repairs"));	medium	待判	
+e2fsprogs-imp-00311	e2fsprogs	1.47.0	T2	check	default	e2fsck/util.c	467	#define mbytes(x) (((x) + 1048575) / 1048576)	medium	待判	
+e2fsprogs-imp-00312	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	135	#define EXT2_FIRST_INODE(s) EXT2_FIRST_INO(s)	medium	待判	
+e2fsprogs-imp-00313	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	440	#define EXT2_EXTENT_LAST_LEAF 0x0002	medium	待判	
+e2fsprogs-imp-00314	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	441	#define EXT2_EXTENT_FIRST_SIB 0x0003	medium	待判	
+e2fsprogs-imp-00315	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	442	#define EXT2_EXTENT_LAST_SIB 0x0004	medium	待判	
+e2fsprogs-imp-00316	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	451	#define EXT2_EXTENT_DOWN_AND_LAST 0x000D	medium	待判	
+e2fsprogs-imp-00317	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	783	#define EXT2_NEWRANGE_MIN_LENGTH (0x2)	medium	待判	
+e2fsprogs-imp-00318	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2fs.h	1572	#define EXT2_INODE_SCAN_DEFAULT_BUFFER_BLOCKS 8	medium	待判	
+e2fsprogs-imp-00319	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	55	#define EXT2_DEFAULT_PREALLOC_BLOCKS 8	medium	待判	
+e2fsprogs-imp-00320	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	78	#define EXT2_GOOD_OLD_FIRST_INO 11	medium	待判	
+e2fsprogs-imp-00321	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	102	#define EXT2_MIN_BLOCK_LOG_SIZE 10	medium	待判	
+e2fsprogs-imp-00322	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	103	#define EXT2_MAX_BLOCK_LOG_SIZE 16	medium	待判	
+e2fsprogs-imp-00323	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	104	#define EXT2_MIN_BLOCK_SIZE (1 << EXT2_MIN_BLOCK_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00324	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	105	#define EXT2_MAX_BLOCK_SIZE (1 << EXT2_MAX_BLOCK_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00325	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	111	#define EXT2_FIRST_INO(s) (EXT2_SB(s)->s_first_ino)	medium	待判	
+e2fsprogs-imp-00326	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	117	#define EXT2_FIRST_INO(s) (((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \	medium	待判	
+e2fsprogs-imp-00327	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	125	#define EXT2_MIN_CLUSTER_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
+e2fsprogs-imp-00328	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	126	#define EXT2_MAX_CLUSTER_LOG_SIZE 29	medium	待判	
+e2fsprogs-imp-00329	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	127	#define EXT2_MIN_CLUSTER_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00330	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	128	#define EXT2_MAX_CLUSTER_SIZE (1 << EXT2_MAX_CLUSTER_LOG_SIZE)	medium	待判	
+e2fsprogs-imp-00331	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	139	#define EXT2_MIN_FRAG_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00332	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	140	#define EXT2_MAX_FRAG_SIZE EXT2_MAX_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00333	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	141	#define EXT2_MIN_FRAG_LOG_SIZE EXT2_MIN_BLOCK_LOG_SIZE	medium	待判	
+e2fsprogs-imp-00334	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	280	#define EXT2_MIN_DESC_SIZE 32	medium	待判	
+e2fsprogs-imp-00335	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	281	#define EXT2_MIN_DESC_SIZE_64BIT 64	medium	待判	
+e2fsprogs-imp-00336	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	282	#define EXT2_MAX_DESC_SIZE EXT2_MIN_BLOCK_SIZE	medium	待判	
+e2fsprogs-imp-00337	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	291	#define EXT2_MAX_BLOCKS_PER_GROUP(s) ((((unsigned) 1 << 16) - 8) * \	medium	待判	
+e2fsprogs-imp-00338	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	294	#define EXT2_MAX_CLUSTERS_PER_GROUP(s) (((unsigned) 1 << 16) - 8)	medium	待判	
+e2fsprogs-imp-00339	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	295	#define EXT2_MAX_INODES_PER_GROUP(s) (((unsigned) 1 << 16) - \	medium	待判	
+e2fsprogs-imp-00340	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	589	#define EXT2_DFL_MAX_MNT_COUNT 20	medium	待判	
+e2fsprogs-imp-00341	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	598	#define EXT2_ERRORS_DEFAULT EXT2_ERRORS_CONTINUE	medium	待判	
+e2fsprogs-imp-00342	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	620	#define EXT4_MAX_KEY_SIZE 64	medium	待判	
+e2fsprogs-imp-00343	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	626	#define EXT4_MAX_PASSPHRASE_SIZE 1024	medium	待判	
+e2fsprogs-imp-00344	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	627	#define EXT4_MAX_SALT_SIZE 256	medium	待判	
+e2fsprogs-imp-00345	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	800	#define EXT2_MAX_SUPP_REV EXT2_DYNAMIC_REV	medium	待判	
+e2fsprogs-imp-00346	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1180	#define EXT4_MMP_MAX_UPDATE_INTERVAL 300	medium	待判	
+e2fsprogs-imp-00347	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1185	#define EXT4_MMP_MIN_CHECK_INTERVAL 5	medium	待判	
+e2fsprogs-imp-00348	e2fsprogs	1.47.0	T2	misc	default	lib/ext2fs/ext2_fs.h	1190	#define EXT4_MIN_INLINE_DATA_SIZE ((sizeof(__u32) * EXT2_N_BLOCKS))	medium	待判	
+e2fsprogs-imp-00349	e2fsprogs	1.47.0	T2	misc	default	lib/support/profile.c	135	#define PROFILE_LAST_FILESPEC(x) (((x) == NULL) || ((x)[0] == '\0'))	medium	待判	
 xfsprogs-imp-00001	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	28	#define XFS_MIN_REALISTIC_LOG_BLOCKS(blog) (MEGABYTES(64, (blog)))	medium	待判	
 xfsprogs-imp-00002	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	154	#define MAX_SUBOPTS (D_MAX_OPTS + 1)	medium	待判	
 xfsprogs-imp-00003	xfsprogs	6.6.0	T2	mkfs	default	mkfs/xfs_mkfs.c	157	#define MAX_CONFLICTS 8	medium	待判	

@@ -5,7 +5,7 @@ xfsprogs-00003	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.
 xfsprogs-00004	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	124	-	usage(); } }	high	待判	
 xfsprogs-00005	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	128	-	usage(); if (iflag && xflag) usage();	high	待判	
 xfsprogs-00006	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	130	-	usage(); if (dflag + lflag + rflag + mflag == 0) aflag = 1;	high	待判	
-xfsprogs-00007	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	137	-	fprintf(stderr, _("%s: path resolution failed for %s: %s\n"), progname, argv[optind], strerror(errno)); return 1;	medium	待判	
+xfsprogs-00007	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	137	-	fprintf(stderr, _("%s: path resolution failed for %s: %s\n"), progname, argv[optind], strerror(errno)); return 1;	medium	待判	
 xfsprogs-00008	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	147	-	fprintf(stderr, _("%s: %s is not a mounted XFS filesystem\n"), progname, argv[optind]); return 1;	medium	待判	
 xfsprogs-00009	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	159	-	perror(fname); return 1; }	medium	待判	
 xfsprogs-00010	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	164	-	fprintf(stderr, _("%s: specified file " "[\"%s\"] is not on an XFS filesystem\n"), progname, fname);	medium	待判	
@@ -14,395 +14,450 @@ xfsprogs-00012	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	173	
 xfsprogs-00013	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	174	-	_("%s: cannot determine geometry of filesystem mounted at %s: %s\n"), progname, fname, strerror(ret)); exit(1);	high	待判	
 xfsprogs-00014	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	176	-	exit(1); }	high	待判	
 xfsprogs-00015	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	192	-	usage(); /* check we got the info for all the sections we are trying to modify */	high	待判	
-xfsprogs-00016	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	196	-	fprintf(stderr, _("%s: failed to access data device for %s\n"), progname, fname); exit(1);	medium	待判	
+xfsprogs-00016	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	196	-	fprintf(stderr, _("%s: failed to access data device for %s\n"), progname, fname); exit(1);	medium	待判	
 xfsprogs-00017	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	198	-	exit(1); } if (lflag && !isint && !xi.log.dev) {	high	待判	
-xfsprogs-00018	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	201	-	fprintf(stderr, _("%s: failed to access external log for %s\n"), progname, fname); exit(1);	medium	待判	
+xfsprogs-00018	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	201	-	fprintf(stderr, _("%s: failed to access external log for %s\n"), progname, fname); exit(1);	medium	待判	
 xfsprogs-00019	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	203	-	exit(1); } if (rflag && !xi.rt.dev) {	high	待判	
-xfsprogs-00020	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	206	-	fprintf(stderr, _("%s: failed to access realtime device for %s\n"), progname, fname);	medium	待判	
-xfsprogs-00021	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	209	-	exit(1); }	high	待判	
-xfsprogs-00022	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	242	-	fprintf(stderr, _( "data size %lld too large, maximum is %lld\n"), (long long)dsize,	medium	待判	
-xfsprogs-00023	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	250	-	fprintf(stderr, _("[EXPERIMENTAL] try to shrink unused space %lld, old size is %lld\n"), (long long)dsize, (long long)geo.datablocks);	medium	待判	
-xfsprogs-00024	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	256	-	fprintf(stderr, _( "data size unchanged, skipping\n")); if (mflag)	medium	待判	
-xfsprogs-00025	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	259	-	fprintf(stderr, _( "inode max pct unchanged, skipping\n")); } else if (!error && !nflag) {	medium	待判	
-xfsprogs-00026	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	266	-	fprintf(stderr, _( "%s: growfs operation in progress already\n"), progname);	medium	待判	
-xfsprogs-00027	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	270	-	fprintf(stderr, _( "%s: XFS_IOC_FSGROWFSDATA xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
-xfsprogs-00028	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	286	-	fprintf(stderr, _( "realtime size %lld too large, maximum is %lld\n"), rsize, drsize / (geo.blocksize / BBSIZE));	medium	待判	
-xfsprogs-00029	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	292	-	fprintf(stderr, _( "realtime size %lld too small, old size is %lld\n"), (long long)rsize, (long long)geo.rtblocks);	medium	待判	
-xfsprogs-00030	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	298	-	fprintf(stderr, _( "realtime size unchanged, skipping\n")); } else if (!error && !nflag) {	medium	待判	
-xfsprogs-00031	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	305	-	fprintf(stderr, _( "%s: growfs operation in progress already\n"), progname);	medium	待判	
-xfsprogs-00032	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	309	-	fprintf(stderr, _( "%s: realtime growth not implemented\n"), progname);	medium	待判	
-xfsprogs-00033	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	313	-	fprintf(stderr, _( "%s: XFS_IOC_FSGROWFSRT xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
-xfsprogs-00034	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	334	-	fprintf(stderr, _("log size unchanged, skipping\n")); } else if (!nflag) {	medium	待判	
-xfsprogs-00035	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	340	-	fprintf(stderr, _("%s: growfs operation in progress already\n"), progname);	medium	待判	
-xfsprogs-00036	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	344	-	fprintf(stderr, _("%s: log growth not supported yet\n"), progname);	medium	待判	
-xfsprogs-00037	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	345	-	_("%s: log growth not supported yet\n"), progname); else	medium	待判	
-xfsprogs-00038	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	348	-	fprintf(stderr, _("%s: XFS_IOC_FSGROWFSLOG xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
-xfsprogs-00039	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	358	-	fprintf(stderr, _("%s: XFS_IOC_FSGEOMETRY xfsctl failed: %s\n"), progname, strerror(ret)); exit(1);	medium	待判	
-xfsprogs-00040	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	360	-	exit(1); } if (geo.datablocks != ngeo.datablocks)	high	待判	
-xfsprogs-00041	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	381	-	exit(error); }	high	待判	
-xfsprogs-00042	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	69	newfile	fprintf(stderr, _("%s: failed to open %s: %s\n"), progname, fname, strerror(errno)); goto out_fail;	medium	待判	
-xfsprogs-00043	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	71	newfile	goto out_fail; }	high	待判	
-xfsprogs-00044	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	76	newfile	fprintf(stderr, _("%s: read failed on %s: %s\n"), progname, fname, strerror(errno)); goto out_fail;	medium	待判	
-xfsprogs-00045	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	78	newfile	goto out_fail; } if (buf[size - 1] != '\n') {	high	待判	
-xfsprogs-00046	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	81	newfile	fprintf(stderr, _("%s: proto file %s premature EOF\n"), progname, fname); goto out_fail;	medium	待判	
-xfsprogs-00047	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	83	newfile	goto out_fail; } buf[size] = '\0';	high	待判	
-xfsprogs-00048	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	99	newfile	exit(1); }	high	待判	
-xfsprogs-00049	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	107	newfile	fprintf(stderr, "%s: %s [%d - %s]\n", progname, msg, i, strerror(i)); exit(1); }	medium	待判	
-xfsprogs-00050	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	108	newfile	exit(1); }	high	待判	
-xfsprogs-00051	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	115	newfile	fail(_("cannot reserve space"), i); }	high	待判	
-xfsprogs-00052	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	168	newfile	fprintf(stderr, _("%s: premature EOF in prototype file\n"), progname); exit(1);	medium	待判	
-xfsprogs-00053	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	170	newfile	exit(1); } return NULL;	high	待判	
-xfsprogs-00054	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	212	newfile	exit(1); }	high	待判	
-xfsprogs-00055	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	276	newfile	fprintf(stderr, _("%s: creating realtime files from proto file not supported.\n"), progname);	medium	待判	
-xfsprogs-00056	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	277	newfile	_("%s: creating realtime files from proto file not supported.\n"), progname); exit(1);	medium	待判	
-xfsprogs-00057	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	279	newfile	exit(1); } if (error) {	high	待判	
-xfsprogs-00058	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	285	newfile	fprintf(stderr, _("%s: cannot allocate space for file\n"), progname);	high	待判	
-xfsprogs-00059	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	286	newfile	_("%s: cannot allocate space for file\n"), progname); exit(1);	high	待判	
-xfsprogs-00060	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	288	newfile	exit(1); } d = XFS_FSB_TO_DADDR(mp, map.br_startblock);	high	待判	
-xfsprogs-00061	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	294	newfile	fprintf(stderr, _("%s: cannot allocate buffer for file\n"), progname);	high	待判	
-xfsprogs-00062	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	295	newfile	_("%s: cannot allocate buffer for file\n"), progname); exit(1);	high	待判	
-xfsprogs-00063	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	297	newfile	exit(1); } memmove(bp->b_addr, buf, len);	high	待判	
-xfsprogs-00064	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	326	newfile	fprintf(stderr, _("%s: cannot open %s: %s\n"), progname, fname, strerror(errno)); exit(1);	high	待判	
-xfsprogs-00065	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	328	newfile	exit(1); } if ((*len = (int)size)) {	high	待判	
-xfsprogs-00066	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	333	newfile	fprintf(stderr, _("%s: read failed on %s: %s\n"), progname, fname, strerror(errno)); exit(1);	medium	待判	
-xfsprogs-00067	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	335	newfile	exit(1); } } else	high	待判	
-xfsprogs-00068	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	355	newfile	fprintf(stderr, _("%.*s: invalid directory entry name\n"), name->len, name->name); exit(1);	high	待判	
-xfsprogs-00069	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	357	newfile	exit(1); }	high	待判	
-xfsprogs-00070	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	441	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
-xfsprogs-00071	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	443	newfile	exit(1); } mode = 0;	high	待判	
-xfsprogs-00072	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	453	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
-xfsprogs-00073	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	455	newfile	exit(1); } switch (mstr[2]) {	high	待判	
-xfsprogs-00074	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	464	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
-xfsprogs-00075	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	466	newfile	exit(1); } val = 0;	high	待判	
-xfsprogs-00076	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	471	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
-xfsprogs-00077	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	473	newfile	exit(1); } val = val * 8 + mstr[i] - '0';	high	待判	
-xfsprogs-00078	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	506	newfile	fprintf(stderr, _("%s: Bad value %s for proto file %s\n"), progname, value, name);	medium	待判	
-xfsprogs-00079	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	509	newfile	exit(1); } tp = getres(mp, XFS_B_TO_FSB(mp, llen));	high	待判	
-xfsprogs-00080	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/proto.c	624	newfile	ASSERT(0); fail(_("Unknown format"), EINVAL); }	high	待判	
-xfsprogs-00081	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	987	__attribute__	usage( void ) { fprintf(stderr, _("Usage: %s\n\	high	待判	
-xfsprogs-00082	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	989	__attribute__	fprintf(stderr, _("Usage: %s\n\ /* blocksize */ [-b size=num]\n\ /* config file */ [-c options=xxx]\n\	medium	待判	
-xfsprogs-00083	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1017	__attribute__	exit(1); }	high	待判	
-xfsprogs-00084	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1027	__attribute__	fprintf(stderr, _("Cannot specify both -%c %s and -%c %s\n"), con_opts->name, con_opts->subopts[conflict], opts->name, opts->subopts[option]);	high	待判	
-xfsprogs-00085	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1030	__attribute__	usage(); }	high	待判	
-xfsprogs-00086	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1039	__attribute__	fprintf(stderr, _("Invalid value %s for -%s option\n"), value, opt); usage(); }	high	待判	
-xfsprogs-00087	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1040	__attribute__	usage(); }	high	待判	
-xfsprogs-00088	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1056	__attribute__	fprintf(stderr, _("-%c %s option requires a value\n"), opt, tab[idx]); usage(); }	medium	待判	
-xfsprogs-00089	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1057	__attribute__	usage(); }	high	待判	
-xfsprogs-00090	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1066	__attribute__	fprintf(stderr, "-%c ", opt); if (tab) fprintf(stderr, "%s ", tab[idx]);	medium	待判	
-xfsprogs-00091	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1068	__attribute__	fprintf(stderr, "%s ", tab[idx]); fprintf(stderr, _("option respecified\n")); usage();	medium	待判	
-xfsprogs-00092	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1069	__attribute__	fprintf(stderr, _("option respecified\n")); usage(); }	medium	待判	
-xfsprogs-00093	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1070	__attribute__	usage(); }	high	待判	
-xfsprogs-00094	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1078	__attribute__	fprintf(stderr, _("unknown option -%c %s\n"), opt, s); usage(); }	medium	待判	
-xfsprogs-00095	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1079	__attribute__	usage(); }	high	待判	
-xfsprogs-00096	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1089	__attribute__	fprintf(stderr, _("%s: invalid config file option: [%s]: %s=%s\n"), filename, section, name, value); }	high	待判	
-xfsprogs-00097	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1103	__attribute__	fprintf(stderr, _("if -%s file then -%s name and -%s size are required\n"), optname, optname, optname);	medium	待判	
-xfsprogs-00098	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1104	__attribute__	_("if -%s file then -%s name and -%s size are required\n"), optname, optname, optname); usage();	medium	待判	
-xfsprogs-00099	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1106	__attribute__	usage(); }	high	待判	
-xfsprogs-00100	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1110	__attribute__	fprintf(stderr, _("No device name specified\n")); usage(); }	medium	待判	
-xfsprogs-00101	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1111	__attribute__	usage(); }	high	待判	
-xfsprogs-00102	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1121	__attribute__	fprintf(stderr, _("Error accessing specified device %s: %s\n"), dev->name, strerror(errno));	medium	待判	
-xfsprogs-00103	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1124	__attribute__	usage(); return; }	high	待判	
-xfsprogs-00104	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1143	__attribute__	fprintf(stderr, _("specified \"-%s file\" on a block device %s\n"), optname, dev->name);	medium	待判	
-xfsprogs-00105	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1146	__attribute__	usage(); } return;	high	待判	
-xfsprogs-00106	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1151	__attribute__	fprintf(stderr, _("specified device %s not a file or block device\n"), dev->name);	medium	待判	
-xfsprogs-00107	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1154	__attribute__	usage(); }	high	待判	
-xfsprogs-00108	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1163	__attribute__	fprintf(stderr, _("%s: Use the -f option to force overwrite.\n"), progname);	high	待判	
-xfsprogs-00109	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1164	__attribute__	_("%s: Use the -f option to force overwrite.\n"), progname); exit(1);	high	待判	
-xfsprogs-00110	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1166	__attribute__	exit(1); }	high	待判	
-xfsprogs-00111	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1179	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too small, need at least %lld blocks\n"), (long long)agsize,	medium	待判	
-xfsprogs-00112	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1180	__attribute__	_("agsize (%lld blocks) too small, need at least %lld blocks\n"), (long long)agsize, (long long)XFS_AG_MIN_BLOCKS(blocklog));	medium	待判	
-xfsprogs-00113	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1183	__attribute__	usage(); }	high	待判	
-xfsprogs-00114	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1187	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too big, maximum is %lld blocks\n"), (long long)agsize,	medium	待判	
-xfsprogs-00115	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1191	__attribute__	usage(); }	high	待判	
-xfsprogs-00116	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1195	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too big, data area is %lld blocks\n"), (long long)agsize, (long long)dblocks);	medium	待判	
-xfsprogs-00117	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1198	__attribute__	usage(); }	high	待判	
-xfsprogs-00118	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1202	__attribute__	fprintf(stderr, _("too many allocation groups for size = %lld\n"), (long long)agsize);	medium	待判	
-xfsprogs-00119	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1203	__attribute__	_("too many allocation groups for size = %lld\n"), (long long)agsize); fprintf(stderr, _("need at most %lld allocation groups\n"),	medium	待判	
-xfsprogs-00120	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1205	__attribute__	fprintf(stderr, _("need at most %lld allocation groups\n"), (long long)(dblocks / XFS_AG_MIN_BLOCKS(blocklog) + (dblocks % XFS_AG_MIN_BLOCKS(blocklog) != 0)));	medium	待判	
-xfsprogs-00121	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1208	__attribute__	usage(); }	high	待判	
-xfsprogs-00122	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1212	__attribute__	fprintf(stderr, _("too few allocation groups for size = %lld\n"), (long long)agsize); fprintf(stderr,	medium	待判	
-xfsprogs-00123	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1214	__attribute__	fprintf(stderr, _("need at least %lld allocation groups\n"), (long long)(dblocks / XFS_AG_MAX_BLOCKS(blocklog) +	medium	待判	
-xfsprogs-00124	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1218	__attribute__	usage(); }	high	待判	
-xfsprogs-00125	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1227	__attribute__	fprintf(stderr, _("last AG size %lld blocks too small, minimum size is %lld blocks\n"), (long long)(dblocks % agsize),	medium	待判	
-xfsprogs-00126	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1228	__attribute__	_("last AG size %lld blocks too small, minimum size is %lld blocks\n"), (long long)(dblocks % agsize), (long long)XFS_AG_MIN_BLOCKS(blocklog));	medium	待判	
-xfsprogs-00127	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1231	__attribute__	usage(); }	high	待判	
-xfsprogs-00128	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1238	__attribute__	fprintf(stderr, _("%lld allocation groups is too many, maximum is %lld\n"), (long long)agcount, (long long)XFS_MAX_AGNUMBER + 1);	medium	待判	
-xfsprogs-00129	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1239	__attribute__	_("%lld allocation groups is too many, maximum is %lld\n"), (long long)agcount, (long long)XFS_MAX_AGNUMBER + 1); usage();	medium	待判	
-xfsprogs-00130	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1241	__attribute__	usage(); } }	high	待判	
-xfsprogs-00131	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1268	__attribute__	fprintf(stderr, _("error reading existing superblock -- failed to memalign buffer\n")); return;	medium	待判	
-xfsprogs-00132	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1283	__attribute__	fprintf(stderr, _("error reading existing superblock: %s\n"), strerror(errno));	medium	待判	
-xfsprogs-00133	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1286	__attribute__	goto done; } libxfs_sb_from_disk(&sb, buf);	high	待判	
-xfsprogs-00134	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1295	__attribute__	goto done; for (bsize = 1, i = 0; bsize < sb.sb_blocksize &&	high	待判	
-xfsprogs-00135	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1303	__attribute__	goto done; if (sb.sb_dblocks > ((uint64_t)sb.sb_agcount * sb.sb_agblocks) ||	high	待判	
-xfsprogs-00136	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1308	__attribute__	goto done; /*	high	待判	
-xfsprogs-00137	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1369	__attribute__	fprintf(stderr, _("Invalid value %s for -%c %s option. %s\n"), value, opts->name, opts->subopts[index],	high	待判	
-xfsprogs-00138	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1370	__attribute__	_("Invalid value %s for -%c %s option. %s\n"), value, opts->name, opts->subopts[index], reason);	high	待判	
-xfsprogs-00139	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1373	__attribute__	usage(); }	high	待判	
-xfsprogs-00140	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1389	__attribute__	fprintf(stderr, _("Developer screwed up option parsing (%d/%d)! Please report!\n"), sp->index, index);	medium	待判	
-xfsprogs-00141	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1443	__attribute__	fprintf(stderr, _("Option -%c %s has undefined minval/maxval." "Can't verify value range. This is a bug.\n"),	medium	待判	
-xfsprogs-00142	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1447	__attribute__	exit(1); }	high	待判	
-xfsprogs-00143	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1476	__attribute__	illegal_option(str, opts, index, _("Value is too small.")); else if (c > sp->maxval) illegal_option(str, opts, index, _("Value is too large."));	medium	待判	
-xfsprogs-00144	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1478	__attribute__	illegal_option(str, opts, index, _("Value is too large.")); if (sp->is_power_2 && !ispow2(c)) illegal_option(str, opts, index, _("Value must be a power of 2."));	medium	待判	
-xfsprogs-00145	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1480	__attribute__	illegal_option(str, opts, index, _("Value must be a power of 2.")); return c; }	medium	待判	
-xfsprogs-00146	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1506	__attribute__	fprintf(stderr, _("Out of memory while saving suboptions.\n")); exit(1); }	medium	待判	
-xfsprogs-00147	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1507	__attribute__	exit(1); }	high	待判	
-xfsprogs-00148	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1799	__attribute__	fprintf(stderr, _("Out of memory while saving protofile option.\n")); exit(1);	medium	待判	
-xfsprogs-00149	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1801	__attribute__	exit(1); } break;	high	待判	
-xfsprogs-00150	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2008	__attribute__	fprintf(stderr, _("specified blocksize %d is less than device physical sector size %d\n" "switching to logical sector size %d\n"),	medium	待判	
-xfsprogs-00151	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2023	__attribute__	fprintf(stderr, _("illegal sector size %d\n"), cfg->sectorsize); usage(); }	medium	待判	
-xfsprogs-00152	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2024	__attribute__	usage(); }	high	待判	
-xfsprogs-00153	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2028	__attribute__	fprintf(stderr, _("block size %d cannot be smaller than sector size %d\n"), cfg->blocksize, cfg->sectorsize);	high	待判	
-xfsprogs-00154	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2029	__attribute__	_("block size %d cannot be smaller than sector size %d\n"), cfg->blocksize, cfg->sectorsize); usage();	high	待判	
-xfsprogs-00155	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2031	__attribute__	usage(); }	high	待判	
-xfsprogs-00156	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2035	__attribute__	fprintf(stderr, _("illegal sector size %d; hw sector is %d\n"), cfg->sectorsize, ft->lsectorsize); usage();	medium	待判	
-xfsprogs-00157	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2037	__attribute__	usage(); } }	high	待判	
-xfsprogs-00158	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2061	__attribute__	fprintf(stderr, _("illegal block size %d\n"), cfg->blocksize); usage(); }	medium	待判	
-xfsprogs-00159	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2062	__attribute__	usage(); }	high	待判	
-xfsprogs-00160	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2067	__attribute__	fprintf(stderr, _("Minimum block size for CRC enabled filesystems is %d bytes.\n"), XFS_MIN_CRC_BLOCKSIZE);	medium	待判	
-xfsprogs-00161	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2070	__attribute__	usage(); }	high	待判	
-xfsprogs-00162	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2090	__attribute__	fprintf(stderr, _("Can't change sector size on internal log!\n")); usage();	medium	待判	
-xfsprogs-00163	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2092	__attribute__	usage(); }	high	待判	
-xfsprogs-00164	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2106	__attribute__	fprintf(stderr, _("illegal log sector size %d\n"), cfg->lsectorsize); usage();	medium	待判	
-xfsprogs-00165	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2108	__attribute__	usage(); } if (cfg->lsectorsize > XFS_MIN_SECTORSIZE) {	high	待判	
-xfsprogs-00166	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2113	__attribute__	fprintf(stderr, _("Version 1 logs do not support sector size %d\n"), cfg->lsectorsize);	medium	待判	
-xfsprogs-00167	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2116	__attribute__	usage(); } }	high	待判	
-xfsprogs-00168	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2123	__attribute__	fprintf(stderr, _("log stripe unit specified, using v2 logs\n")); cli->sb_feat.log_version = 2;	medium	待判	
-xfsprogs-00169	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2161	__attribute__	fprintf(stderr, _("Minimum inode size for CRCs is %d bytes\n"), 1 << XFS_DINODE_DFL_CRC_LOG);	medium	待判	
-xfsprogs-00170	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2164	__attribute__	usage(); }	high	待判	
-xfsprogs-00171	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2169	__attribute__	fprintf(stderr, _("Inodes always aligned for CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00172	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2171	__attribute__	usage(); }	high	待判	
-xfsprogs-00173	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2176	__attribute__	fprintf(stderr, _("Lazy superblock counters always enabled for CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00174	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2178	__attribute__	usage(); }	high	待判	
-xfsprogs-00175	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2183	__attribute__	fprintf(stderr, _("V2 logs always enabled for CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00176	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2185	__attribute__	usage(); }	high	待判	
-xfsprogs-00177	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2190	__attribute__	fprintf(stderr, _("V2 attribute format always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00178	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2192	__attribute__	usage(); }	high	待判	
-xfsprogs-00179	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2198	__attribute__	fprintf(stderr, _("32 bit Project IDs always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00180	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2200	__attribute__	usage(); }	high	待判	
-xfsprogs-00181	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2205	__attribute__	fprintf(stderr, _("Directory ftype field always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
-xfsprogs-00182	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2207	__attribute__	usage(); }	high	待判	
-xfsprogs-00183	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2230	__attribute__	fprintf(stderr, _("finobt not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00184	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2231	__attribute__	_("finobt not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00185	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2232	__attribute__	usage(); } cli->sb_feat.finobt = false;	high	待判	
-xfsprogs-00186	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2237	__attribute__	fprintf(stderr, _("sparse inodes not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00187	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2238	__attribute__	_("sparse inodes not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00188	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2239	__attribute__	usage(); } cli->sb_feat.spinodes = false;	high	待判	
-xfsprogs-00189	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2244	__attribute__	fprintf(stderr, _("rmapbt not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00190	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2245	__attribute__	_("rmapbt not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00191	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2246	__attribute__	usage(); } cli->sb_feat.rmapbt = false;	high	待判	
-xfsprogs-00192	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2251	__attribute__	fprintf(stderr, _("reflink not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00193	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2252	__attribute__	_("reflink not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00194	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2253	__attribute__	usage(); } cli->sb_feat.reflink = false;	high	待判	
-xfsprogs-00195	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2258	__attribute__	fprintf(stderr, _("inode btree counters not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00196	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2259	__attribute__	_("inode btree counters not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00197	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2260	__attribute__	usage(); } cli->sb_feat.inobtcnt = false;	high	待判	
-xfsprogs-00198	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2265	__attribute__	fprintf(stderr, _("timestamps later than 2038 not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00199	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2266	__attribute__	_("timestamps later than 2038 not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00200	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2267	__attribute__	usage(); } cli->sb_feat.bigtime = false;	high	待判	
-xfsprogs-00201	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2273	__attribute__	fprintf(stderr, _("64 bit extent count not supported without CRC support\n")); usage();	medium	待判	
-xfsprogs-00202	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2274	__attribute__	_("64 bit extent count not supported without CRC support\n")); usage(); }	medium	待判	
-xfsprogs-00203	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2275	__attribute__	usage(); } cli->sb_feat.nrext64 = false;	high	待判	
-xfsprogs-00204	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2282	__attribute__	fprintf(stderr, _("inode btree counters not supported without finobt support\n")); usage();	medium	待判	
-xfsprogs-00205	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2283	__attribute__	_("inode btree counters not supported without finobt support\n")); usage(); }	medium	待判	
-xfsprogs-00206	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2284	__attribute__	usage(); } cli->sb_feat.inobtcnt = false;	high	待判	
-xfsprogs-00207	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2291	__attribute__	fprintf(stderr, _("reflink not supported with realtime devices\n")); usage();	medium	待判	
-xfsprogs-00208	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2292	__attribute__	_("reflink not supported with realtime devices\n")); usage(); }	medium	待判	
-xfsprogs-00209	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2293	__attribute__	usage(); } cli->sb_feat.reflink = false;	high	待判	
-xfsprogs-00210	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2298	__attribute__	fprintf(stderr, _("rmapbt not supported with realtime devices\n")); usage();	medium	待判	
-xfsprogs-00211	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2299	__attribute__	_("rmapbt not supported with realtime devices\n")); usage(); }	medium	待判	
-xfsprogs-00212	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2300	__attribute__	usage(); } cli->sb_feat.rmapbt = false;	high	待判	
-xfsprogs-00213	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2307	__attribute__	fprintf(stderr, _("cowextsize not supported without reflink support\n")); usage();	medium	待判	
-xfsprogs-00214	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2308	__attribute__	_("cowextsize not supported without reflink support\n")); usage(); }	medium	待判	
-xfsprogs-00215	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2309	__attribute__	usage(); }	high	待判	
-xfsprogs-00216	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2332	__attribute__	fprintf(stderr, _("illegal directory block size %d\n"), cfg->dirblocksize); usage();	medium	待判	
-xfsprogs-00217	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2334	__attribute__	usage(); } cfg->dirblocklog = libxfs_highbit32(cfg->dirblocksize);	high	待判	
-xfsprogs-00218	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2369	__attribute__	fprintf(stderr, _("Minimum inode size for CRCs is %d bytes\n"), 1 << XFS_DINODE_DFL_CRC_LOG);	medium	待判	
-xfsprogs-00219	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2372	__attribute__	usage(); }	high	待判	
-xfsprogs-00220	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2381	__attribute__	fprintf(stderr, _("illegal inode size %d\n"), cfg->inodesize); maxsz = min(cfg->blocksize / XFS_MIN_INODE_PERBLOCK, XFS_DINODE_MAX_SIZE);	medium	待判	
-xfsprogs-00221	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2385	__attribute__	fprintf(stderr, _("allowable inode size with %d byte blocks is %d\n"), cfg->blocksize, XFS_DINODE_MIN_SIZE);	medium	待判	
-xfsprogs-00222	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2389	__attribute__	fprintf(stderr, _("allowable inode size with %d byte blocks is between %d and %d\n"), cfg->blocksize, XFS_DINODE_MIN_SIZE, maxsz);	medium	待判	
-xfsprogs-00223	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2392	__attribute__	exit(1); } }	high	待判	
-xfsprogs-00224	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2412	__attribute__	fprintf(stderr, _("illegal %s length %lld, not a multiple of %d\n"), type, (long long)dbytes, XFS_MIN_BLOCKSIZE);	medium	待判	
-xfsprogs-00225	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2415	__attribute__	usage(); } dblocks = (xfs_rfsblock_t)(dbytes >> cfg->blocklog);	high	待判	
-xfsprogs-00226	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2419	__attribute__	fprintf(stderr, _("warning: %s length %lld not a multiple of %d, truncated to %lld\n"), type, (long long)dbytes, cfg->blocksize,	high	待判	
-xfsprogs-00227	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2420	__attribute__	_("warning: %s length %lld not a multiple of %d, truncated to %lld\n"), type, (long long)dbytes, cfg->blocksize, (long long)(dblocks << cfg->blocklog));	high	待判	
-xfsprogs-00228	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2442	__attribute__	fprintf(stderr, _("illegal rt extent size %lld, not a multiple of %d\n"), (long long)rtextbytes, cfg->blocksize);	medium	待判	
-xfsprogs-00229	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2445	__attribute__	usage(); } cfg->rtextblocks = (xfs_extlen_t)(rtextbytes >> cfg->blocklog);	high	待判	
-xfsprogs-00230	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	2478	__attribute__	ASSERT(cfg->rtextblocks); }	high	待判	
-xfsprogs-00231	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2501	__attribute__	fprintf(stderr, _("illegal extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_extsize,	medium	待判	
-xfsprogs-00232	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2502	__attribute__	_("illegal extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_extsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2));	medium	待判	
-xfsprogs-00233	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2505	__attribute__	usage(); }	high	待判	
-xfsprogs-00234	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2524	__attribute__	fprintf(stderr, _("illegal extent size hint %lld, must be less than %u and a multiple of %u.\n"), (long long)cli->fsx.fsx_extsize,	medium	待判	
-xfsprogs-00235	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2525	__attribute__	_("illegal extent size hint %lld, must be less than %u and a multiple of %u.\n"), (long long)cli->fsx.fsx_extsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2),	medium	待判	
-xfsprogs-00236	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2529	__attribute__	usage(); } }	high	待判	
-xfsprogs-00237	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2553	__attribute__	fprintf(stderr, _("illegal CoW extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_cowextsize,	medium	待判	
-xfsprogs-00238	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2554	__attribute__	_("illegal CoW extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_cowextsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2));	medium	待判	
-xfsprogs-00239	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2557	__attribute__	usage(); } }	high	待判	
-xfsprogs-00240	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2570	__attribute__	_("Filesystems formatted with --unsupported are not supported!!\n")); return; }	high	待判	
-xfsprogs-00241	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2596	__attribute__	fprintf(stderr, _("Filesystem must be larger than 300MB.\n")); usage();	medium	待判	
-xfsprogs-00242	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2597	__attribute__	_("Filesystem must be larger than 300MB.\n")); usage(); }	medium	待判	
-xfsprogs-00243	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2598	__attribute__	usage(); }	high	待判	
-xfsprogs-00244	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2607	__attribute__	fprintf(stderr, _("Log size must be at least 64MB.\n")); usage();	medium	待判	
-xfsprogs-00245	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2608	__attribute__	_("Log size must be at least 64MB.\n")); usage(); }	medium	待判	
-xfsprogs-00246	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2609	__attribute__	usage(); }	high	待判	
-xfsprogs-00247	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2617	__attribute__	fprintf(stderr, _("Filesystem must have at least 2 superblocks for redundancy!\n")); usage();	medium	待判	
-xfsprogs-00248	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2619	__attribute__	usage(); } }	high	待判	
-xfsprogs-00249	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2656	__attribute__	fprintf(stderr, _("both data sunit and data swidth options must be specified\n")); usage();	medium	待判	
-xfsprogs-00250	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2657	__attribute__	_("both data sunit and data swidth options must be specified\n")); usage(); }	medium	待判	
-xfsprogs-00251	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2658	__attribute__	usage(); }	high	待判	
-xfsprogs-00252	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2664	__attribute__	fprintf(stderr, _("both data su and data sw options must be specified\n")); usage();	medium	待判	
-xfsprogs-00253	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2665	__attribute__	_("both data su and data sw options must be specified\n")); usage(); }	medium	待判	
-xfsprogs-00254	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2666	__attribute__	usage(); }	high	待判	
-xfsprogs-00255	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2671	__attribute__	fprintf(stderr, _("data stripe width (%lld) is too large of a multiple of the data stripe unit (%d)\n"), big_dswidth, dsu);	medium	待判	
-xfsprogs-00256	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2672	__attribute__	_("data stripe width (%lld) is too large of a multiple of the data stripe unit (%d)\n"), big_dswidth, dsu); usage();	medium	待判	
-xfsprogs-00257	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2674	__attribute__	usage(); }	high	待判	
-xfsprogs-00258	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2679	__attribute__	usage(); dsunit = BTOBBT(dsu);	high	待判	
-xfsprogs-00259	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2685	__attribute__	usage(); }	high	待判	
-xfsprogs-00260	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2705	__attribute__	fprintf(stderr, _("%s: Volume reports invalid stripe unit (%d) and stripe width (%d), ignoring.\n"), progname, BBTOB(ft->dsunit), BBTOB(ft->dswidth));	high	待判	
-xfsprogs-00261	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2706	__attribute__	_("%s: Volume reports invalid stripe unit (%d) and stripe width (%d), ignoring.\n"), progname, BBTOB(ft->dsunit), BBTOB(ft->dswidth)); ft->dsunit = 0;	high	待判	
-xfsprogs-00262	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2718	__attribute__	fprintf(stderr, _("%s: small data volume, ignoring data volume stripe unit %d and stripe width %d\n"), progname, ft->dsunit,	medium	待判	
-xfsprogs-00263	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2732	__attribute__	fprintf(stderr, _("%s: Specified data stripe unit %d is not the same as the volume stripe unit %d\n"), progname, dsunit, ft->dsunit);	medium	待判	
-xfsprogs-00264	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2737	__attribute__	fprintf(stderr, _("%s: Specified data stripe width %d is not the same as the volume stripe width %d\n"), progname, dswidth, ft->dswidth);	medium	待判	
-xfsprogs-00265	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2754	__attribute__	fprintf(stderr, _("%s: Stripe unit(%d) or stripe width(%d) is not a multiple of the block size(%d)\n"), progname, BBTOB(dsunit), BBTOB(dswidth),	medium	待判	
-xfsprogs-00266	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2758	__attribute__	exit(1); } dsunit = 0;	high	待判	
-xfsprogs-00267	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2781	__attribute__	fprintf(stderr, _("log stripe unit (%d) must be a multiple of the block size (%d)\n"), lsu, cfg->blocksize);	medium	待判	
-xfsprogs-00268	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2782	__attribute__	_("log stripe unit (%d) must be a multiple of the block size (%d)\n"), lsu, cfg->blocksize); usage();	medium	待判	
-xfsprogs-00269	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2784	__attribute__	usage(); } lsunit = (int)BTOBBT(lsu);	high	待判	
-xfsprogs-00270	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2789	__attribute__	fprintf(stderr, _("log stripe unit (%d) must be a multiple of the block size (%d)\n"), BBTOB(lsunit), cfg->blocksize);	medium	待判	
-xfsprogs-00271	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2790	__attribute__	_("log stripe unit (%d) must be a multiple of the block size (%d)\n"), BBTOB(lsunit), cfg->blocksize); usage();	medium	待判	
-xfsprogs-00272	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2792	__attribute__	usage(); }	high	待判	
-xfsprogs-00273	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2811	__attribute__	fprintf(stderr, _("log stripe unit (%d bytes) is too large (maximum is 256KiB)\n" "log stripe unit adjusted to 32KiB\n"),	medium	待判	
-xfsprogs-00274	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2812	__attribute__	_("log stripe unit (%d bytes) is too large (maximum is 256KiB)\n" "log stripe unit adjusted to 32KiB\n"), (cfg->lsunit * cfg->blocksize));	medium	待判	
-xfsprogs-00275	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2834	__attribute__	usage(); if (!xi->data.dev) { fprintf(stderr, _("no device name given in argument list\n"));	high	待判	
-xfsprogs-00276	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2836	__attribute__	fprintf(stderr, _("no device name given in argument list\n")); usage(); }	medium	待判	
-xfsprogs-00277	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2837	__attribute__	usage(); }	high	待判	
-xfsprogs-00278	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2887	__attribute__	fprintf(stderr, _("can't get size of data subvolume\n")); usage(); }	medium	待判	
-xfsprogs-00279	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2888	__attribute__	usage(); } ASSERT(cfg->dblocks);	high	待判	
-xfsprogs-00280	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	2890	__attribute__	ASSERT(cfg->dblocks); } else if (cfg->dblocks) { /* check the size fits into the underlying device */	high	待判	
-xfsprogs-00281	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2894	__attribute__	fprintf(stderr, _("size %s specified for data subvolume is too large, maximum is %lld blocks\n"), cli->dsize,	medium	待判	
-xfsprogs-00282	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2895	__attribute__	_("size %s specified for data subvolume is too large, maximum is %lld blocks\n"), cli->dsize, (long long)DTOBT(xi->data.size, cfg->blocklog));	medium	待判	
-xfsprogs-00283	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2898	__attribute__	usage(); } } else {	high	待判	
-xfsprogs-00284	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2906	__attribute__	fprintf(stderr, _("size %lld of data subvolume is too small, minimum %lld blocks\n"), (long long)cfg->dblocks, XFS_MIN_DATA_BLOCKS(cfg));	medium	待判	
-xfsprogs-00285	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2907	__attribute__	_("size %lld of data subvolume is too small, minimum %lld blocks\n"), (long long)cfg->dblocks, XFS_MIN_DATA_BLOCKS(cfg)); usage();	medium	待判	
-xfsprogs-00286	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2909	__attribute__	usage(); }	high	待判	
-xfsprogs-00287	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2913	__attribute__	fprintf(stderr, _( "Warning: the data subvolume sector size %u is less than the sector size \n\ reported by the device (%u).\n"),	medium	待判	
-xfsprogs-00288	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2942	device	fprintf(stderr, _("data and log sector sizes must be equal for internal logs\n")); usage();	medium	待判	
-xfsprogs-00289	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2943	device	_("data and log sector sizes must be equal for internal logs\n")); usage(); }	medium	待判	
-xfsprogs-00290	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2944	device	usage(); } if (cli->logsize && cfg->logblocks >= cfg->dblocks) {	high	待判	
-xfsprogs-00291	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2947	device	fprintf(stderr, _("log size %lld too large for internal log\n"), (long long)cfg->logblocks);	medium	待判	
-xfsprogs-00292	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2948	device	_("log size %lld too large for internal log\n"), (long long)cfg->logblocks); usage();	medium	待判	
-xfsprogs-00293	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2950	device	usage(); } return;	high	待判	
-xfsprogs-00294	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2957	device	fprintf(stderr, _("no log subvolume or external log.\n")); usage(); }	medium	待判	
-xfsprogs-00295	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2958	device	usage(); }	high	待判	
-xfsprogs-00296	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2963	device	fprintf(stderr, _("unable to get size of the log subvolume.\n")); usage();	medium	待判	
-xfsprogs-00297	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2965	device	usage(); } cfg->logblocks = DTOBT(xi->log.size, cfg->blocklog);	high	待判	
-xfsprogs-00298	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2969	device	fprintf(stderr, _("size %s specified for log subvolume is too large, maximum is %lld blocks\n"), cli->logsize,	medium	待判	
-xfsprogs-00299	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2970	device	_("size %s specified for log subvolume is too large, maximum is %lld blocks\n"), cli->logsize, (long long)DTOBT(xi->log.size, cfg->blocklog));	medium	待判	
-xfsprogs-00300	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2973	device	usage(); }	high	待判	
-xfsprogs-00301	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2977	device	fprintf(stderr, _( "Warning: the log subvolume sector size %u is less than the sector size\n\ reported by the device (%u).\n"),	medium	待判	
-xfsprogs-00302	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2993	device	fprintf(stderr, _("size specified for non-existent rt subvolume\n")); usage();	medium	待判	
-xfsprogs-00303	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2995	device	usage(); }	high	待判	
-xfsprogs-00304	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3004	device	fprintf(stderr, _("Invalid zero length rt subvolume found\n")); usage(); }	high	待判	
-xfsprogs-00305	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3005	device	usage(); }	high	待判	
-xfsprogs-00306	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3010	device	fprintf(stderr, _("size %s specified for rt subvolume is too large, maxi->um is %lld blocks\n"), cli->rtsize,	medium	待判	
-xfsprogs-00307	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3011	device	_("size %s specified for rt subvolume is too large, maxi->um is %lld blocks\n"), cli->rtsize, (long long)DTOBT(xi->rt.size, cfg->blocklog));	medium	待判	
-xfsprogs-00308	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3014	device	usage(); } if (xi->rt.bsize > cfg->sectorsize) {	high	待判	
-xfsprogs-00309	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3017	device	fprintf(stderr, _( "Warning: the realtime subvolume sector size %u is less than the sector size\n\ reported by the device (%u).\n"),	medium	待判	
-xfsprogs-00310	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3044	device	fprintf(stderr, _("agsize (%s) not a multiple of fs blk size (%d)\n"), cli->agsize, cfg->blocksize);	medium	待判	
-xfsprogs-00311	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3047	device	usage(); } cfg->agsize /= cfg->blocksize;	high	待判	
-xfsprogs-00312	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3126	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("agsize rounded to %lld, sunit = %d\n"), (long long)cfg->agsize, dsunit);	medium	待判	
-xfsprogs-00313	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3172	XFS_AG_MAX_BLOCKS	ASSERT(!cli_opt_set(&dopts, D_AGCOUNT)); cfg->dblocks = (xfs_rfsblock_t)((cfg->agcount - 1) * cfg->agsize); cfg->agcount--;	high	待判	
-xfsprogs-00314	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3175	XFS_AG_MAX_BLOCKS	ASSERT(cfg->agcount != 0); }	high	待判	
-xfsprogs-00315	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3335	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld is not a multiple of the log stripe unit %d\n"), (long long) cfg->logblocks, sunit);	medium	待判	
-xfsprogs-00316	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3338	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00317	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3369	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Due to stripe alignment, the internal log start (%lld) cannot be aligned\n" "within an allocation group.\n"),	high	待判	
-xfsprogs-00318	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3370	XFS_AG_MAX_BLOCKS	_("Due to stripe alignment, the internal log start (%lld) cannot be aligned\n" "within an allocation group.\n"), (long long) cfg->logstart);	high	待判	
-xfsprogs-00319	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3373	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00320	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3390	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Due to stripe alignment, the internal log size (%lld) is too large.\n" "Must fit within an allocation group.\n"),	medium	待判	
-xfsprogs-00321	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3391	XFS_AG_MAX_BLOCKS	_("Due to stripe alignment, the internal log size (%lld) is too large.\n" "Must fit within an allocation group.\n"), (long long) cfg->logblocks);	medium	待判	
-xfsprogs-00322	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3394	XFS_AG_MAX_BLOCKS	usage(); } }	high	待判	
-xfsprogs-00323	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3402	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld blocks too small, minimum size is %d blocks\n"), (long long)logblocks, min_logblocks);	medium	待判	
-xfsprogs-00324	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3403	XFS_AG_MAX_BLOCKS	_("log size %lld blocks too small, minimum size is %d blocks\n"), (long long)logblocks, min_logblocks); usage();	medium	待判	
-xfsprogs-00325	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3405	XFS_AG_MAX_BLOCKS	usage(); } if (logblocks > XFS_MAX_LOG_BLOCKS) {	high	待判	
-xfsprogs-00326	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3408	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld blocks too large, maximum size is %lld blocks\n"), (long long)logblocks, XFS_MAX_LOG_BLOCKS);	medium	待判	
-xfsprogs-00327	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3409	XFS_AG_MAX_BLOCKS	_("log size %lld blocks too large, maximum size is %lld blocks\n"), (long long)logblocks, XFS_MAX_LOG_BLOCKS); usage();	medium	待判	
-xfsprogs-00328	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3411	XFS_AG_MAX_BLOCKS	usage(); } if ((logblocks << blocklog) > XFS_MAX_LOG_BYTES) {	high	待判	
-xfsprogs-00329	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3414	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld bytes too large, maximum size is %lld bytes\n"), (long long)(logblocks << blocklog), XFS_MAX_LOG_BYTES);	medium	待判	
-xfsprogs-00330	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3415	XFS_AG_MAX_BLOCKS	_("log size %lld bytes too large, maximum size is %lld bytes\n"), (long long)(logblocks << blocklog), XFS_MAX_LOG_BYTES); usage();	medium	待判	
-xfsprogs-00331	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3417	XFS_AG_MAX_BLOCKS	usage(); } }	high	待判	
-xfsprogs-00332	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3454	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks,	medium	待判	
-xfsprogs-00333	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3455	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks, *max_logblocks);	medium	待判	
-xfsprogs-00334	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3458	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00335	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3483	XFS_AG_MAX_BLOCKS	ASSERT(min_logblocks); min_logblocks = max(XFS_MIN_LOG_BLOCKS, min_logblocks);	high	待判	
-xfsprogs-00336	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3498	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("external log device size %lld blocks too small, must be at least %lld blocks\n"), (long long)cfg->logblocks,	medium	待判	
-xfsprogs-00337	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3499	XFS_AG_MAX_BLOCKS	_("external log device size %lld blocks too small, must be at least %lld blocks\n"), (long long)cfg->logblocks, (long long)min_logblocks);	medium	待判	
-xfsprogs-00338	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3502	XFS_AG_MAX_BLOCKS	usage(); } cfg->logstart = 0;	high	待判	
-xfsprogs-00339	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3525	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("max log size %d smaller than min log size %d, filesystem is too small\n"), max_logblocks,	medium	待判	
-xfsprogs-00340	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3526	XFS_AG_MAX_BLOCKS	_("max log size %d smaller than min log size %d, filesystem is too small\n"), max_logblocks, min_logblocks);	medium	待判	
-xfsprogs-00341	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3529	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00342	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3558	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks,	medium	待判	
-xfsprogs-00343	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3559	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks, max_logblocks);	medium	待判	
-xfsprogs-00344	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3562	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00345	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3566	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must fit in allocation group\n"), (long long)cfg->logblocks);	medium	待判	
-xfsprogs-00346	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3567	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must fit in allocation group\n"), (long long)cfg->logblocks); usage();	medium	待判	
-xfsprogs-00347	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3569	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
-xfsprogs-00348	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3574	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log ag number %lld too large, must be less than %lld\n"), (long long)cli->logagno,	medium	待判	
-xfsprogs-00349	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3575	XFS_AG_MAX_BLOCKS	_("log ag number %lld too large, must be less than %lld\n"), (long long)cli->logagno, (long long)sbp->sb_agcount);	medium	待判	
-xfsprogs-00350	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3578	XFS_AG_MAX_BLOCKS	usage(); } cfg->logagno = cli->logagno;	high	待判	
-xfsprogs-00351	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3726	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Could not get memory for buffer, err=%d\n"), error); exit(1);	medium	待判	
-xfsprogs-00352	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3728	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00353	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3768	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: Growing the data section failed\n"), progname);	medium	待判	
-xfsprogs-00354	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3771	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00355	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3853	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("AG header init failed, error %d\n"), error); exit(1); }	medium	待判	
-xfsprogs-00356	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3854	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00357	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3890	XFS_AG_MAX_BLOCKS	perror(_("initializing AG free space list")); exit(1); }	medium	待判	
-xfsprogs-00358	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3891	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
-xfsprogs-00359	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3914	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: could not re-read AG %u superblock\n"), progname, mp->m_sb.sb_agcount - 1); exit(1);	medium	待判	
-xfsprogs-00360	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3916	XFS_AG_MAX_BLOCKS	exit(1); } dsb = buf->b_addr;	high	待判	
-xfsprogs-00361	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3932	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: could not re-read AG %u superblock\n"), progname, (mp->m_sb.sb_agcount - 1) / 2); exit(1);	medium	待判	
-xfsprogs-00362	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3934	XFS_AG_MAX_BLOCKS	exit(1); } dsb = buf->b_addr;	high	待判	
-xfsprogs-00363	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3949	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: root inode created in AG %u, not AG 0\n"), progname, XFS_INO_TO_AGNO(mp, mp->m_sb.sb_rootino));	medium	待判	
-xfsprogs-00364	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3952	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00365	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3965	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: root inode (%llu) not allocated in expected location (%llu)\n"), progname,	medium	待判	
-xfsprogs-00366	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3970	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
-xfsprogs-00367	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4010	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: Unrecognised input on line %d. Aborting.\n"), cli->cfgfile, error);	medium	待判	
-xfsprogs-00368	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4014	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Unable to open config file %s. Aborting.\n"), cli->cfgfile);	medium	待判	
-xfsprogs-00369	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4018	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Memory allocation failure parsing %s. Aborting.\n"), cli->cfgfile);	medium	待判	
-xfsprogs-00370	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4022	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Unknown error %d opening config file %s. Aborting.\n"), error, cli->cfgfile);	medium	待判	
-xfsprogs-00371	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4026	XFS_AG_MAX_BLOCKS	exit(1); } printf(_("Parameters parsed from config file %s successfully\n"),	high	待判	
-xfsprogs-00372	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4175	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("extra arguments\n")); usage(); } else if (argc - optind == 1) {	medium	待判	
-xfsprogs-00373	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4176	XFS_AG_MAX_BLOCKS	usage(); } else if (argc - optind == 1) { xi.data.name = getstr(argv[optind], &dopts, D_NAME);	high	待判	
-xfsprogs-00374	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4282	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("crc32c self-test failed, will not create a filesystem here.\n")); return 1;	medium	待判	
-xfsprogs-00375	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4289	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("xfs dir/attr self-test failed, will not create a filesystem here.\n")); return 1;	medium	待判	
-xfsprogs-00376	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4313	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: filesystem failed to initialize\n"), progname); exit(1);	medium	待判	
-xfsprogs-00377	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4315	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00378	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4331	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: writing AG headers failed, err=%d\n"), progname, error);	medium	待判	
-xfsprogs-00379	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4334	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
-xfsprogs-00380	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4340	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: writing AG headers failed, err=%d\n"), progname, error); exit(1);	medium	待判	
-xfsprogs-00381	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4342	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
-xfsprogs-00382	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4379	XFS_AG_MAX_BLOCKS	exit(1); dsb = buf->b_addr; dsb->sb_inprogress = 0;	high	待判	
-xfsprogs-00383	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4388	XFS_AG_MAX_BLOCKS	exit(1); libxfs_destroy(&xi);	high	待判	
-xfsprogs-00384	xfsprogs	6.6.0	T2	misc	assert	assert	db/sb.c	161	-	ASSERT(typtab[TYP_SB].typnm == TYP_SB); set_cur(&typtab[TYP_SB], XFS_AG_DADDR(mp, cur_agno, XFS_SB_DADDR),	high	待判	
-xfsprogs-00385	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	240	xlog_recover_do_trans	dbprintf(_("ERROR: cannot find log head/tail, run xfs_repair\n")); return 0; } else if (dirty == 1) {	high	待判	
-xfsprogs-00386	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	281	xlog_recover_do_trans	dbprintf(_("ERROR: cannot clear the log\n")); return 0; }	high	待判	
-xfsprogs-00387	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	371	xlog_recover_do_trans	dbprintf(_("invalid parameters\n")); return 0; }	high	待判	
-xfsprogs-00388	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	414	xlog_recover_do_trans	dbprintf(_("invalid UUID\n")); return 0; }	high	待判	
-xfsprogs-00389	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	512	xlog_recover_do_trans	dbprintf(_("%s: truncating label length from %d to %d\n"), progname, (int)len, (int)sizeof(tsb.sb_fname)); len = sizeof(tsb.sb_fname);	high	待判	
-xfsprogs-00390	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	539	xlog_recover_do_trans	dbprintf(_("invalid parameters\n")); return 0; }	high	待判	
-xfsprogs-00391	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	788	xlog_recover_do_trans	_("%s: Cannot change %s on v5 superblocks.\n"), progname, argv[1]); return 0;	high	待判	
-xfsprogs-00392	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	812	xlog_recover_do_trans	dbprintf(_("%s: invalid version change command \"%s\"\n"), progname, argv[1]); return 0;	high	待判	
-xfsprogs-00393	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	33	-	usage(void) { fprintf(stderr, _(	high	待判	
-xfsprogs-00394	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	35	-	fprintf(stderr, _( "Usage: %s [-ifFrxV] [-p prog] [-l logdev] [-c cmd]... device\n" ), progname);	medium	待判	
-xfsprogs-00395	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	38	-	exit(1); }	high	待判	
-xfsprogs-00396	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	88	-	usage(); } }	high	待判	
-xfsprogs-00397	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	92	-	usage(); x.data.name = argv[optind];	high	待判	
-xfsprogs-00398	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	101	-	exit(1); }	high	待判	
-xfsprogs-00399	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	113	-	fprintf(stderr, _("%s: %s is invalid (cannot read first 512 " "bytes)\n"), progname, x.data.name); exit(1);	high	待判	
-xfsprogs-00400	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	115	-	exit(1); }	high	待判	
-xfsprogs-00401	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	124	-	fprintf(stderr, _("%s: %s is not a valid XFS filesystem (unexpected SB magic number 0x%08x)\n"), progname, x.data.name, sbp->sb_magicnum); if (!force) {	medium	待判	
-xfsprogs-00402	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	127	-	fprintf(stderr, _("Use -F to force a read attempt.\n")); exit(EXIT_FAILURE); }	medium	待判	
-xfsprogs-00403	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	128	-	exit(EXIT_FAILURE); } }	high	待判	
-xfsprogs-00404	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	135	-	fprintf(stderr, _("%s: device %s unusable (not an XFS filesystem?)\n"), progname, x.data.name);	medium	待判	
-xfsprogs-00405	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	138	-	exit(1); } mp->m_log = &xlog;	high	待判	
-xfsprogs-00406	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	154	-	fprintf(stderr, _("%s: cannot init perag data (%d). Continuing anyway.\n"), progname, error);	high	待判	
-xfsprogs-00407	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	155	-	_("%s: cannot init perag data (%d). Continuing anyway.\n"), progname, error); }	high	待判	
+xfsprogs-00020	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	206	-	fprintf(stderr, _("%s: failed to access realtime device for %s\n"), progname, fname);	medium	待判	
+xfsprogs-00021	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	207	-	_("%s: failed to access realtime device for %s\n"), progname, fname); exit(1);	medium	待判	
+xfsprogs-00022	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	209	-	exit(1); }	high	待判	
+xfsprogs-00023	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	242	-	fprintf(stderr, _( "data size %lld too large, maximum is %lld\n"), (long long)dsize,	medium	待判	
+xfsprogs-00024	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	250	-	fprintf(stderr, _("[EXPERIMENTAL] try to shrink unused space %lld, old size is %lld\n"), (long long)dsize, (long long)geo.datablocks);	medium	待判	
+xfsprogs-00025	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	251	-	_("[EXPERIMENTAL] try to shrink unused space %lld, old size is %lld\n"), (long long)dsize, (long long)geo.datablocks); if (!error &&	medium	待判	
+xfsprogs-00026	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	256	-	fprintf(stderr, _( "data size unchanged, skipping\n")); if (mflag)	medium	待判	
+xfsprogs-00027	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	259	-	fprintf(stderr, _( "inode max pct unchanged, skipping\n")); } else if (!error && !nflag) {	medium	待判	
+xfsprogs-00028	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	266	-	fprintf(stderr, _( "%s: growfs operation in progress already\n"), progname);	medium	待判	
+xfsprogs-00029	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	270	-	fprintf(stderr, _( "%s: XFS_IOC_FSGROWFSDATA xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
+xfsprogs-00030	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	286	-	fprintf(stderr, _( "realtime size %lld too large, maximum is %lld\n"), rsize, drsize / (geo.blocksize / BBSIZE));	medium	待判	
+xfsprogs-00031	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	292	-	fprintf(stderr, _( "realtime size %lld too small, old size is %lld\n"), (long long)rsize, (long long)geo.rtblocks);	medium	待判	
+xfsprogs-00032	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	298	-	fprintf(stderr, _( "realtime size unchanged, skipping\n")); } else if (!error && !nflag) {	medium	待判	
+xfsprogs-00033	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	305	-	fprintf(stderr, _( "%s: growfs operation in progress already\n"), progname);	medium	待判	
+xfsprogs-00034	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	309	-	fprintf(stderr, _( "%s: realtime growth not implemented\n"), progname);	medium	待判	
+xfsprogs-00035	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	313	-	fprintf(stderr, _( "%s: XFS_IOC_FSGROWFSRT xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
+xfsprogs-00036	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	334	-	fprintf(stderr, _("log size unchanged, skipping\n")); } else if (!nflag) {	medium	待判	
+xfsprogs-00037	xfsprogs	6.6.0	T2	resize	error-report	error-report	growfs/xfs_growfs.c	340	-	fprintf(stderr, _("%s: growfs operation in progress already\n"), progname);	medium	待判	
+xfsprogs-00038	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	344	-	fprintf(stderr, _("%s: log growth not supported yet\n"), progname);	medium	待判	
+xfsprogs-00039	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	345	-	_("%s: log growth not supported yet\n"), progname); else	medium	待判	
+xfsprogs-00040	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	348	-	fprintf(stderr, _("%s: XFS_IOC_FSGROWFSLOG xfsctl failed: %s\n"), progname, strerror(errno));	medium	待判	
+xfsprogs-00041	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	349	-	_("%s: XFS_IOC_FSGROWFSLOG xfsctl failed: %s\n"), progname, strerror(errno)); error = 1;	medium	待判	
+xfsprogs-00042	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	358	-	fprintf(stderr, _("%s: XFS_IOC_FSGEOMETRY xfsctl failed: %s\n"), progname, strerror(ret)); exit(1);	medium	待判	
+xfsprogs-00043	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	360	-	exit(1); } if (geo.datablocks != ngeo.datablocks)	high	待判	
+xfsprogs-00044	xfsprogs	6.6.0	T2	resize	refusal	refusal	growfs/xfs_growfs.c	379	-	printf(_("realtime extent size changed from %d to %d\n"), geo.rtextsize, ngeo.rtextsize); exit(error);	medium	待判	
+xfsprogs-00045	xfsprogs	6.6.0	T2	resize	fatal-exit	fatal-exit	growfs/xfs_growfs.c	381	-	exit(error); }	high	待判	
+xfsprogs-00046	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	69	newfile	fprintf(stderr, _("%s: failed to open %s: %s\n"), progname, fname, strerror(errno)); goto out_fail;	medium	待判	
+xfsprogs-00047	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	71	newfile	goto out_fail; }	high	待判	
+xfsprogs-00048	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	76	newfile	fprintf(stderr, _("%s: read failed on %s: %s\n"), progname, fname, strerror(errno)); goto out_fail;	medium	待判	
+xfsprogs-00049	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	78	newfile	goto out_fail; } if (buf[size - 1] != '\n') {	high	待判	
+xfsprogs-00050	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	81	newfile	fprintf(stderr, _("%s: proto file %s premature EOF\n"), progname, fname); goto out_fail;	medium	待判	
+xfsprogs-00051	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/proto.c	83	newfile	goto out_fail; } buf[size] = '\0';	high	待判	
+xfsprogs-00052	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	99	newfile	exit(1); }	high	待判	
+xfsprogs-00053	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	107	newfile	fprintf(stderr, "%s: %s [%d - %s]\n", progname, msg, i, strerror(i)); exit(1); }	medium	待判	
+xfsprogs-00054	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	108	newfile	exit(1); }	high	待判	
+xfsprogs-00055	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	115	newfile	fail(_("cannot reserve space"), i); }	high	待判	
+xfsprogs-00056	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/proto.c	168	newfile	fprintf(stderr, _("%s: premature EOF in prototype file\n"), progname); exit(1);	medium	待判	
+xfsprogs-00057	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	170	newfile	exit(1); } return NULL;	high	待判	
+xfsprogs-00058	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	211	newfile	fail(_("error reserving space for a file"), error); exit(1); }	medium	待判	
+xfsprogs-00059	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	212	newfile	exit(1); }	high	待判	
+xfsprogs-00060	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	220	newfile	fail(_("allocating transaction for a file"), error); libxfs_trans_ijoin(tp, ip, 0);	medium	待判	
+xfsprogs-00061	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	242	newfile	fail(_("committing space for a file failed"), error); }	medium	待判	
+xfsprogs-00062	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	276	newfile	fprintf(stderr, _("%s: creating realtime files from proto file not supported.\n"), progname);	medium	待判	
+xfsprogs-00063	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	277	newfile	_("%s: creating realtime files from proto file not supported.\n"), progname); exit(1);	medium	待判	
+xfsprogs-00064	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	279	newfile	exit(1); } if (error) {	high	待判	
+xfsprogs-00065	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	282	newfile	fail(_("error allocating space for a file"), error); } if (nmap != 1) {	medium	待判	
+xfsprogs-00066	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	285	newfile	fprintf(stderr, _("%s: cannot allocate space for file\n"), progname);	high	待判	
+xfsprogs-00067	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	286	newfile	_("%s: cannot allocate space for file\n"), progname); exit(1);	high	待判	
+xfsprogs-00068	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	288	newfile	exit(1); } d = XFS_FSB_TO_DADDR(mp, map.br_startblock);	high	待判	
+xfsprogs-00069	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	294	newfile	fprintf(stderr, _("%s: cannot allocate buffer for file\n"), progname);	high	待判	
+xfsprogs-00070	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	295	newfile	_("%s: cannot allocate buffer for file\n"), progname); exit(1);	high	待判	
+xfsprogs-00071	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	297	newfile	exit(1); } memmove(bp->b_addr, buf, len);	high	待判	
+xfsprogs-00072	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	326	newfile	fprintf(stderr, _("%s: cannot open %s: %s\n"), progname, fname, strerror(errno)); exit(1);	high	待判	
+xfsprogs-00073	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	328	newfile	exit(1); } if ((*len = (int)size)) {	high	待判	
+xfsprogs-00074	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	333	newfile	fprintf(stderr, _("%s: read failed on %s: %s\n"), progname, fname, strerror(errno)); exit(1);	medium	待判	
+xfsprogs-00075	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	335	newfile	exit(1); } } else	high	待判	
+xfsprogs-00076	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	355	newfile	fprintf(stderr, _("%.*s: invalid directory entry name\n"), name->len, name->name); exit(1);	high	待判	
+xfsprogs-00077	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	357	newfile	exit(1); }	high	待判	
+xfsprogs-00078	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	364	newfile	fail(_("directory createname error"), error); }	medium	待判	
+xfsprogs-00079	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	378	newfile	fail(_("directory create error"), error); }	medium	待判	
+xfsprogs-00080	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	441	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
+xfsprogs-00081	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	443	newfile	exit(1); } mode = 0;	high	待判	
+xfsprogs-00082	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	453	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
+xfsprogs-00083	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	455	newfile	exit(1); } switch (mstr[2]) {	high	待判	
+xfsprogs-00084	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	464	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
+xfsprogs-00085	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	466	newfile	exit(1); } val = 0;	high	待判	
+xfsprogs-00086	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	471	newfile	fprintf(stderr, _("%s: bad format string %s\n"), progname, mstr); exit(1);	medium	待判	
+xfsprogs-00087	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	473	newfile	exit(1); } val = val * 8 + mstr[i] - '0';	high	待判	
+xfsprogs-00088	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	492	newfile	fail(_("Inode allocation failed"), error); flags |= newfile(tp, ip, 0, 0, buf, len); if (buf)	medium	待判	
+xfsprogs-00089	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	506	newfile	fprintf(stderr, _("%s: Bad value %s for proto file %s\n"), progname, value, name);	medium	待判	
+xfsprogs-00090	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	507	newfile	_("%s: Bad value %s for proto file %s\n"), progname, value, name); exit(1);	medium	待判	
+xfsprogs-00091	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/proto.c	509	newfile	exit(1); } tp = getres(mp, XFS_B_TO_FSB(mp, llen));	high	待判	
+xfsprogs-00092	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	516	newfile	fail(_("Inode pre-allocation failed"), error); libxfs_trans_ijoin(tp, pip, 0);	medium	待判	
+xfsprogs-00093	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	525	newfile	fail(_("Space preallocation failed."), error); rsvfile(mp, ip, llen); libxfs_irele(ip);	medium	待判	
+xfsprogs-00094	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	537	newfile	fail(_("Inode allocation failed"), error); } libxfs_trans_ijoin(tp, pip, 0);	medium	待判	
+xfsprogs-00095	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	552	newfile	fail(_("Inode allocation failed"), error); libxfs_trans_ijoin(tp, pip, 0); xname.type = XFS_DIR3_FT_CHRDEV;	medium	待判	
+xfsprogs-00096	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	564	newfile	fail(_("Inode allocation failed"), error); libxfs_trans_ijoin(tp, pip, 0); xname.type = XFS_DIR3_FT_FIFO;	medium	待判	
+xfsprogs-00097	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	576	newfile	fail(_("Inode allocation failed"), error); flags |= newfile(tp, ip, 1, 1, buf, len); libxfs_trans_ijoin(tp, pip, 0);	medium	待判	
+xfsprogs-00098	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	587	newfile	fail(_("Inode allocation failed"), error); inc_nlink(VFS_I(ip)); /* account for . */ if (!pip) {	medium	待判	
+xfsprogs-00099	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	605	newfile	fail(_("Directory inode allocation failed."), error); /* * RT initialization. Do this here to ensure that	medium	待判	
+xfsprogs-00100	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/proto.c	624	newfile	ASSERT(0); fail(_("Unknown format"), EINVAL); }	high	待判	
+xfsprogs-00101	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	625	newfile	fail(_("Unknown format"), EINVAL); } libxfs_trans_log_inode(tp, ip, flags);	medium	待判	
+xfsprogs-00102	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	630	newfile	fail(_("Error encountered creating file from prototype file"), error); }	medium	待判	
+xfsprogs-00103	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	681	newfile	fail(_("Realtime bitmap inode allocation failed"), error); } /*	medium	待判	
+xfsprogs-00104	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	698	newfile	fail(_("Realtime summary inode allocation failed"), error); } mp->m_sb.sb_rsumino = rsumip->i_ino;	medium	待判	
+xfsprogs-00105	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	706	newfile	fail(_("Completion of the realtime summary inode failed"), error); mp->m_rsumip = rsumip;	medium	待判	
+xfsprogs-00106	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	726	newfile	fail(_("Allocation of the realtime bitmap failed"), error); }	medium	待判	
+xfsprogs-00107	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	739	newfile	fail(_("Block allocation of the realtime bitmap inode failed"), error);	medium	待判	
+xfsprogs-00108	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	758	newfile	fail(_("Allocation of the realtime summary failed"), error); }	medium	待判	
+xfsprogs-00109	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	770	newfile	fail(_("Block allocation of the realtime summary inode failed"), error);	medium	待判	
+xfsprogs-00110	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	787	newfile	fail(_("Error initializing the realtime space"), error); }	medium	待判	
+xfsprogs-00111	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/proto.c	792	newfile	fail(_("Initialization of the realtime space failed"), error); }	medium	待判	
+xfsprogs-00112	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	987	__attribute__	usage( void ) { fprintf(stderr, _("Usage: %s\n\	high	待判	
+xfsprogs-00113	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	989	__attribute__	fprintf(stderr, _("Usage: %s\n\ /* blocksize */ [-b size=num]\n\ /* config file */ [-c options=xxx]\n\	medium	待判	
+xfsprogs-00114	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1017	__attribute__	exit(1); }	high	待判	
+xfsprogs-00115	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1027	__attribute__	fprintf(stderr, _("Cannot specify both -%c %s and -%c %s\n"), con_opts->name, con_opts->subopts[conflict], opts->name, opts->subopts[option]);	high	待判	
+xfsprogs-00116	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1030	__attribute__	usage(); }	high	待判	
+xfsprogs-00117	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1039	__attribute__	fprintf(stderr, _("Invalid value %s for -%s option\n"), value, opt); usage(); }	high	待判	
+xfsprogs-00118	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1040	__attribute__	usage(); }	high	待判	
+xfsprogs-00119	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1056	__attribute__	fprintf(stderr, _("-%c %s option requires a value\n"), opt, tab[idx]); usage(); }	medium	待判	
+xfsprogs-00120	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1057	__attribute__	usage(); }	high	待判	
+xfsprogs-00121	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1066	__attribute__	fprintf(stderr, "-%c ", opt); if (tab) fprintf(stderr, "%s ", tab[idx]);	medium	待判	
+xfsprogs-00122	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1068	__attribute__	fprintf(stderr, "%s ", tab[idx]); fprintf(stderr, _("option respecified\n")); usage();	medium	待判	
+xfsprogs-00123	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1069	__attribute__	fprintf(stderr, _("option respecified\n")); usage(); }	medium	待判	
+xfsprogs-00124	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1070	__attribute__	usage(); }	high	待判	
+xfsprogs-00125	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1078	__attribute__	fprintf(stderr, _("unknown option -%c %s\n"), opt, s); usage(); }	medium	待判	
+xfsprogs-00126	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1079	__attribute__	usage(); }	high	待判	
+xfsprogs-00127	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1089	__attribute__	fprintf(stderr, _("%s: invalid config file option: [%s]: %s=%s\n"), filename, section, name, value); }	high	待判	
+xfsprogs-00128	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1103	__attribute__	fprintf(stderr, _("if -%s file then -%s name and -%s size are required\n"), optname, optname, optname);	medium	待判	
+xfsprogs-00129	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1104	__attribute__	_("if -%s file then -%s name and -%s size are required\n"), optname, optname, optname); usage();	medium	待判	
+xfsprogs-00130	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1106	__attribute__	usage(); }	high	待判	
+xfsprogs-00131	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1110	__attribute__	fprintf(stderr, _("No device name specified\n")); usage(); }	medium	待判	
+xfsprogs-00132	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1111	__attribute__	usage(); }	high	待判	
+xfsprogs-00133	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1121	__attribute__	fprintf(stderr, _("Error accessing specified device %s: %s\n"), dev->name, strerror(errno));	medium	待判	
+xfsprogs-00134	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1122	__attribute__	_("Error accessing specified device %s: %s\n"), dev->name, strerror(errno)); usage();	medium	待判	
+xfsprogs-00135	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1124	__attribute__	usage(); return; }	high	待判	
+xfsprogs-00136	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1143	__attribute__	fprintf(stderr, _("specified \"-%s file\" on a block device %s\n"), optname, dev->name);	medium	待判	
+xfsprogs-00137	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1146	__attribute__	usage(); } return;	high	待判	
+xfsprogs-00138	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1151	__attribute__	fprintf(stderr, _("specified device %s not a file or block device\n"), dev->name);	medium	待判	
+xfsprogs-00139	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1154	__attribute__	usage(); }	high	待判	
+xfsprogs-00140	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1163	__attribute__	fprintf(stderr, _("%s: Use the -f option to force overwrite.\n"), progname);	high	待判	
+xfsprogs-00141	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1164	__attribute__	_("%s: Use the -f option to force overwrite.\n"), progname); exit(1);	high	待判	
+xfsprogs-00142	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1166	__attribute__	exit(1); }	high	待判	
+xfsprogs-00143	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1179	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too small, need at least %lld blocks\n"), (long long)agsize,	medium	待判	
+xfsprogs-00144	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1180	__attribute__	_("agsize (%lld blocks) too small, need at least %lld blocks\n"), (long long)agsize, (long long)XFS_AG_MIN_BLOCKS(blocklog));	medium	待判	
+xfsprogs-00145	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1183	__attribute__	usage(); }	high	待判	
+xfsprogs-00146	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1187	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too big, maximum is %lld blocks\n"), (long long)agsize,	medium	待判	
+xfsprogs-00147	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1191	__attribute__	usage(); }	high	待判	
+xfsprogs-00148	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1195	__attribute__	fprintf(stderr, _("agsize (%lld blocks) too big, data area is %lld blocks\n"), (long long)agsize, (long long)dblocks);	medium	待判	
+xfsprogs-00149	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1198	__attribute__	usage(); }	high	待判	
+xfsprogs-00150	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1202	__attribute__	fprintf(stderr, _("too many allocation groups for size = %lld\n"), (long long)agsize);	medium	待判	
+xfsprogs-00151	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1203	__attribute__	_("too many allocation groups for size = %lld\n"), (long long)agsize); fprintf(stderr, _("need at most %lld allocation groups\n"),	medium	待判	
+xfsprogs-00152	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1205	__attribute__	fprintf(stderr, _("need at most %lld allocation groups\n"), (long long)(dblocks / XFS_AG_MIN_BLOCKS(blocklog) + (dblocks % XFS_AG_MIN_BLOCKS(blocklog) != 0)));	medium	待判	
+xfsprogs-00153	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1208	__attribute__	usage(); }	high	待判	
+xfsprogs-00154	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1212	__attribute__	fprintf(stderr, _("too few allocation groups for size = %lld\n"), (long long)agsize); fprintf(stderr,	medium	待判	
+xfsprogs-00155	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1214	__attribute__	fprintf(stderr, _("need at least %lld allocation groups\n"), (long long)(dblocks / XFS_AG_MAX_BLOCKS(blocklog) +	medium	待判	
+xfsprogs-00156	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1218	__attribute__	usage(); }	high	待判	
+xfsprogs-00157	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1227	__attribute__	fprintf(stderr, _("last AG size %lld blocks too small, minimum size is %lld blocks\n"), (long long)(dblocks % agsize),	medium	待判	
+xfsprogs-00158	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1228	__attribute__	_("last AG size %lld blocks too small, minimum size is %lld blocks\n"), (long long)(dblocks % agsize), (long long)XFS_AG_MIN_BLOCKS(blocklog));	medium	待判	
+xfsprogs-00159	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1231	__attribute__	usage(); }	high	待判	
+xfsprogs-00160	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1238	__attribute__	fprintf(stderr, _("%lld allocation groups is too many, maximum is %lld\n"), (long long)agcount, (long long)XFS_MAX_AGNUMBER + 1);	medium	待判	
+xfsprogs-00161	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1239	__attribute__	_("%lld allocation groups is too many, maximum is %lld\n"), (long long)agcount, (long long)XFS_MAX_AGNUMBER + 1); usage();	medium	待判	
+xfsprogs-00162	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1241	__attribute__	usage(); } }	high	待判	
+xfsprogs-00163	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1268	__attribute__	fprintf(stderr, _("error reading existing superblock -- failed to memalign buffer\n")); return;	medium	待判	
+xfsprogs-00164	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1269	__attribute__	_("error reading existing superblock -- failed to memalign buffer\n")); return; }	medium	待判	
+xfsprogs-00165	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1283	__attribute__	fprintf(stderr, _("error reading existing superblock: %s\n"), strerror(errno));	medium	待判	
+xfsprogs-00166	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1284	__attribute__	_("error reading existing superblock: %s\n"), strerror(errno)); goto done;	medium	待判	
+xfsprogs-00167	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1286	__attribute__	goto done; } libxfs_sb_from_disk(&sb, buf);	high	待判	
+xfsprogs-00168	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1295	__attribute__	goto done; for (bsize = 1, i = 0; bsize < sb.sb_blocksize &&	high	待判	
+xfsprogs-00169	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1303	__attribute__	goto done; if (sb.sb_dblocks > ((uint64_t)sb.sb_agcount * sb.sb_agblocks) ||	high	待判	
+xfsprogs-00170	xfsprogs	6.6.0	T2	mkfs	fail-goto	fail-goto	mkfs/xfs_mkfs.c	1308	__attribute__	goto done; /*	high	待判	
+xfsprogs-00171	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1369	__attribute__	fprintf(stderr, _("Invalid value %s for -%c %s option. %s\n"), value, opts->name, opts->subopts[index],	high	待判	
+xfsprogs-00172	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1370	__attribute__	_("Invalid value %s for -%c %s option. %s\n"), value, opts->name, opts->subopts[index], reason);	high	待判	
+xfsprogs-00173	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1373	__attribute__	usage(); }	high	待判	
+xfsprogs-00174	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1389	__attribute__	fprintf(stderr, _("Developer screwed up option parsing (%d/%d)! Please report!\n"), sp->index, index);	medium	待判	
+xfsprogs-00175	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1443	__attribute__	fprintf(stderr, _("Option -%c %s has undefined minval/maxval." "Can't verify value range. This is a bug.\n"),	medium	待判	
+xfsprogs-00176	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1447	__attribute__	exit(1); }	high	待判	
+xfsprogs-00177	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1476	__attribute__	illegal_option(str, opts, index, _("Value is too small.")); else if (c > sp->maxval) illegal_option(str, opts, index, _("Value is too large."));	medium	待判	
+xfsprogs-00178	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1478	__attribute__	illegal_option(str, opts, index, _("Value is too large.")); if (sp->is_power_2 && !ispow2(c)) illegal_option(str, opts, index, _("Value must be a power of 2."));	medium	待判	
+xfsprogs-00179	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	1480	__attribute__	illegal_option(str, opts, index, _("Value must be a power of 2.")); return c; }	medium	待判	
+xfsprogs-00180	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1506	__attribute__	fprintf(stderr, _("Out of memory while saving suboptions.\n")); exit(1); }	medium	待判	
+xfsprogs-00181	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1507	__attribute__	exit(1); }	high	待判	
+xfsprogs-00182	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	1799	__attribute__	fprintf(stderr, _("Out of memory while saving protofile option.\n")); exit(1);	medium	待判	
+xfsprogs-00183	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	1801	__attribute__	exit(1); } break;	high	待判	
+xfsprogs-00184	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2008	__attribute__	fprintf(stderr, _("specified blocksize %d is less than device physical sector size %d\n" "switching to logical sector size %d\n"),	medium	待判	
+xfsprogs-00185	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2023	__attribute__	fprintf(stderr, _("illegal sector size %d\n"), cfg->sectorsize); usage(); }	medium	待判	
+xfsprogs-00186	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2024	__attribute__	usage(); }	high	待判	
+xfsprogs-00187	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2028	__attribute__	fprintf(stderr, _("block size %d cannot be smaller than sector size %d\n"), cfg->blocksize, cfg->sectorsize);	high	待判	
+xfsprogs-00188	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2029	__attribute__	_("block size %d cannot be smaller than sector size %d\n"), cfg->blocksize, cfg->sectorsize); usage();	high	待判	
+xfsprogs-00189	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2031	__attribute__	usage(); }	high	待判	
+xfsprogs-00190	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2035	__attribute__	fprintf(stderr, _("illegal sector size %d; hw sector is %d\n"), cfg->sectorsize, ft->lsectorsize); usage();	medium	待判	
+xfsprogs-00191	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2037	__attribute__	usage(); } }	high	待判	
+xfsprogs-00192	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2061	__attribute__	fprintf(stderr, _("illegal block size %d\n"), cfg->blocksize); usage(); }	medium	待判	
+xfsprogs-00193	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2062	__attribute__	usage(); }	high	待判	
+xfsprogs-00194	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2067	__attribute__	fprintf(stderr, _("Minimum block size for CRC enabled filesystems is %d bytes.\n"), XFS_MIN_CRC_BLOCKSIZE);	medium	待判	
+xfsprogs-00195	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2070	__attribute__	usage(); }	high	待判	
+xfsprogs-00196	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2090	__attribute__	fprintf(stderr, _("Can't change sector size on internal log!\n")); usage();	medium	待判	
+xfsprogs-00197	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2092	__attribute__	usage(); }	high	待判	
+xfsprogs-00198	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2106	__attribute__	fprintf(stderr, _("illegal log sector size %d\n"), cfg->lsectorsize); usage();	medium	待判	
+xfsprogs-00199	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2108	__attribute__	usage(); } if (cfg->lsectorsize > XFS_MIN_SECTORSIZE) {	high	待判	
+xfsprogs-00200	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2113	__attribute__	fprintf(stderr, _("Version 1 logs do not support sector size %d\n"), cfg->lsectorsize);	medium	待判	
+xfsprogs-00201	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2116	__attribute__	usage(); } }	high	待判	
+xfsprogs-00202	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2123	__attribute__	fprintf(stderr, _("log stripe unit specified, using v2 logs\n")); cli->sb_feat.log_version = 2;	medium	待判	
+xfsprogs-00203	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2161	__attribute__	fprintf(stderr, _("Minimum inode size for CRCs is %d bytes\n"), 1 << XFS_DINODE_DFL_CRC_LOG);	medium	待判	
+xfsprogs-00204	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2164	__attribute__	usage(); }	high	待判	
+xfsprogs-00205	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2169	__attribute__	fprintf(stderr, _("Inodes always aligned for CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00206	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2171	__attribute__	usage(); }	high	待判	
+xfsprogs-00207	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2176	__attribute__	fprintf(stderr, _("Lazy superblock counters always enabled for CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00208	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2178	__attribute__	usage(); }	high	待判	
+xfsprogs-00209	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2183	__attribute__	fprintf(stderr, _("V2 logs always enabled for CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00210	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2185	__attribute__	usage(); }	high	待判	
+xfsprogs-00211	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2190	__attribute__	fprintf(stderr, _("V2 attribute format always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00212	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2192	__attribute__	usage(); }	high	待判	
+xfsprogs-00213	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2198	__attribute__	fprintf(stderr, _("32 bit Project IDs always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00214	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2200	__attribute__	usage(); }	high	待判	
+xfsprogs-00215	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2205	__attribute__	fprintf(stderr, _("Directory ftype field always enabled on CRC enabled filesystems\n")); usage();	medium	待判	
+xfsprogs-00216	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2207	__attribute__	usage(); }	high	待判	
+xfsprogs-00217	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2230	__attribute__	fprintf(stderr, _("finobt not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00218	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2231	__attribute__	_("finobt not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00219	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2232	__attribute__	usage(); } cli->sb_feat.finobt = false;	high	待判	
+xfsprogs-00220	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2237	__attribute__	fprintf(stderr, _("sparse inodes not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00221	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2238	__attribute__	_("sparse inodes not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00222	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2239	__attribute__	usage(); } cli->sb_feat.spinodes = false;	high	待判	
+xfsprogs-00223	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2244	__attribute__	fprintf(stderr, _("rmapbt not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00224	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2245	__attribute__	_("rmapbt not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00225	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2246	__attribute__	usage(); } cli->sb_feat.rmapbt = false;	high	待判	
+xfsprogs-00226	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2251	__attribute__	fprintf(stderr, _("reflink not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00227	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2252	__attribute__	_("reflink not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00228	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2253	__attribute__	usage(); } cli->sb_feat.reflink = false;	high	待判	
+xfsprogs-00229	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2258	__attribute__	fprintf(stderr, _("inode btree counters not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00230	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2259	__attribute__	_("inode btree counters not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00231	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2260	__attribute__	usage(); } cli->sb_feat.inobtcnt = false;	high	待判	
+xfsprogs-00232	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2265	__attribute__	fprintf(stderr, _("timestamps later than 2038 not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00233	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2266	__attribute__	_("timestamps later than 2038 not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00234	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2267	__attribute__	usage(); } cli->sb_feat.bigtime = false;	high	待判	
+xfsprogs-00235	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2273	__attribute__	fprintf(stderr, _("64 bit extent count not supported without CRC support\n")); usage();	medium	待判	
+xfsprogs-00236	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2274	__attribute__	_("64 bit extent count not supported without CRC support\n")); usage(); }	medium	待判	
+xfsprogs-00237	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2275	__attribute__	usage(); } cli->sb_feat.nrext64 = false;	high	待判	
+xfsprogs-00238	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2282	__attribute__	fprintf(stderr, _("inode btree counters not supported without finobt support\n")); usage();	medium	待判	
+xfsprogs-00239	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2283	__attribute__	_("inode btree counters not supported without finobt support\n")); usage(); }	medium	待判	
+xfsprogs-00240	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2284	__attribute__	usage(); } cli->sb_feat.inobtcnt = false;	high	待判	
+xfsprogs-00241	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2291	__attribute__	fprintf(stderr, _("reflink not supported with realtime devices\n")); usage();	medium	待判	
+xfsprogs-00242	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2292	__attribute__	_("reflink not supported with realtime devices\n")); usage(); }	medium	待判	
+xfsprogs-00243	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2293	__attribute__	usage(); } cli->sb_feat.reflink = false;	high	待判	
+xfsprogs-00244	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2298	__attribute__	fprintf(stderr, _("rmapbt not supported with realtime devices\n")); usage();	medium	待判	
+xfsprogs-00245	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2299	__attribute__	_("rmapbt not supported with realtime devices\n")); usage(); }	medium	待判	
+xfsprogs-00246	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2300	__attribute__	usage(); } cli->sb_feat.rmapbt = false;	high	待判	
+xfsprogs-00247	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2307	__attribute__	fprintf(stderr, _("cowextsize not supported without reflink support\n")); usage();	medium	待判	
+xfsprogs-00248	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2308	__attribute__	_("cowextsize not supported without reflink support\n")); usage(); }	medium	待判	
+xfsprogs-00249	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2309	__attribute__	usage(); }	high	待判	
+xfsprogs-00250	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2332	__attribute__	fprintf(stderr, _("illegal directory block size %d\n"), cfg->dirblocksize); usage();	medium	待判	
+xfsprogs-00251	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2334	__attribute__	usage(); } cfg->dirblocklog = libxfs_highbit32(cfg->dirblocksize);	high	待判	
+xfsprogs-00252	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2369	__attribute__	fprintf(stderr, _("Minimum inode size for CRCs is %d bytes\n"), 1 << XFS_DINODE_DFL_CRC_LOG);	medium	待判	
+xfsprogs-00253	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2372	__attribute__	usage(); }	high	待判	
+xfsprogs-00254	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2381	__attribute__	fprintf(stderr, _("illegal inode size %d\n"), cfg->inodesize); maxsz = min(cfg->blocksize / XFS_MIN_INODE_PERBLOCK, XFS_DINODE_MAX_SIZE);	medium	待判	
+xfsprogs-00255	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2385	__attribute__	fprintf(stderr, _("allowable inode size with %d byte blocks is %d\n"), cfg->blocksize, XFS_DINODE_MIN_SIZE);	medium	待判	
+xfsprogs-00256	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2389	__attribute__	fprintf(stderr, _("allowable inode size with %d byte blocks is between %d and %d\n"), cfg->blocksize, XFS_DINODE_MIN_SIZE, maxsz);	medium	待判	
+xfsprogs-00257	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2392	__attribute__	exit(1); } }	high	待判	
+xfsprogs-00258	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2412	__attribute__	fprintf(stderr, _("illegal %s length %lld, not a multiple of %d\n"), type, (long long)dbytes, XFS_MIN_BLOCKSIZE);	medium	待判	
+xfsprogs-00259	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2415	__attribute__	usage(); } dblocks = (xfs_rfsblock_t)(dbytes >> cfg->blocklog);	high	待判	
+xfsprogs-00260	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2419	__attribute__	fprintf(stderr, _("warning: %s length %lld not a multiple of %d, truncated to %lld\n"), type, (long long)dbytes, cfg->blocksize,	high	待判	
+xfsprogs-00261	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2420	__attribute__	_("warning: %s length %lld not a multiple of %d, truncated to %lld\n"), type, (long long)dbytes, cfg->blocksize, (long long)(dblocks << cfg->blocklog));	high	待判	
+xfsprogs-00262	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2442	__attribute__	fprintf(stderr, _("illegal rt extent size %lld, not a multiple of %d\n"), (long long)rtextbytes, cfg->blocksize);	medium	待判	
+xfsprogs-00263	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2445	__attribute__	usage(); } cfg->rtextblocks = (xfs_extlen_t)(rtextbytes >> cfg->blocklog);	high	待判	
+xfsprogs-00264	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	2478	__attribute__	ASSERT(cfg->rtextblocks); }	high	待判	
+xfsprogs-00265	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2501	__attribute__	fprintf(stderr, _("illegal extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_extsize,	medium	待判	
+xfsprogs-00266	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2502	__attribute__	_("illegal extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_extsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2));	medium	待判	
+xfsprogs-00267	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2505	__attribute__	usage(); }	high	待判	
+xfsprogs-00268	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2524	__attribute__	fprintf(stderr, _("illegal extent size hint %lld, must be less than %u and a multiple of %u.\n"), (long long)cli->fsx.fsx_extsize,	medium	待判	
+xfsprogs-00269	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2525	__attribute__	_("illegal extent size hint %lld, must be less than %u and a multiple of %u.\n"), (long long)cli->fsx.fsx_extsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2),	medium	待判	
+xfsprogs-00270	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2529	__attribute__	usage(); } }	high	待判	
+xfsprogs-00271	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2553	__attribute__	fprintf(stderr, _("illegal CoW extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_cowextsize,	medium	待判	
+xfsprogs-00272	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2554	__attribute__	_("illegal CoW extent size hint %lld, must be less than %u.\n"), (long long)cli->fsx.fsx_cowextsize, min(XFS_MAX_BMBT_EXTLEN, mp->m_sb.sb_agblocks / 2));	medium	待判	
+xfsprogs-00273	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2557	__attribute__	usage(); } }	high	待判	
+xfsprogs-00274	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2570	__attribute__	_("Filesystems formatted with --unsupported are not supported!!\n")); return; }	high	待判	
+xfsprogs-00275	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2596	__attribute__	fprintf(stderr, _("Filesystem must be larger than 300MB.\n")); usage();	medium	待判	
+xfsprogs-00276	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2597	__attribute__	_("Filesystem must be larger than 300MB.\n")); usage(); }	medium	待判	
+xfsprogs-00277	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2598	__attribute__	usage(); }	high	待判	
+xfsprogs-00278	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2607	__attribute__	fprintf(stderr, _("Log size must be at least 64MB.\n")); usage();	medium	待判	
+xfsprogs-00279	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2608	__attribute__	_("Log size must be at least 64MB.\n")); usage(); }	medium	待判	
+xfsprogs-00280	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2609	__attribute__	usage(); }	high	待判	
+xfsprogs-00281	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2617	__attribute__	fprintf(stderr, _("Filesystem must have at least 2 superblocks for redundancy!\n")); usage();	medium	待判	
+xfsprogs-00282	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2619	__attribute__	usage(); } }	high	待判	
+xfsprogs-00283	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2656	__attribute__	fprintf(stderr, _("both data sunit and data swidth options must be specified\n")); usage();	medium	待判	
+xfsprogs-00284	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2657	__attribute__	_("both data sunit and data swidth options must be specified\n")); usage(); }	medium	待判	
+xfsprogs-00285	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2658	__attribute__	usage(); }	high	待判	
+xfsprogs-00286	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2664	__attribute__	fprintf(stderr, _("both data su and data sw options must be specified\n")); usage();	medium	待判	
+xfsprogs-00287	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2665	__attribute__	_("both data su and data sw options must be specified\n")); usage(); }	medium	待判	
+xfsprogs-00288	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2666	__attribute__	usage(); }	high	待判	
+xfsprogs-00289	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2671	__attribute__	fprintf(stderr, _("data stripe width (%lld) is too large of a multiple of the data stripe unit (%d)\n"), big_dswidth, dsu);	medium	待判	
+xfsprogs-00290	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2672	__attribute__	_("data stripe width (%lld) is too large of a multiple of the data stripe unit (%d)\n"), big_dswidth, dsu); usage();	medium	待判	
+xfsprogs-00291	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2674	__attribute__	usage(); }	high	待判	
+xfsprogs-00292	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2679	__attribute__	usage(); dsunit = BTOBBT(dsu);	high	待判	
+xfsprogs-00293	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2685	__attribute__	usage(); }	high	待判	
+xfsprogs-00294	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2705	__attribute__	fprintf(stderr, _("%s: Volume reports invalid stripe unit (%d) and stripe width (%d), ignoring.\n"), progname, BBTOB(ft->dsunit), BBTOB(ft->dswidth));	high	待判	
+xfsprogs-00295	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2706	__attribute__	_("%s: Volume reports invalid stripe unit (%d) and stripe width (%d), ignoring.\n"), progname, BBTOB(ft->dsunit), BBTOB(ft->dswidth)); ft->dsunit = 0;	high	待判	
+xfsprogs-00296	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2718	__attribute__	fprintf(stderr, _("%s: small data volume, ignoring data volume stripe unit %d and stripe width %d\n"), progname, ft->dsunit,	medium	待判	
+xfsprogs-00297	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2732	__attribute__	fprintf(stderr, _("%s: Specified data stripe unit %d is not the same as the volume stripe unit %d\n"), progname, dsunit, ft->dsunit);	medium	待判	
+xfsprogs-00298	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2737	__attribute__	fprintf(stderr, _("%s: Specified data stripe width %d is not the same as the volume stripe width %d\n"), progname, dswidth, ft->dswidth);	medium	待判	
+xfsprogs-00299	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2754	__attribute__	fprintf(stderr, _("%s: Stripe unit(%d) or stripe width(%d) is not a multiple of the block size(%d)\n"), progname, BBTOB(dsunit), BBTOB(dswidth),	medium	待判	
+xfsprogs-00300	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2758	__attribute__	exit(1); } dsunit = 0;	high	待判	
+xfsprogs-00301	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2781	__attribute__	fprintf(stderr, _("log stripe unit (%d) must be a multiple of the block size (%d)\n"), lsu, cfg->blocksize);	medium	待判	
+xfsprogs-00302	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2782	__attribute__	_("log stripe unit (%d) must be a multiple of the block size (%d)\n"), lsu, cfg->blocksize); usage();	medium	待判	
+xfsprogs-00303	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2784	__attribute__	usage(); } lsunit = (int)BTOBBT(lsu);	high	待判	
+xfsprogs-00304	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2789	__attribute__	fprintf(stderr, _("log stripe unit (%d) must be a multiple of the block size (%d)\n"), BBTOB(lsunit), cfg->blocksize);	medium	待判	
+xfsprogs-00305	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2790	__attribute__	_("log stripe unit (%d) must be a multiple of the block size (%d)\n"), BBTOB(lsunit), cfg->blocksize); usage();	medium	待判	
+xfsprogs-00306	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2792	__attribute__	usage(); }	high	待判	
+xfsprogs-00307	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2811	__attribute__	fprintf(stderr, _("log stripe unit (%d bytes) is too large (maximum is 256KiB)\n" "log stripe unit adjusted to 32KiB\n"),	medium	待判	
+xfsprogs-00308	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2812	__attribute__	_("log stripe unit (%d bytes) is too large (maximum is 256KiB)\n" "log stripe unit adjusted to 32KiB\n"), (cfg->lsunit * cfg->blocksize));	medium	待判	
+xfsprogs-00309	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2834	__attribute__	usage(); if (!xi->data.dev) { fprintf(stderr, _("no device name given in argument list\n"));	high	待判	
+xfsprogs-00310	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2836	__attribute__	fprintf(stderr, _("no device name given in argument list\n")); usage(); }	medium	待判	
+xfsprogs-00311	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2837	__attribute__	usage(); }	high	待判	
+xfsprogs-00312	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2887	__attribute__	fprintf(stderr, _("can't get size of data subvolume\n")); usage(); }	medium	待判	
+xfsprogs-00313	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2888	__attribute__	usage(); } ASSERT(cfg->dblocks);	high	待判	
+xfsprogs-00314	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	2890	__attribute__	ASSERT(cfg->dblocks); } else if (cfg->dblocks) { /* check the size fits into the underlying device */	high	待判	
+xfsprogs-00315	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2894	__attribute__	fprintf(stderr, _("size %s specified for data subvolume is too large, maximum is %lld blocks\n"), cli->dsize,	medium	待判	
+xfsprogs-00316	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2895	__attribute__	_("size %s specified for data subvolume is too large, maximum is %lld blocks\n"), cli->dsize, (long long)DTOBT(xi->data.size, cfg->blocklog));	medium	待判	
+xfsprogs-00317	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2898	__attribute__	usage(); } } else {	high	待判	
+xfsprogs-00318	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2906	__attribute__	fprintf(stderr, _("size %lld of data subvolume is too small, minimum %lld blocks\n"), (long long)cfg->dblocks, XFS_MIN_DATA_BLOCKS(cfg));	medium	待判	
+xfsprogs-00319	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2907	__attribute__	_("size %lld of data subvolume is too small, minimum %lld blocks\n"), (long long)cfg->dblocks, XFS_MIN_DATA_BLOCKS(cfg)); usage();	medium	待判	
+xfsprogs-00320	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2909	__attribute__	usage(); }	high	待判	
+xfsprogs-00321	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2913	__attribute__	fprintf(stderr, _( "Warning: the data subvolume sector size %u is less than the sector size \n\ reported by the device (%u).\n"),	medium	待判	
+xfsprogs-00322	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2942	device	fprintf(stderr, _("data and log sector sizes must be equal for internal logs\n")); usage();	medium	待判	
+xfsprogs-00323	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2943	device	_("data and log sector sizes must be equal for internal logs\n")); usage(); }	medium	待判	
+xfsprogs-00324	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2944	device	usage(); } if (cli->logsize && cfg->logblocks >= cfg->dblocks) {	high	待判	
+xfsprogs-00325	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2947	device	fprintf(stderr, _("log size %lld too large for internal log\n"), (long long)cfg->logblocks);	medium	待判	
+xfsprogs-00326	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2948	device	_("log size %lld too large for internal log\n"), (long long)cfg->logblocks); usage();	medium	待判	
+xfsprogs-00327	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2950	device	usage(); } return;	high	待判	
+xfsprogs-00328	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2957	device	fprintf(stderr, _("no log subvolume or external log.\n")); usage(); }	medium	待判	
+xfsprogs-00329	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2958	device	usage(); }	high	待判	
+xfsprogs-00330	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2963	device	fprintf(stderr, _("unable to get size of the log subvolume.\n")); usage();	medium	待判	
+xfsprogs-00331	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2965	device	usage(); } cfg->logblocks = DTOBT(xi->log.size, cfg->blocklog);	high	待判	
+xfsprogs-00332	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2969	device	fprintf(stderr, _("size %s specified for log subvolume is too large, maximum is %lld blocks\n"), cli->logsize,	medium	待判	
+xfsprogs-00333	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	2970	device	_("size %s specified for log subvolume is too large, maximum is %lld blocks\n"), cli->logsize, (long long)DTOBT(xi->log.size, cfg->blocklog));	medium	待判	
+xfsprogs-00334	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2973	device	usage(); }	high	待判	
+xfsprogs-00335	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2977	device	fprintf(stderr, _( "Warning: the log subvolume sector size %u is less than the sector size\n\ reported by the device (%u).\n"),	medium	待判	
+xfsprogs-00336	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	2993	device	fprintf(stderr, _("size specified for non-existent rt subvolume\n")); usage();	medium	待判	
+xfsprogs-00337	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	2995	device	usage(); }	high	待判	
+xfsprogs-00338	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3004	device	fprintf(stderr, _("Invalid zero length rt subvolume found\n")); usage(); }	high	待判	
+xfsprogs-00339	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3005	device	usage(); }	high	待判	
+xfsprogs-00340	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3010	device	fprintf(stderr, _("size %s specified for rt subvolume is too large, maxi->um is %lld blocks\n"), cli->rtsize,	medium	待判	
+xfsprogs-00341	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3011	device	_("size %s specified for rt subvolume is too large, maxi->um is %lld blocks\n"), cli->rtsize, (long long)DTOBT(xi->rt.size, cfg->blocklog));	medium	待判	
+xfsprogs-00342	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3014	device	usage(); } if (xi->rt.bsize > cfg->sectorsize) {	high	待判	
+xfsprogs-00343	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3017	device	fprintf(stderr, _( "Warning: the realtime subvolume sector size %u is less than the sector size\n\ reported by the device (%u).\n"),	medium	待判	
+xfsprogs-00344	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3044	device	fprintf(stderr, _("agsize (%s) not a multiple of fs blk size (%d)\n"), cli->agsize, cfg->blocksize);	medium	待判	
+xfsprogs-00345	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3047	device	usage(); } cfg->agsize /= cfg->blocksize;	high	待判	
+xfsprogs-00346	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3126	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("agsize rounded to %lld, sunit = %d\n"), (long long)cfg->agsize, dsunit);	medium	待判	
+xfsprogs-00347	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3172	XFS_AG_MAX_BLOCKS	ASSERT(!cli_opt_set(&dopts, D_AGCOUNT)); cfg->dblocks = (xfs_rfsblock_t)((cfg->agcount - 1) * cfg->agsize); cfg->agcount--;	high	待判	
+xfsprogs-00348	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3175	XFS_AG_MAX_BLOCKS	ASSERT(cfg->agcount != 0); }	high	待判	
+xfsprogs-00349	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3335	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld is not a multiple of the log stripe unit %d\n"), (long long) cfg->logblocks, sunit);	medium	待判	
+xfsprogs-00350	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3338	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00351	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3369	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Due to stripe alignment, the internal log start (%lld) cannot be aligned\n" "within an allocation group.\n"),	high	待判	
+xfsprogs-00352	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3370	XFS_AG_MAX_BLOCKS	_("Due to stripe alignment, the internal log start (%lld) cannot be aligned\n" "within an allocation group.\n"), (long long) cfg->logstart);	high	待判	
+xfsprogs-00353	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3373	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00354	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3390	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Due to stripe alignment, the internal log size (%lld) is too large.\n" "Must fit within an allocation group.\n"),	medium	待判	
+xfsprogs-00355	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3391	XFS_AG_MAX_BLOCKS	_("Due to stripe alignment, the internal log size (%lld) is too large.\n" "Must fit within an allocation group.\n"), (long long) cfg->logblocks);	medium	待判	
+xfsprogs-00356	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3394	XFS_AG_MAX_BLOCKS	usage(); } }	high	待判	
+xfsprogs-00357	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3402	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld blocks too small, minimum size is %d blocks\n"), (long long)logblocks, min_logblocks);	medium	待判	
+xfsprogs-00358	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3403	XFS_AG_MAX_BLOCKS	_("log size %lld blocks too small, minimum size is %d blocks\n"), (long long)logblocks, min_logblocks); usage();	medium	待判	
+xfsprogs-00359	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3405	XFS_AG_MAX_BLOCKS	usage(); } if (logblocks > XFS_MAX_LOG_BLOCKS) {	high	待判	
+xfsprogs-00360	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3408	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld blocks too large, maximum size is %lld blocks\n"), (long long)logblocks, XFS_MAX_LOG_BLOCKS);	medium	待判	
+xfsprogs-00361	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3409	XFS_AG_MAX_BLOCKS	_("log size %lld blocks too large, maximum size is %lld blocks\n"), (long long)logblocks, XFS_MAX_LOG_BLOCKS); usage();	medium	待判	
+xfsprogs-00362	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3411	XFS_AG_MAX_BLOCKS	usage(); } if ((logblocks << blocklog) > XFS_MAX_LOG_BYTES) {	high	待判	
+xfsprogs-00363	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3414	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log size %lld bytes too large, maximum size is %lld bytes\n"), (long long)(logblocks << blocklog), XFS_MAX_LOG_BYTES);	medium	待判	
+xfsprogs-00364	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3415	XFS_AG_MAX_BLOCKS	_("log size %lld bytes too large, maximum size is %lld bytes\n"), (long long)(logblocks << blocklog), XFS_MAX_LOG_BYTES); usage();	medium	待判	
+xfsprogs-00365	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3417	XFS_AG_MAX_BLOCKS	usage(); } }	high	待判	
+xfsprogs-00366	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3454	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks,	medium	待判	
+xfsprogs-00367	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3455	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks, *max_logblocks);	medium	待判	
+xfsprogs-00368	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3458	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00369	xfsprogs	6.6.0	T2	mkfs	assert	assert	mkfs/xfs_mkfs.c	3483	XFS_AG_MAX_BLOCKS	ASSERT(min_logblocks); min_logblocks = max(XFS_MIN_LOG_BLOCKS, min_logblocks);	high	待判	
+xfsprogs-00370	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3498	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("external log device size %lld blocks too small, must be at least %lld blocks\n"), (long long)cfg->logblocks,	medium	待判	
+xfsprogs-00371	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3499	XFS_AG_MAX_BLOCKS	_("external log device size %lld blocks too small, must be at least %lld blocks\n"), (long long)cfg->logblocks, (long long)min_logblocks);	medium	待判	
+xfsprogs-00372	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3502	XFS_AG_MAX_BLOCKS	usage(); } cfg->logstart = 0;	high	待判	
+xfsprogs-00373	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3525	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("max log size %d smaller than min log size %d, filesystem is too small\n"), max_logblocks,	medium	待判	
+xfsprogs-00374	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3526	XFS_AG_MAX_BLOCKS	_("max log size %d smaller than min log size %d, filesystem is too small\n"), max_logblocks, min_logblocks);	medium	待判	
+xfsprogs-00375	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3529	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00376	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3558	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks,	medium	待判	
+xfsprogs-00377	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3559	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must be less than %d\n"), (long long)cfg->logblocks, max_logblocks);	medium	待判	
+xfsprogs-00378	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3562	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00379	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3566	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("internal log size %lld too large, must fit in allocation group\n"), (long long)cfg->logblocks);	medium	待判	
+xfsprogs-00380	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3567	XFS_AG_MAX_BLOCKS	_("internal log size %lld too large, must fit in allocation group\n"), (long long)cfg->logblocks); usage();	medium	待判	
+xfsprogs-00381	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3569	XFS_AG_MAX_BLOCKS	usage(); }	high	待判	
+xfsprogs-00382	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3574	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("log ag number %lld too large, must be less than %lld\n"), (long long)cli->logagno,	medium	待判	
+xfsprogs-00383	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3575	XFS_AG_MAX_BLOCKS	_("log ag number %lld too large, must be less than %lld\n"), (long long)cli->logagno, (long long)sbp->sb_agcount);	medium	待判	
+xfsprogs-00384	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3578	XFS_AG_MAX_BLOCKS	usage(); } cfg->logagno = cli->logagno;	high	待判	
+xfsprogs-00385	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3726	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Could not get memory for buffer, err=%d\n"), error); exit(1);	medium	待判	
+xfsprogs-00386	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3728	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00387	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3768	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: Growing the data section failed\n"), progname);	medium	待判	
+xfsprogs-00388	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3769	XFS_AG_MAX_BLOCKS	_("%s: Growing the data section failed\n"), progname); exit(1);	medium	待判	
+xfsprogs-00389	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3771	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00390	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	3853	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("AG header init failed, error %d\n"), error); exit(1); }	medium	待判	
+xfsprogs-00391	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3854	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00392	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3890	XFS_AG_MAX_BLOCKS	perror(_("initializing AG free space list")); exit(1); }	medium	待判	
+xfsprogs-00393	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3891	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
+xfsprogs-00394	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3914	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: could not re-read AG %u superblock\n"), progname, mp->m_sb.sb_agcount - 1); exit(1);	medium	待判	
+xfsprogs-00395	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3916	XFS_AG_MAX_BLOCKS	exit(1); } dsb = buf->b_addr;	high	待判	
+xfsprogs-00396	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3932	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: could not re-read AG %u superblock\n"), progname, (mp->m_sb.sb_agcount - 1) / 2); exit(1);	medium	待判	
+xfsprogs-00397	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3934	XFS_AG_MAX_BLOCKS	exit(1); } dsb = buf->b_addr;	high	待判	
+xfsprogs-00398	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3949	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: root inode created in AG %u, not AG 0\n"), progname, XFS_INO_TO_AGNO(mp, mp->m_sb.sb_rootino));	medium	待判	
+xfsprogs-00399	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3952	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00400	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	3965	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: root inode (%llu) not allocated in expected location (%llu)\n"), progname,	medium	待判	
+xfsprogs-00401	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	3970	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
+xfsprogs-00402	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4010	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: Unrecognised input on line %d. Aborting.\n"), cli->cfgfile, error);	medium	待判	
+xfsprogs-00403	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4011	XFS_AG_MAX_BLOCKS	_("%s: Unrecognised input on line %d. Aborting.\n"), cli->cfgfile, error); } else if (error == -1) {	medium	待判	
+xfsprogs-00404	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4014	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Unable to open config file %s. Aborting.\n"), cli->cfgfile);	medium	待判	
+xfsprogs-00405	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4015	XFS_AG_MAX_BLOCKS	_("Unable to open config file %s. Aborting.\n"), cli->cfgfile); } else if (error == -2) {	medium	待判	
+xfsprogs-00406	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4018	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Memory allocation failure parsing %s. Aborting.\n"), cli->cfgfile);	medium	待判	
+xfsprogs-00407	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4019	XFS_AG_MAX_BLOCKS	_("Memory allocation failure parsing %s. Aborting.\n"), cli->cfgfile); } else {	medium	待判	
+xfsprogs-00408	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4022	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("Unknown error %d opening config file %s. Aborting.\n"), error, cli->cfgfile);	medium	待判	
+xfsprogs-00409	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4023	XFS_AG_MAX_BLOCKS	_("Unknown error %d opening config file %s. Aborting.\n"), error, cli->cfgfile); }	medium	待判	
+xfsprogs-00410	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4026	XFS_AG_MAX_BLOCKS	exit(1); } printf(_("Parameters parsed from config file %s successfully\n"),	high	待判	
+xfsprogs-00411	xfsprogs	6.6.0	T2	mkfs	error-report	error-report	mkfs/xfs_mkfs.c	4175	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("extra arguments\n")); usage(); } else if (argc - optind == 1) {	medium	待判	
+xfsprogs-00412	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4176	XFS_AG_MAX_BLOCKS	usage(); } else if (argc - optind == 1) { xi.data.name = getstr(argv[optind], &dopts, D_NAME);	high	待判	
+xfsprogs-00413	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4282	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("crc32c self-test failed, will not create a filesystem here.\n")); return 1;	medium	待判	
+xfsprogs-00414	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4283	XFS_AG_MAX_BLOCKS	_("crc32c self-test failed, will not create a filesystem here.\n")); return 1; }	medium	待判	
+xfsprogs-00415	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4289	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("xfs dir/attr self-test failed, will not create a filesystem here.\n")); return 1;	medium	待判	
+xfsprogs-00416	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4290	XFS_AG_MAX_BLOCKS	_("xfs dir/attr self-test failed, will not create a filesystem here.\n")); return 1; }	medium	待判	
+xfsprogs-00417	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4313	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: filesystem failed to initialize\n"), progname); exit(1);	medium	待判	
+xfsprogs-00418	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4315	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00419	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4331	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: writing AG headers failed, err=%d\n"), progname, error);	medium	待判	
+xfsprogs-00420	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4332	XFS_AG_MAX_BLOCKS	_("%s: writing AG headers failed, err=%d\n"), progname, error); exit(1);	medium	待判	
+xfsprogs-00421	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4334	XFS_AG_MAX_BLOCKS	exit(1); } }	high	待判	
+xfsprogs-00422	xfsprogs	6.6.0	T2	mkfs	refusal	refusal	mkfs/xfs_mkfs.c	4340	XFS_AG_MAX_BLOCKS	fprintf(stderr, _("%s: writing AG headers failed, err=%d\n"), progname, error); exit(1);	medium	待判	
+xfsprogs-00423	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4342	XFS_AG_MAX_BLOCKS	exit(1); }	high	待判	
+xfsprogs-00424	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4379	XFS_AG_MAX_BLOCKS	exit(1); dsb = buf->b_addr; dsb->sb_inprogress = 0;	high	待判	
+xfsprogs-00425	xfsprogs	6.6.0	T2	mkfs	fatal-exit	fatal-exit	mkfs/xfs_mkfs.c	4388	XFS_AG_MAX_BLOCKS	exit(1); libxfs_destroy(&xi);	high	待判	
+xfsprogs-00426	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	155	-	dbprintf(_("bad allocation group number %s\n"), argv[1]); return 0; }	medium	待判	
+xfsprogs-00427	xfsprogs	6.6.0	T2	misc	assert	assert	db/sb.c	161	-	ASSERT(typtab[TYP_SB].typnm == TYP_SB); set_cur(&typtab[TYP_SB], XFS_AG_DADDR(mp, cur_agno, XFS_SB_DADDR),	high	待判	
+xfsprogs-00428	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	195	-	dbprintf(_("bad sb magic # %#x in AG %u\n"), sb->sb_magicnum, agno); return 0;	medium	待判	
+xfsprogs-00429	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	200	-	dbprintf(_("bad sb version # %#x in AG %u\n"), sb->sb_versionnum, agno); return 0;	medium	待判	
+xfsprogs-00430	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	240	xlog_recover_do_trans	dbprintf(_("ERROR: cannot find log head/tail, run xfs_repair\n")); return 0; } else if (dirty == 1) {	high	待判	
+xfsprogs-00431	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	272	xlog_recover_do_trans	dbprintf(_("Clearing log and setting UUID\n")); error = libxfs_log_clear(mp->m_logdev_targp, NULL,	medium	待判	
+xfsprogs-00432	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	281	xlog_recover_do_trans	dbprintf(_("ERROR: cannot clear the log\n")); return 0; }	high	待判	
+xfsprogs-00433	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	371	xlog_recover_do_trans	dbprintf(_("invalid parameters\n")); return 0; }	high	待判	
+xfsprogs-00434	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	395	xlog_recover_do_trans	dbprintf(_("failed to read UUID from AG 0\n")); return 0; }	medium	待判	
+xfsprogs-00435	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	414	xlog_recover_do_trans	dbprintf(_("invalid UUID\n")); return 0; }	high	待判	
+xfsprogs-00436	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	426	xlog_recover_do_trans	dbprintf(_("failed to set UUID in AG %d\n"), agno); break; }	medium	待判	
+xfsprogs-00437	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	439	xlog_recover_do_trans	dbprintf(_("failed to read UUID from AG %d\n"), agno); return 0;	medium	待判	
+xfsprogs-00438	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	512	xlog_recover_do_trans	dbprintf(_("%s: truncating label length from %d to %d\n"), progname, (int)len, (int)sizeof(tsb.sb_fname)); len = sizeof(tsb.sb_fname);	high	待判	
+xfsprogs-00439	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	539	xlog_recover_do_trans	dbprintf(_("invalid parameters\n")); return 0; }	high	待判	
+xfsprogs-00440	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	560	xlog_recover_do_trans	dbprintf(_("failed to set label in AG %d\n"), ag); break; }	medium	待判	
+xfsprogs-00441	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	570	xlog_recover_do_trans	dbprintf(_("failed to read label in AG %d\n"), ag); return 0; }	medium	待判	
+xfsprogs-00442	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	788	xlog_recover_do_trans	_("%s: Cannot change %s on v5 superblocks.\n"), progname, argv[1]); return 0;	high	待判	
+xfsprogs-00443	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	812	xlog_recover_do_trans	dbprintf(_("%s: invalid version change command \"%s\"\n"), progname, argv[1]); return 0;	high	待判	
+xfsprogs-00444	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/sb.c	821	xlog_recover_do_trans	dbprintf(_("failed to set versionnum " "in AG %d\n"), ag); break;	medium	待判	
+xfsprogs-00445	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	33	-	usage(void) { fprintf(stderr, _(	high	待判	
+xfsprogs-00446	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	35	-	fprintf(stderr, _( "Usage: %s [-ifFrxV] [-p prog] [-l logdev] [-c cmd]... device\n" ), progname);	medium	待判	
+xfsprogs-00447	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	38	-	exit(1); }	high	待判	
+xfsprogs-00448	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	88	-	usage(); } }	high	待判	
+xfsprogs-00449	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	92	-	usage(); x.data.name = argv[optind];	high	待判	
+xfsprogs-00450	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	99	-	fputs(_("\nfatal error -- couldn't initialize XFS library\n"), stderr); exit(1);	medium	待判	
+xfsprogs-00451	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	101	-	exit(1); }	high	待判	
+xfsprogs-00452	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	113	-	fprintf(stderr, _("%s: %s is invalid (cannot read first 512 " "bytes)\n"), progname, x.data.name); exit(1);	high	待判	
+xfsprogs-00453	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	115	-	exit(1); }	high	待判	
+xfsprogs-00454	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	124	-	fprintf(stderr, _("%s: %s is not a valid XFS filesystem (unexpected SB magic number 0x%08x)\n"), progname, x.data.name, sbp->sb_magicnum); if (!force) {	medium	待判	
+xfsprogs-00455	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	127	-	fprintf(stderr, _("Use -F to force a read attempt.\n")); exit(EXIT_FAILURE); }	medium	待判	
+xfsprogs-00456	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	128	-	exit(EXIT_FAILURE); } }	high	待判	
+xfsprogs-00457	xfsprogs	6.6.0	T2	misc	error-report	error-report	db/init.c	135	-	fprintf(stderr, _("%s: device %s unusable (not an XFS filesystem?)\n"), progname, x.data.name);	medium	待判	
+xfsprogs-00458	xfsprogs	6.6.0	T2	misc	fatal-exit	fatal-exit	db/init.c	138	-	exit(1); } mp->m_log = &xlog;	high	待判	
+xfsprogs-00459	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	154	-	fprintf(stderr, _("%s: cannot init perag data (%d). Continuing anyway.\n"), progname, error);	high	待判	
+xfsprogs-00460	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/init.c	155	-	_("%s: cannot init perag data (%d). Continuing anyway.\n"), progname, error); }	high	待判	
+xfsprogs-00461	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/command.c	73	strcmp	dbprintf(_("command %s not found\n"), cmd); return 0; }	medium	待判	
+xfsprogs-00462	xfsprogs	6.6.0	T2	misc	refusal	refusal	db/command.c	77	strcmp	dbprintf(_("bad argument count %d to %s, expected "), argc-1, cmd); if (ct->argmax == -1) dbprintf(_("at least %d"), ct->argmin);	medium	待判	
