@@ -426,7 +426,7 @@ fn run_online_carrier(
             false,
         ));
     };
-    let sector_size = target_sector_size(platform, online.disk).unwrap_or(512);
+    let sector_size = target_sector_size(platform, online.disk).map_err(|error| (error, false))?;
     let request = OnlineRequest {
         mount_point: online.mount_point.to_path_buf(),
         device: online.device.to_path_buf(),
@@ -630,6 +630,9 @@ pub(super) fn execute_plan(
         }
     }
 
+    session
+        .complete_irreversible()
+        .map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     Ok(())
 }
@@ -814,7 +817,11 @@ pub(super) fn target_sector_size(platform: &dyn Platform, target: &Path) -> Resu
     let handle = platform
         .open_target_read_only(target)
         .map_err(ExecError::from)?;
-    Ok(handle.sector_size().unwrap_or(512))
+    handle.resolved_sector_size().ok_or_else(|| {
+        ExecError::Unsupported(
+            "the target's logical sector size is not reported; refusing to assume one".to_owned(),
+        )
+    })
 }
 
 /// 换区重建之前从旧首部读出的身份。
@@ -1855,10 +1862,10 @@ mod tests {
 
     // covers: I9
     #[test]
-    fn write_class_programs_are_named_and_re_verified() {
+    fn write_class_programs_are_named_and_bounded_by_the_token() {
         use diskedit_core::fs::Access;
-        // 执行器只经 Program 身份调用外部工具；写类工具只在不可逆意图帧落盘之后才
-        // 被调用，文件系统改写后以尺寸探针回读核对；只读探针不改变目标。
+        // 执行器只经 Program 身份调用外部工具。写类工具都带写令牌参数，且文件系统
+        // 改写后以尺寸探针回读核对；只读探针不改变目标。
         assert_eq!(Program::Dumpe2fs.access(), Access::ReadOnly);
         for program in [Program::E2fsck, Program::Resize2fs, Program::Mke2fs] {
             assert_eq!(

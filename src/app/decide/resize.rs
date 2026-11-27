@@ -335,7 +335,12 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
 /// 可编辑的表：GPT 与 MBR 主表。
 enum Resizable {
     Gpt(GptTable),
-    Mbr { lba0: Vec<u8>, total_lba: u64 },
+    Mbr {
+        lba0: Vec<u8>,
+        total_lba: u64,
+        /// 编辑前解析出的占用区间；解析失败在 `editable` 已按表损坏拒绝。
+        used: Vec<(u64, u64)>,
+    },
 }
 
 impl Resizable {
@@ -356,12 +361,7 @@ impl Resizable {
     fn used_ranges(&self) -> Vec<(u64, u64)> {
         match self {
             Self::Gpt(table) => table.used_ranges(),
-            // MBR 解析失败时不能当作"没有任何占用"：那会把整条盘尾算成空闲。这里
-            // 按"整盘已用"处理，宁可不给扩展空间，也不越过未知占用。
-            Self::Mbr { lba0, total_lba } => match edit::mbr_used_ranges(lba0, *total_lba) {
-                Ok(used) => used,
-                Err(_) => vec![(0, (*total_lba).max(1) - 1)],
-            },
+            Self::Mbr { used, .. } => used.clone(),
         }
     }
 
@@ -386,7 +386,9 @@ impl Resizable {
                 }
                 table.segments(&entries).map_err(|error| error.to_string())
             }
-            Self::Mbr { lba0, total_lba } => {
+            Self::Mbr {
+                lba0, total_lba, ..
+            } => {
                 let bytes = edit::resize_mbr(lba0, number, start, new_end, *total_lba)
                     .map_err(|error| error.to_string())?;
                 Ok(vec![Segment {
@@ -1027,14 +1029,20 @@ fn editable(snapshot: &ResizeSnapshot) -> Result<(Resizable, Option<Vec<u8>>), R
             let repaired = super::repair::adopt(&mut gpt, *state, *pmbr, lba0)?;
             Ok((Resizable::Gpt(gpt), repaired.protective_mbr))
         }
-        TableFacts::Mbr { lba0, total_lba } => Ok((
-            Resizable::Mbr {
-                lba0: lba0.clone(),
-                total_lba: *total_lba,
-            },
-            None,
-        )),
+        TableFacts::Mbr { lba0, total_lba } => Ok((mbr_resizable(lba0, *total_lba)?, None)),
     }
+}
+
+/// MBR 的可编辑形态：占用区间在这里解析一次，解析失败是表不可用，不是"没有占用"。
+fn mbr_resizable(lba0: &[u8], total_lba: u64) -> Result<Resizable, Refusal> {
+    let used = edit::mbr_used_ranges(lba0, total_lba).map_err(|error| Refusal::TableDamaged {
+        why: error.to_string(),
+    })?;
+    Ok(Resizable::Mbr {
+        lba0: lba0.to_vec(),
+        total_lba,
+        used,
+    })
 }
 
 /// 在线路径之前的使用事实：别的命名空间里的挂载、活动 swap 都不能在本次处理。
@@ -1903,4 +1911,23 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
         Plan::external(vec![step], identity),
         format!("resized the filesystem on partition #{number} through its mounted volume"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: I5
+    #[test]
+    fn an_mbr_table_too_short_for_entries_is_not_an_empty_table() {
+        // 短于一个扇区的 MBR 解析不出任何分区记录：占用区间是"不知道"，不是
+        // "没有占用"。按空集继续会让扩容把已有分区当成空白区域。
+        assert!(
+            matches!(
+                mbr_resizable(&[0u8; 64], 1024),
+                Err(Refusal::TableDamaged { .. })
+            ),
+            "解析不出分区记录的 MBR 必须拒绝，不能按无占用继续"
+        );
+    }
 }

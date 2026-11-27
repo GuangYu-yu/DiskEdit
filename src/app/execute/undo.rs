@@ -46,7 +46,7 @@ fn execute(
     }
     let site = prepare(platform, target, plan)?;
     let identity = plan.identity();
-    rollback(platform, target, &site.file, site.bytes, identity)
+    rollback(platform, target, &site.file, site.bytes, identity, mode)
 }
 
 /// 锁内现场：记录目录、记录文件与记录字节。回放与放弃共用这一段准入。
@@ -138,6 +138,7 @@ fn rollback(
     file: &Path,
     bytes: Option<Vec<u8>>,
     identity: Fingerprint,
+    mode: RecoverMode,
 ) -> Result<Outcome, (ExecError, bool)> {
     let Some(bytes) = bytes else {
         // 记录在执行层取锁前被清理：已无事可做。
@@ -158,6 +159,19 @@ fn rollback(
         )),
         RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why), false)),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
+            // 已执行过不可逆步骤（外部建卷/改数据区）的记录没有完整原像，`undo`
+            // 不能把它当成可回滚：那会把"外部动作已发生"悄悄清掉。`replay` 只回放
+            // 表区原像，仍可继续；彻底放弃走 `release`。
+            if mode == RecoverMode::Undo && frames.iter().any(|frame| frame.irreversible) {
+                return Err((
+                    ExecError::Record(
+                        "the record contains an irreversible step; build/format or data writes \
+                         cannot be rolled back — use `release` to abandon it explicitly"
+                            .to_owned(),
+                    ),
+                    false,
+                ));
+            }
             let plan = preimages(&frames).map_err(|error| (error, false))?;
             let pending = admit_replay(platform, target, &plan).map_err(|error| (error, false))?;
             let wrote = if pending {

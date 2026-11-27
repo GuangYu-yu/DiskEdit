@@ -95,6 +95,13 @@ impl<'a> RecordSession<'a> {
         {
             let decoded =
                 record::decode(&bytes).map_err(|error| ExecError::Record(error.to_string()))?;
+            // 记录目录按身份派生，但记录内容仍要自证归属：末帧未终结只说明"没做完"，
+            // 不说明它是本目标的记录。指向别的载体时拒绝，不能把它当作本目标的原像。
+            if !decoded.body.target.matches(identity) {
+                return Err(ExecError::Record(
+                    "the record targets a different device".to_owned(),
+                ));
+            }
             let last_pending = decoded
                 .frames
                 .last()
@@ -217,6 +224,57 @@ impl<'a> RecordSession<'a> {
         Ok(())
     }
 
+    /// 外部不可逆动作成功后追加完成帧。
+    ///
+    /// `begin_irreversible` 落下的意图帧是 `completed:false`：中断时恢复器无法
+    /// 判断外部动作是否已发生。驱动在外部动作成功后调用本方法把完成标记落盘，
+    /// 恢复器据此把"已完成的不可逆步骤"与"未完成的不可逆步骤"分开。
+    pub fn complete_irreversible(&mut self) -> Result<(), ExecError> {
+        if !self.registered {
+            return Err(ExecError::Record(
+                "no irreversible step was declared".to_owned(),
+            ));
+        }
+        self.rewrite_append(FrameKind::Progress, true, true, Vec::new())
+    }
+
+    /// 读回记录、追加一帧并整条重编码落盘。
+    fn rewrite_append(
+        &mut self,
+        kind: FrameKind,
+        completed: bool,
+        irreversible: bool,
+        intent: Vec<u8>,
+    ) -> Result<(), ExecError> {
+        let Some(existing) = crate::app::observe::records::read_bytes(self.platform, &self.file)
+            .map_err(ExecError::from)?
+        else {
+            return Err(ExecError::Record(
+                "the record vanished before it was completed".to_owned(),
+            ));
+        };
+        let mut decoded =
+            record::decode(&existing).map_err(|error| ExecError::Record(error.to_string()))?;
+        let seq = u32::try_from(decoded.frames.len())
+            .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
+        decoded.frames.push(Frame {
+            seq,
+            kind,
+            completed,
+            irreversible,
+            intent,
+            regions: Vec::new(),
+        });
+        let encoded = record::encode(&decoded.body, &decoded.frames)
+            .map_err(|error| ExecError::Record(error.to_string()))?;
+        self.platform
+            .write_record(&self.file, &encoded)
+            .map_err(ExecError::from)?;
+        // 下一条追加帧（例如提交帧）接着用这个序号，不能与刚追加的重复。
+        self.sequence = seq + 1;
+        Ok(())
+    }
+
     /// 本步原像已落盘，可以写目标字节。
     ///
     /// 令牌按值交出并绑定 `(会话, 步骤号, 区间摘要)`；同一步骤再次索取会失败，
@@ -237,28 +295,15 @@ impl<'a> RecordSession<'a> {
     }
 
     /// 追加提交帧、落盘并删除记录。
+    ///
+    /// 终态必须整条重写：只追加一帧而不更新头部时，恢复器按头声明长度截取载荷，
+    /// 看不到这条终态，会把已提交的写入当成待回滚。重写后即使删除记录前崩溃，
+    /// 盘上也已是完整的已提交记录。
     pub fn commit(&mut self) -> Result<(), ExecError> {
         if !self.registered {
             return Err(ExecError::Record("no preimage was registered".to_owned()));
         }
-        let mut encoded = crate::app::observe::records::read_bytes(self.platform, &self.file)
-            .map_err(ExecError::from)?
-            .ok_or_else(|| {
-                ExecError::Record("the record vanished before it could be committed".to_owned())
-            })?;
-        Frame {
-            seq: self.sequence,
-            kind: FrameKind::Committed,
-            completed: true,
-            irreversible: false,
-            intent: Vec::new(),
-            regions: Vec::new(),
-        }
-        .encode_into(&mut encoded)
-        .map_err(|error| ExecError::Record(error.to_string()))?;
-        self.platform
-            .write_record(&self.file, &encoded)
-            .map_err(ExecError::from)?;
+        self.rewrite_append(FrameKind::Committed, true, false, Vec::new())?;
         self.platform
             .remove_record(&self.file)
             .map_err(ExecError::from)?;

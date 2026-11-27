@@ -32,6 +32,8 @@ pub enum CaptureError {
     UnsupportedSector { bytes: u64 },
     /// 用户声明的身份名不适用于这个目标：它自身已能证明身份，或不是块设备。
     DeclaredIdentityNotApplicable,
+    /// 内核没有回报逻辑扇区尺寸，请求也没有声明：没有可信值。
+    SectorSizeUnknown,
     /// `--sector-size` 只命名镜像的扇区尺寸；块设备的逻辑扇区由内核给出。
     SectorSizeOnBlockDevice,
 }
@@ -58,6 +60,10 @@ impl std::fmt::Display for CaptureError {
             Self::UnsupportedSector { bytes } => write!(
                 f,
                 "the target's sector size {bytes} is outside the supported set (512..=65536, powers of two)"
+            ),
+            Self::SectorSizeUnknown => f.write_str(
+                "the target does not report a logical sector size and none was declared; \
+                 pass --sector-size",
             ),
             Self::DeclaredIdentityNotApplicable => f.write_str(
                 "--alias applies only to block devices with no readable WWN, EUI or repeatable \
@@ -130,9 +136,15 @@ pub struct RecoverSnapshot {
 pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, CaptureError> {
     let target = open_target(platform, request)?;
     let handle = platform.open_target_read_only(&target.path)?;
+    if handle.kind() == TargetKind::Other {
+        return Err(CaptureError::Unreadable {
+            why: "the target is neither a regular file nor a block device".to_owned(),
+        });
+    }
     let sector_size = handle
-        .sector_size()
-        .unwrap_or(request.sector_size().unwrap_or(512));
+        .resolved_sector_size()
+        .or(request.sector_size())
+        .ok_or(CaptureError::SectorSizeUnknown)?;
     if handle.len() < 512 {
         return Err(CaptureError::TooSmall {
             bytes: handle.len(),
@@ -210,10 +222,9 @@ pub(crate) fn open_target(
     }
     let declared = request.alias();
     // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
-    let strong = platform
-        .identity(path)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
+    // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
+    let fingerprint = platform.identity(path)?;
+    let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
     // `--alias` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
     // 在打开目标之前先判这一条，因此目标不存在时也报用法错误而不是拒绝。
     let declares =

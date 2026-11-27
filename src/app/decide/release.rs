@@ -202,4 +202,34 @@ mod tests {
             }
         }
     }
+
+    // covers: I5
+    #[test]
+    fn releasing_a_record_for_another_target_is_refused() {
+        // 记录自证属于别的载体：放弃也不能把它当作本目标的记录清掉。
+        let other = RecordBody {
+            target: Fingerprint::strong([0x99; 32]),
+            geometry_generation: 1,
+            plan_digest: [0x22; 32],
+        };
+        let frames = [frame(0, FrameKind::Intent, false, false, &[])];
+        let bytes = encode(&other, &frames).unwrap();
+        let decision = decide(
+            &snapshot(Some(bytes), Occupancy::Idle),
+            &request(Command::Release {
+                discard_replay: true,
+            }),
+        );
+        match decision {
+            Decision::Refuse(Refusal::RecoveryRefused { why }) => {
+                assert!(why.contains("different target"), "{why}");
+            }
+            other @ (Decision::Report { .. }
+            | Decision::Execute { .. }
+            | Decision::Unchanged { .. }
+            | Decision::Refuse(_)) => {
+                panic!("expected a refusal for a foreign target, got {other:?}")
+            }
+        }
+    }
 }

@@ -665,3 +665,72 @@ fn a_record_with_non_monotonic_frames_is_refused_before_writing() {
         "记录自相矛盾时不得写目标"
     );
 }
+
+// covers: F2
+#[test]
+fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
+    // 不可逆步骤（建卷、改数据区）没有原像可回滚。若在外部动作之后、终态帧之前中断，
+    // 记录末帧是未完成的不可逆意图：恢复不得报告"已回滚"并删掉记录，必须交人工判定。
+    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
+    memory.put(
+        &record_path(),
+        record_bytes(&[Frame {
+            seq: 0,
+            kind: FrameKind::Intent,
+            completed: false,
+            irreversible: true,
+            intent: b"make-filesystem".to_vec(),
+            regions: Vec::new(),
+        }]),
+    );
+    let outcome = run_mode(&memory, RecoverMode::Undo);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert!(
+        memory.get(&record_path()).is_some(),
+        "未完成的不可逆记录必须保留，不得当作已回滚清理"
+    );
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
+}
+
+// covers: F2
+#[test]
+fn a_completed_irreversible_step_is_not_undone() {
+    // 外部动作成功后驱动追加了完成帧；记录因此可以被识别为"不可逆步骤已完成"，
+    // 但 undo 仍不能把它当作可回滚：目标字节已不可恢复，必须显式 release。
+    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
+    memory.put(
+        &record_path(),
+        record_bytes(&[
+            Frame {
+                seq: 0,
+                kind: FrameKind::Intent,
+                completed: false,
+                irreversible: true,
+                intent: b"make-filesystem".to_vec(),
+                regions: Vec::new(),
+            },
+            Frame {
+                seq: 1,
+                kind: FrameKind::Progress,
+                completed: true,
+                irreversible: true,
+                intent: Vec::new(),
+                regions: Vec::new(),
+            },
+        ]),
+    );
+    let outcome = run_mode(&memory, RecoverMode::Undo);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert!(memory.get(&record_path()).is_some(), "记录必须保留");
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
+}
