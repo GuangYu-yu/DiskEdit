@@ -131,6 +131,8 @@ struct Memory {
     scan_files: Vec<PathBuf>,
     /// 让 `read_file` 以读故障结束，用于记录读取失败的语义。
     read_failure: bool,
+    /// 让 `identity` 以读故障结束，用于身份探测失败的语义。
+    identity_failure: bool,
 }
 
 impl Memory {
@@ -145,6 +147,7 @@ impl Memory {
             strong_identity: true,
             scan_files: Vec::new(),
             read_failure: false,
+            identity_failure: false,
         }
     }
 
@@ -199,7 +202,13 @@ impl Platform for Memory {
     fn is_partition_node(&self, _path: &Path) -> bool {
         false
     }
-    fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
+    fn identity(&self, path: &Path) -> PlatformResult<Fingerprint> {
+        if self.identity_failure {
+            return Err(PlatformError::io(
+                path,
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            ));
+        }
         if self.strong_identity {
             Ok(IDENTITY)
         } else {
@@ -596,6 +605,17 @@ fn a_record_that_cannot_be_read_is_an_environment_failure() {
     memory.read_failure = true;
     let code = dispatch(&memory, &["diskedit", "records", "list", "--root", "/root"]);
     assert_eq!(code, ENVIRONMENT, "读取记录失败必须按环境失败上报");
+}
+
+// covers: I15
+#[test]
+fn an_identity_that_cannot_be_read_is_not_reported_as_no_identity() {
+    // 身份探测读失败不能折成"这个目标没有身份"：那会让 `--alias` 变成兜底，
+    // 把读不出来的身份当成可声明的空位继续写。观察阶段的读故障按拒绝终止。
+    let mut memory = Memory::new(vec![0u8; 4096], Faults::default());
+    memory.identity_failure = true;
+    let code = dispatch(&memory, &["diskedit", "layout", "memory"]);
+    assert_eq!(code, REFUSED, "身份读失败必须拒绝，不能当作没有身份");
 }
 
 // covers: I14

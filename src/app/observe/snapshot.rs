@@ -222,10 +222,9 @@ pub(crate) fn open_target(
     }
     let declared = request.alias();
     // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
-    let strong = platform
-        .identity(path)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
+    // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
+    let fingerprint = platform.identity(path)?;
+    let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
     // `--alias` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
     // 在打开目标之前先判这一条，因此目标不存在时也报用法错误而不是拒绝。
     let declares =

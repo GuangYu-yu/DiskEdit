@@ -181,10 +181,9 @@ pub(super) fn open_disk(
     request: &Request,
 ) -> Result<TargetFacts, CaptureError> {
     let handle = platform.open_target_read_only(disk)?;
-    let strong = platform
-        .identity(disk)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
+    // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
+    let fingerprint = platform.identity(disk)?;
+    let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
     let identity = request
         .alias()
         .map(diskedit_core::fingerprint::Fingerprint::declared)
