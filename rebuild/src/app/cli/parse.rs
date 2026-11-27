@@ -1003,6 +1003,9 @@ mod tests {
         assert_eq!(absolute_size("9.5G").unwrap(), 9 * (1 << 30) + (1 << 29));
         assert_eq!(absolute_size("512M").unwrap(), 512 * (1 << 20));
         assert_eq!(absolute_size("1024").unwrap(), 1024);
+        // 小数最多 18 位，按整数分子/分母精确换算；不足一字节的余额向下取整。
+        assert_eq!(absolute_size("1.000000000000000001G").unwrap(), 1 << 30);
+        assert!(absolute_size("1.0000000000000000001G").is_err());
         // add 的绝对尺寸不接受相对写法。
         for bad in ["+32M", "-32M", "32%", "abc", "1.2.3G"] {
             assert!(absolute_size(bad).is_err(), "{bad} 不应被接受");
