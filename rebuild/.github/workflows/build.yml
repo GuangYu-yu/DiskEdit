@@ -1,0 +1,70 @@
+name: 构建和发布
+
+# 触发：推送 v* 标签，或手动。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.set.outputs.include }}
+    steps:
+      - id: set
+        run: |
+          arr=()
+          arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          echo "include=[$(IFS=,; echo "${arr[*]}")]" >> $GITHUB_OUTPUT
+
+  release:
+    name: 构建 ${{ matrix.entry.os }} ${{ matrix.entry.arch }}
+    needs: matrix
+    runs-on: ${{ matrix.entry.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJson(needs.matrix.outputs.include) }}
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.entry.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
+      - name: 安装 musl 工具链（ARM64 musl 需要）
+        if: matrix.entry.target == 'aarch64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools musl-dev
+      - name: 构建 release（静态链接）
+        run: cargo build --release --target ${{ matrix.entry.target }}
+      - name: 打包
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.entry.target }}/release/${{ matrix.entry.bin }} dist/
+          tar czf DiskEdit-${{ matrix.entry.os }}-${{ matrix.entry.arch }}.tar.gz -C dist $(basename ${{ matrix.entry.bin }})
+          sha256sum DiskEdit-${{ matrix.entry.os }}-${{ matrix.entry.arch }}.tar.gz > DiskEdit-${{ matrix.entry.os }}-${{ matrix.entry.arch }}.tar.gz.sha256
+      - name: 挂到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rebuild/DiskEdit-*.tar.gz
+            rebuild/DiskEdit-*.tar.gz.sha256
+          generate_release_notes: true
+      - name: 上传 artifact（手动触发时）
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiskEdit-${{ matrix.entry.os }}-${{ matrix.entry.arch }}
+          path: rebuild/DiskEdit-*.tar.gz*
