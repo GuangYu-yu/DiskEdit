@@ -18,6 +18,115 @@ pub fn files() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// 双语逐段对账表的入库文件名（相对 `rebuild/`）。
+///
+/// 双语目录（`docs/en`、`docs/zh`）只放 Markdown；对账契约单独放 `docs/` 下，
+/// 由本函数生成、`tests/generated_docs.rs` 逐字比对——任何一侧增删段都会红。
+pub const I18N_CATALOGUE: &str = "docs/catalogue.json";
+
+/// 一段：标题行与它下面的段落（按空行分段，每段取首行作识读标签）。
+struct DocSection<'a> {
+    heading: &'a str,
+    paragraphs: Vec<&'a str>,
+}
+
+fn sections_of(text: &str) -> Vec<DocSection<'_>> {
+    let mut out: Vec<DocSection<'_>> = Vec::new();
+    let mut paragraph_open = false;
+    for line in text.lines() {
+        if line.starts_with('#') {
+            paragraph_open = false;
+            out.push(DocSection { heading: line, paragraphs: Vec::new() });
+            continue;
+        }
+        let empty = line.trim().is_empty();
+        if let Some(section) = out.last_mut() {
+            if empty {
+                paragraph_open = false;
+            } else if !paragraph_open {
+                section.paragraphs.push(line);
+                paragraph_open = true;
+            }
+        }
+    }
+    out
+}
+
+fn json_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 生成双语对账表：英文生成物与中文译本的每一段一一对应，段序与段落数一致。
+///
+/// `pairs` 是 `(英文路径, 英文正文, 中文路径, 中文正文)`。不对齐即 panic——
+/// 生成器本身就是守卫，失败消息指出缺哪一段，写盘不会发生。
+pub fn i18n_catalogue(pairs: &[(&str, &str, &str, &str)]) -> String {
+    let mut out = String::from("{\n  \"generated_by\": \"docsgen\",\n  \"note\": \"Bilingual section ledger: every English section needs a Chinese section in the same order with the same paragraph count. Generated file; do not edit by hand.\",\n  \"regenerate\": \"DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs\",\n  \"documents\": [\n");
+    for (index, (en_path, en_text, zh_path, zh_text)) in pairs.iter().enumerate() {
+        let en_sections = sections_of(en_text);
+        let zh_sections = sections_of(zh_text);
+        assert_eq!(
+            en_sections.len(),
+            zh_sections.len(),
+            "{zh_path} 的段数与 {en_path} 不一致：英文 {} 段、中文 {} 段",
+            en_sections.len(),
+            zh_sections.len()
+        );
+        out.push_str(&format!(
+            "    {{\n      \"en\": \"{}\",\n      \"zh\": \"{}\",\n      \"sections\": [\n",
+            json_escape(en_path),
+            json_escape(zh_path)
+        ));
+        for (position, (en, zh)) in en_sections.iter().zip(&zh_sections).enumerate() {
+            let is_command = en
+                .heading
+                .trim_start_matches('#')
+                .trim()
+                .starts_with('`');
+            if is_command {
+                assert_eq!(
+                    en.heading, zh.heading,
+                    "{} 的第 {position} 段标题与 {} 不一致：命令标题必须逐字相同",
+                    zh_path, en_path
+                );
+            }
+            assert_eq!(
+                en.paragraphs.len(),
+                zh.paragraphs.len(),
+                "{} 的 `{}` 段落数与 {} 不一致（英文 {}、中文 {}）——译文漏段或英文新增未译",
+                zh_path,
+                en.heading.trim_start_matches('#').trim(),
+                en_path,
+                en.paragraphs.len(),
+                zh.paragraphs.len()
+            );
+            out.push_str(&format!(
+                "        {{ \"en\": \"{}\", \"zh\": \"{}\", \"paragraphs\": {} }}{}\n",
+                json_escape(en.heading),
+                json_escape(zh.heading),
+                en.paragraphs.len(),
+                if position + 1 == en_sections.len() { "" } else { "," }
+            ));
+        }
+        out.push_str(&format!(
+            "      ]\n    }}{}\n",
+            if index + 1 == pairs.len() { "" } else { "," }
+        ));
+    }
+    out.push_str("  ]\n}\n");
+    out
+}
+
 /// 生成物与 `COMMANDS` 的一致性约束；生成器与用例共用。
 pub fn check_consistency() {
     let declared: Vec<&str> = declare::COMMANDS
