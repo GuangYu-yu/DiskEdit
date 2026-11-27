@@ -996,6 +996,19 @@ mod tests {
         }
     }
 
+    // covers: D14
+    #[test]
+    fn fractional_sizes_convert_to_exact_bytes_without_truncating() {
+        // 9.5G = 9.5 × 2^30 字节（K/M/G/T 为二进制单位，即 2 的幂），不截断成 9G。
+        assert_eq!(absolute_size("9.5G").unwrap(), 9 * (1 << 30) + (1 << 29));
+        assert_eq!(absolute_size("512M").unwrap(), 512 * (1 << 20));
+        assert_eq!(absolute_size("1024").unwrap(), 1024);
+        // add 的绝对尺寸不接受相对写法。
+        for bad in ["+32M", "-32M", "32%", "abc", "1.2.3G"] {
+            assert!(absolute_size(bad).is_err(), "{bad} 不应被接受");
+        }
+    }
+
     #[test]
     fn target_suffix_keeps_unparseable_colons_in_the_path() {
         let request = parse_words(&["layout", "weird:name.img"]).expect("合法");
