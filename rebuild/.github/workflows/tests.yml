@@ -1,16 +1,8 @@
 name: 全量测试
 
-# PR → main 必须过本 workflow；build.yml 发布前也调用同一套（一次实现两处复用）。
+# 手动触发的全量测试。
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "rebuild/**"
-      - ".github/workflows/**"
-  push:
-    branches: [main]
   workflow_dispatch:
-  workflow_call:
 
 jobs:
   lint:

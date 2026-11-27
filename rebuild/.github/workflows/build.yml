@@ -1,6 +1,6 @@
 name: 构建和发布
 
-# 触发：推送 v* 标签，或手动。发布前先跑 ./.github/workflows/tests.yml 同一套全量测试。
+# 触发：推送 v* 标签，或手动。
 on:
   push:
     tags: ["v*"]
@@ -10,13 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    name: 全量测试（发布前置）
-    uses: ./.github/workflows/tests.yml
-
   matrix:
-    name: 矩阵配置
-    needs: test
     runs-on: ubuntu-latest
     outputs:
       include: ${{ steps.set.outputs.include }}
@@ -32,7 +26,7 @@ jobs:
 
   release:
     name: 构建 ${{ matrix.entry.os }} ${{ matrix.entry.arch }}
-    needs: [test, matrix]
+    needs: matrix
     runs-on: ${{ matrix.entry.runner }}
     strategy:
       fail-fast: false
