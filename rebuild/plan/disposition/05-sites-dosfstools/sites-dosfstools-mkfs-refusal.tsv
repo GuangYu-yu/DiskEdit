@@ -1,21 +1,21 @@
 row_id	ledger	state	note
-dosfstools-00213	sites	待判	
-dosfstools-00215	sites	待判	
-dosfstools-00217	sites	待判	
-dosfstools-00219	sites	待判	
-dosfstools-00221	sites	待判	
-dosfstools-00254	sites	待判	
-dosfstools-00256	sites	待判	
-dosfstools-00257	sites	待判	
-dosfstools-00261	sites	待判	
-dosfstools-00262	sites	待判	
-dosfstools-00266	sites	待判	
-dosfstools-00267	sites	待判	
-dosfstools-00268	sites	待判	
-dosfstools-00275	sites	待判	
-dosfstools-00276	sites	待判	
-dosfstools-00277	sites	待判	
-dosfstools-00278	sites	待判	
-dosfstools-00318	sites	待判	
-dosfstools-00340	sites	待判	
-dosfstools-00350	sites	待判	
+dosfstools-00213	sites	裁剪	-l 坏块清单特性不暴露。依据：SA2-011、特性依据=坏块扫描面
+dosfstools-00215	sites	裁剪	同上
+dosfstools-00217	sites	裁剪	同上
+dosfstools-00219	sites	裁剪	同上
+dosfstools-00221	sites	裁剪	同上
+dosfstools-00254	sites	认领	写失败语义已有：工具写失败→退出码→不谎报完成（execute 写类判定）。依据：SA2-002 同型
+dosfstools-00256	sites	认领	同上
+dosfstools-00257	sites	认领	同上
+dosfstools-00261	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
+dosfstools-00262	sites	裁剪	同上
+dosfstools-00266	sites	裁剪	同上
+dosfstools-00267	sites	裁剪	同上
+dosfstools-00268	sites	裁剪	同上
+dosfstools-00275	sites	裁剪	同上
+dosfstools-00276	sites	裁剪	同上
+dosfstools-00277	sites	裁剪	同上
+dosfstools-00278	sites	裁剪	同上
+dosfstools-00318	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00340	sites	认领	同上
+dosfstools-00350	sites	认领	同上

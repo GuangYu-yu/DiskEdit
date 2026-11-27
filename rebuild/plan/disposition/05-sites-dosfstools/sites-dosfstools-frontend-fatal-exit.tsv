@@ -1,57 +1,57 @@
 row_id	ledger	state	note
-dosfstools-00001	sites	待判	
-dosfstools-00002	sites	待判	
-dosfstools-00003	sites	待判	
-dosfstools-00004	sites	待判	
-dosfstools-00005	sites	待判	
-dosfstools-00009	sites	待判	
-dosfstools-00010	sites	待判	
-dosfstools-00011	sites	待判	
-dosfstools-00012	sites	待判	
-dosfstools-00013	sites	待判	
-dosfstools-00014	sites	待判	
-dosfstools-00015	sites	待判	
-dosfstools-00016	sites	待判	
-dosfstools-00017	sites	待判	
-dosfstools-00018	sites	待判	
-dosfstools-00019	sites	待判	
-dosfstools-00021	sites	待判	
-dosfstools-00024	sites	待判	
-dosfstools-00025	sites	待判	
-dosfstools-00026	sites	待判	
-dosfstools-00027	sites	待判	
-dosfstools-00028	sites	待判	
-dosfstools-00029	sites	待判	
-dosfstools-00030	sites	待判	
-dosfstools-00031	sites	待判	
-dosfstools-00081	sites	待判	
-dosfstools-00085	sites	待判	
-dosfstools-00089	sites	待判	
-dosfstools-00090	sites	待判	
-dosfstools-00091	sites	待判	
-dosfstools-00094	sites	待判	
-dosfstools-00095	sites	待判	
-dosfstools-00096	sites	待判	
-dosfstools-00097	sites	待判	
-dosfstools-00098	sites	待判	
-dosfstools-00099	sites	待判	
-dosfstools-00100	sites	待判	
-dosfstools-00102	sites	待判	
-dosfstools-00103	sites	待判	
-dosfstools-00105	sites	待判	
-dosfstools-00106	sites	待判	
-dosfstools-00107	sites	待判	
-dosfstools-00108	sites	待判	
-dosfstools-00109	sites	待判	
-dosfstools-00110	sites	待判	
-dosfstools-00112	sites	待判	
-dosfstools-00148	sites	待判	
-dosfstools-00149	sites	待判	
-dosfstools-00150	sites	待判	
-dosfstools-00151	sites	待判	
-dosfstools-00152	sites	待判	
-dosfstools-00197	sites	待判	
-dosfstools-00198	sites	待判	
-dosfstools-00199	sites	待判	
-dosfstools-00203	sites	待判	
-dosfstools-00204	sites	待判	
+dosfstools-00001	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00002	sites	认领	同上
+dosfstools-00003	sites	认领	同上
+dosfstools-00004	sites	认领	同上
+dosfstools-00005	sites	认领	同上
+dosfstools-00009	sites	认领	同上
+dosfstools-00010	sites	认领	同上
+dosfstools-00011	sites	认领	同上
+dosfstools-00012	sites	认领	同上
+dosfstools-00013	sites	认领	同上
+dosfstools-00014	sites	认领	同上
+dosfstools-00015	sites	认领	同上
+dosfstools-00016	sites	认领	同上
+dosfstools-00017	sites	认领	同上
+dosfstools-00018	sites	认领	同上
+dosfstools-00019	sites	认领	同上
+dosfstools-00021	sites	认领	同上
+dosfstools-00024	sites	认领	同上
+dosfstools-00025	sites	认领	同上
+dosfstools-00026	sites	认领	同上
+dosfstools-00027	sites	认领	同上
+dosfstools-00028	sites	认领	同上
+dosfstools-00029	sites	认领	同上
+dosfstools-00030	sites	认领	同上
+dosfstools-00031	sites	认领	同上
+dosfstools-00081	sites	认领	同上
+dosfstools-00085	sites	认领	同上
+dosfstools-00089	sites	认领	同上
+dosfstools-00090	sites	认领	同上
+dosfstools-00091	sites	认领	同上
+dosfstools-00094	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00095	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00096	sites	认领	同上
+dosfstools-00097	sites	认领	同上
+dosfstools-00098	sites	认领	同上
+dosfstools-00099	sites	认领	同上
+dosfstools-00100	sites	认领	同上
+dosfstools-00102	sites	认领	同上
+dosfstools-00103	sites	认领	同上
+dosfstools-00105	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00106	sites	拒绝	同上
+dosfstools-00107	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00108	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00109	sites	拒绝	同上
+dosfstools-00110	sites	拒绝	同上
+dosfstools-00112	sites	拒绝	同上
+dosfstools-00148	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00149	sites	认领	同上
+dosfstools-00150	sites	认领	同上
+dosfstools-00151	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00152	sites	拒绝	同上
+dosfstools-00197	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00198	sites	认领	同上
+dosfstools-00199	sites	认领	同上
+dosfstools-00203	sites	认领	同上
+dosfstools-00204	sites	认领	同上

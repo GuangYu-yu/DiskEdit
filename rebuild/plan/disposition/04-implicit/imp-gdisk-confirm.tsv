@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-gdisk-imp-00004	implicit	待判	
-gdisk-imp-00005	implicit	待判	
-gdisk-imp-00014	implicit	待判	
+gdisk-imp-00004	implicit	认领	ForceLoadGPTData 主备回退 ↔ 撕裂恢复判定矩阵自动选择（交互问询不复制）；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-imp-00005	implicit	认领	ForceLoadGPTData 主备回退 ↔ 撕裂恢复判定矩阵自动选择（交互问询不复制）；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-imp-00014	implicit	认领	ForceLoadGPTData 主备回退 ↔ 撕裂恢复判定矩阵自动选择（交互问询不复制）；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action

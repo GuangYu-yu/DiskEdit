@@ -1,76 +1,76 @@
 row_id	ledger	state	note
-dosfstools-00205	sites	待判	
-dosfstools-00206	sites	待判	
-dosfstools-00207	sites	待判	
-dosfstools-00208	sites	待判	
-dosfstools-00210	sites	待判	
-dosfstools-00212	sites	待判	
-dosfstools-00214	sites	待判	
-dosfstools-00216	sites	待判	
-dosfstools-00218	sites	待判	
-dosfstools-00220	sites	待判	
-dosfstools-00222	sites	待判	
-dosfstools-00224	sites	待判	
-dosfstools-00226	sites	待判	
-dosfstools-00227	sites	待判	
-dosfstools-00229	sites	待判	
-dosfstools-00230	sites	待判	
-dosfstools-00231	sites	待判	
-dosfstools-00233	sites	待判	
-dosfstools-00234	sites	待判	
-dosfstools-00239	sites	待判	
-dosfstools-00241	sites	待判	
-dosfstools-00242	sites	待判	
-dosfstools-00244	sites	待判	
-dosfstools-00245	sites	待判	
-dosfstools-00246	sites	待判	
-dosfstools-00247	sites	待判	
-dosfstools-00248	sites	待判	
-dosfstools-00249	sites	待判	
-dosfstools-00250	sites	待判	
-dosfstools-00251	sites	待判	
-dosfstools-00252	sites	待判	
-dosfstools-00253	sites	待判	
-dosfstools-00255	sites	待判	
-dosfstools-00258	sites	待判	
-dosfstools-00293	sites	待判	
-dosfstools-00295	sites	待判	
-dosfstools-00297	sites	待判	
-dosfstools-00299	sites	待判	
-dosfstools-00301	sites	待判	
-dosfstools-00303	sites	待判	
-dosfstools-00305	sites	待判	
-dosfstools-00307	sites	待判	
-dosfstools-00309	sites	待判	
-dosfstools-00310	sites	待判	
-dosfstools-00312	sites	待判	
-dosfstools-00316	sites	待判	
-dosfstools-00317	sites	待判	
-dosfstools-00319	sites	待判	
-dosfstools-00320	sites	待判	
-dosfstools-00322	sites	待判	
-dosfstools-00324	sites	待判	
-dosfstools-00326	sites	待判	
-dosfstools-00328	sites	待判	
-dosfstools-00329	sites	待判	
-dosfstools-00331	sites	待判	
-dosfstools-00333	sites	待判	
-dosfstools-00335	sites	待判	
-dosfstools-00337	sites	待判	
-dosfstools-00338	sites	待判	
-dosfstools-00339	sites	待判	
-dosfstools-00341	sites	待判	
-dosfstools-00342	sites	待判	
-dosfstools-00343	sites	待判	
-dosfstools-00345	sites	待判	
-dosfstools-00347	sites	待判	
-dosfstools-00348	sites	待判	
-dosfstools-00349	sites	待判	
-dosfstools-00351	sites	待判	
-dosfstools-00352	sites	待判	
-dosfstools-00353	sites	待判	
-dosfstools-00354	sites	待判	
-dosfstools-00355	sites	待判	
-dosfstools-00356	sites	待判	
-dosfstools-00358	sites	待判	
-dosfstools-00362	sites	待判	
+dosfstools-00205	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00206	sites	拒绝	同上
+dosfstools-00207	sites	拒绝	同上
+dosfstools-00208	sites	裁剪	-c/-l 坏块特性不暴露：固定参数调用。依据：SA2-011、特性依据=坏块扫描面
+dosfstools-00210	sites	裁剪	同上
+dosfstools-00212	sites	裁剪	同上
+dosfstools-00214	sites	裁剪	同上
+dosfstools-00216	sites	裁剪	同上
+dosfstools-00218	sites	裁剪	同上
+dosfstools-00220	sites	裁剪	同上
+dosfstools-00222	sites	裁剪	同上
+dosfstools-00224	sites	认领	占用闸在决策层，写前拒绝（挂载/占用沿 holders 递归）。依据：SA1-004、SA1-025
+dosfstools-00226	sites	认领	依赖行为：mkfs.vfat/fsck.vfat/fatlabel 以固定参数调用（crates/core/src/fs/catalog.rs Support::Tools、program.rs Program::MkfsVfat/FsckVfat/Fatlabel），工具内部校验调用时原样生效，退出码映射 src/app/execute/diagnose.rs。依据：SA2-012
+dosfstools-00227	sites	认领	同上
+dosfstools-00229	sites	认领	同上
+dosfstools-00230	sites	认领	同上
+dosfstools-00231	sites	认领	同上
+dosfstools-00233	sites	认领	同上
+dosfstools-00234	sites	认领	同上
+dosfstools-00239	sites	认领	同上
+dosfstools-00241	sites	认领	同上
+dosfstools-00242	sites	认领	同上
+dosfstools-00244	sites	认领	同上
+dosfstools-00245	sites	认领	同上
+dosfstools-00246	sites	认领	同上
+dosfstools-00247	sites	认领	同上
+dosfstools-00248	sites	认领	同上
+dosfstools-00249	sites	认领	同上
+dosfstools-00250	sites	认领	同上
+dosfstools-00251	sites	认领	同上
+dosfstools-00252	sites	认领	同上
+dosfstools-00253	sites	认领	同上
+dosfstools-00255	sites	认领	同上
+dosfstools-00258	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00293	sites	拒绝	同上
+dosfstools-00295	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面 建议拆分:sites-dosfstools-mkfs-fatal-exit-cli
+dosfstools-00297	sites	裁剪	同上
+dosfstools-00299	sites	裁剪	同上
+dosfstools-00301	sites	裁剪	同上
+dosfstools-00303	sites	裁剪	同上
+dosfstools-00305	sites	裁剪	同上
+dosfstools-00307	sites	裁剪	同上
+dosfstools-00309	sites	裁剪	同上
+dosfstools-00310	sites	裁剪	同上
+dosfstools-00312	sites	裁剪	同上
+dosfstools-00316	sites	裁剪	同上
+dosfstools-00317	sites	裁剪	同上
+dosfstools-00319	sites	裁剪	同上
+dosfstools-00320	sites	裁剪	同上
+dosfstools-00322	sites	裁剪	同上
+dosfstools-00324	sites	裁剪	同上
+dosfstools-00326	sites	裁剪	同上
+dosfstools-00328	sites	裁剪	同上
+dosfstools-00329	sites	裁剪	同上
+dosfstools-00331	sites	裁剪	同上
+dosfstools-00333	sites	裁剪	同上
+dosfstools-00335	sites	裁剪	同上
+dosfstools-00337	sites	裁剪	同上
+dosfstools-00338	sites	裁剪	同上
+dosfstools-00339	sites	裁剪	同上
+dosfstools-00341	sites	裁剪	同上
+dosfstools-00342	sites	裁剪	同上
+dosfstools-00343	sites	裁剪	同上
+dosfstools-00345	sites	裁剪	同上
+dosfstools-00347	sites	裁剪	同上
+dosfstools-00348	sites	裁剪	同上
+dosfstools-00349	sites	裁剪	同上
+dosfstools-00351	sites	裁剪	同上
+dosfstools-00352	sites	裁剪	同上
+dosfstools-00353	sites	裁剪	同上
+dosfstools-00354	sites	裁剪	同上
+dosfstools-00355	sites	裁剪	同上
+dosfstools-00356	sites	裁剪	同上
+dosfstools-00358	sites	认领	带偏移视图边界已有：分区目标由表解析（SA2-014 同域；本实现不向 mkfs 传原始 offset）。依据：SA2-014
+dosfstools-00362	sites	认领	占用闸在决策层，写前拒绝（挂载/占用沿 holders 递归）。依据：SA1-004、SA1-025

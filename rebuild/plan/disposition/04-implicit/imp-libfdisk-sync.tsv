@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-libfdisk-imp-00006	implicit	待判	
-libfdisk-imp-00021	implicit	待判	
-libfdisk-imp-00031	implicit	待判	
+libfdisk-imp-00006	implicit	认领	依据 SA1-011：写后 sync_all 且错误上抛，绝不带未落盘状态报完成；锚 src/platform/linux/mod.rs::barrier
+libfdisk-imp-00021	implicit	认领	同上
+libfdisk-imp-00031	implicit	认领	同上；move-data 的 movefsync 失败不再告警继续——SA1-011 已把该差异翻转为错误上抛

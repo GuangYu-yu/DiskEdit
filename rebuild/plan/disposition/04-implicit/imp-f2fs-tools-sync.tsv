@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-f2fs-tools-imp-00047	implicit	待判	
-f2fs-tools-imp-00050	implicit	待判	
+f2fs-tools-imp-00047	implicit	认领	依据 SA1-011：写后 sync_all 且错误上抛，绝不带未落盘状态报完成；锚 src/platform/linux/mod.rs::barrier
+f2fs-tools-imp-00050	implicit	认领	同上

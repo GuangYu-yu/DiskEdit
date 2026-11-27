@@ -1,39 +1,39 @@
 row_id	ledger	state	note
-gdisk-doc-00001	docs	待判	
-gdisk-doc-00002	docs	待判	
-gdisk-doc-00003	docs	待判	
-gdisk-doc-00004	docs	待判	
-gdisk-doc-00005	docs	待判	
-gdisk-doc-00006	docs	待判	
-gdisk-doc-00007	docs	待判	
-gdisk-doc-00008	docs	待判	
-gdisk-doc-00009	docs	待判	
-gdisk-doc-00010	docs	待判	
-gdisk-doc-00011	docs	待判	
-gdisk-doc-00012	docs	待判	
-gdisk-doc-00013	docs	待判	
-gdisk-doc-00014	docs	待判	
-gdisk-doc-00015	docs	待判	
-gdisk-doc-00016	docs	待判	
-gdisk-doc-00017	docs	待判	
-gdisk-doc-00018	docs	待判	
-gdisk-doc-00019	docs	待判	
-gdisk-doc-00020	docs	待判	
-gdisk-doc-00021	docs	待判	
-gdisk-doc-00022	docs	待判	
-gdisk-doc-00023	docs	待判	
-gdisk-doc-00024	docs	待判	
-gdisk-doc-00025	docs	待判	
-gdisk-doc-00026	docs	待判	
-gdisk-doc-00027	docs	待判	
-gdisk-doc-00028	docs	待判	
-gdisk-doc-00029	docs	待判	
-gdisk-doc-00030	docs	待判	
-gdisk-doc-00031	docs	待判	
-gdisk-doc-00032	docs	待判	
-gdisk-doc-00033	docs	待判	
-gdisk-doc-00034	docs	待判	
-gdisk-doc-00035	docs	待判	
-gdisk-doc-00036	docs	待判	
-gdisk-doc-00037	docs	待判	
-gdisk-doc-00038	docs	待判	
+gdisk-doc-00001	docs	裁剪	man 页 BUGS 节标题行，无独立行为面（随同节各条处置）
+gdisk-doc-00002	docs	裁剪	平台面：仅编译于 Linux/FreeBSD/Mac/Windows；本实现仅 Linux 后端（D10 非 Linux 后端一律拒绝）
+gdisk-doc-00003	docs	裁剪	FreeBSD 挂载卷写入限制；Linux 侧"挂载即拒绝写"由占用闸承接（SA1-004）
+gdisk-doc-00004	docs	裁剪	MBR→GPT 转换特性不实现；GPT 条目数下限 128 由 new 承接（GPT-020）
+gdisk-doc-00005	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00006	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00007	docs	裁剪	BSD disklabel 转换不实现（SA1-016 老盘标）
+gdisk-doc-00008	docs	裁剪	同 gdisk-doc-00007
+gdisk-doc-00009	docs	裁剪	转换后引导面（混合 MBR 需求）；SA3-002：混合 MBR 只读接受、写表收敛规范 PMBR
+gdisk-doc-00010	docs	裁剪	cgdisk 交互 TUI 显示面（交互菜单裁剪）
+gdisk-doc-00011	docs	裁剪	同 gdisk-doc-00001
+gdisk-doc-00012	docs	裁剪	同 gdisk-doc-00002
+gdisk-doc-00013	docs	裁剪	同 gdisk-doc-00003
+gdisk-doc-00014	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00015	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00016	docs	裁剪	fixparts 工具不实现；分区号稳定语义由本实现 add/delete 规则承接（edit.rs 首个空槽、不重排既有编号）
+gdisk-doc-00017	docs	裁剪	同 gdisk-doc-00016
+gdisk-doc-00018	docs	裁剪	同 gdisk-doc-00001
+gdisk-doc-00019	docs	裁剪	同 gdisk-doc-00002
+gdisk-doc-00020	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00021	docs	裁剪	14 字符列宽显示限制属交互显示面；本实现 info 为 JSON 无固定列宽（D9）
+gdisk-doc-00022	docs	裁剪	Windows 版 ASCII 名称限制（D10）；本实现 UTF-16 名称处理见 GPT-006
+gdisk-doc-00023	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00024	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00025	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00026	docs	裁剪	同 gdisk-doc-00007
+gdisk-doc-00027	docs	裁剪	同 gdisk-doc-00007
+gdisk-doc-00028	docs	裁剪	同 gdisk-doc-00009
+gdisk-doc-00029	docs	裁剪	同 gdisk-doc-00001
+gdisk-doc-00030	docs	裁剪	同 gdisk-doc-00002
+gdisk-doc-00031	docs	裁剪	同 gdisk-doc-00003
+gdisk-doc-00032	docs	裁剪	同 gdisk-doc-00021
+gdisk-doc-00033	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00034	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00035	docs	裁剪	同 gdisk-doc-00004
+gdisk-doc-00036	docs	裁剪	同 gdisk-doc-00007
+gdisk-doc-00037	docs	裁剪	同 gdisk-doc-00007
+gdisk-doc-00038	docs	裁剪	同 gdisk-doc-00009

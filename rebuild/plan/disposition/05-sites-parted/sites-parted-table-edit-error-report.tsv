@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-parted-00325	sites	待判	
+parted-00325	sites	拒绝	拒绝|架构差异-多虑：调试输出（probe label 打印+fflush）；非用户面，stdout 刷新为老古董细节

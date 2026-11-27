@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-xfsprogs-doc-00001	docs	待判	
-xfsprogs-doc-00002	docs	待判	
+xfsprogs-doc-00001	docs	认领	SA2-004/005：xfs_growfs 只增不减、按挂载点寻址；扩容须先有新空间（表写→BLKPG→xfs_growfs，tests/online.rs 顺序锚定）
+xfsprogs-doc-00002	docs	裁剪	mkfs.xfs 原型文件特性属上游选项面；本实现 mkfs 以档案表固定参数调用（SA2-012）

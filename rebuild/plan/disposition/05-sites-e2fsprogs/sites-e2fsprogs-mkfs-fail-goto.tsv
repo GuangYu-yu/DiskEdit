@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-e2fsprogs-00442	sites	待判	
-e2fsprogs-00443	sites	待判	
-e2fsprogs-00603	sites	待判	
-e2fsprogs-00604	sites	待判	
-e2fsprogs-00605	sites	待判	
-e2fsprogs-00607	sites	待判	
-e2fsprogs-00608	sites	待判	
-e2fsprogs-00610	sites	待判	
-e2fsprogs-00611	sites	待判	
-e2fsprogs-00612	sites	待判	
-e2fsprogs-01974	sites	待判	
-e2fsprogs-01975	sites	待判	
-e2fsprogs-01976	sites	待判	
-e2fsprogs-01977	sites	待判	
-e2fsprogs-01978	sites	待判	
-e2fsprogs-01979	sites	待判	
-e2fsprogs-01980	sites	待判	
-e2fsprogs-01981	sites	待判	
-e2fsprogs-01982	sites	待判	
-e2fsprogs-01983	sites	待判	
-e2fsprogs-01984	sites	待判	
-e2fsprogs-01985	sites	待判	
-e2fsprogs-01986	sites	待判	
-e2fsprogs-01987	sites	待判	
-e2fsprogs-01988	sites	待判	
-e2fsprogs-01989	sites	待判	
-e2fsprogs-01990	sites	待判	
-e2fsprogs-01991	sites	待判	
+e2fsprogs-00442	sites	裁剪	裁剪：mke2fs 内部失败清理路径（bad blocks/inode 表/root 目录/journal 设备）——随外部工具自带，非零退出即失败；本实现不实现 mke2fs
+e2fsprogs-00443	sites	裁剪	同上
+e2fsprogs-00603	sites	裁剪	同上
+e2fsprogs-00604	sites	裁剪	同上
+e2fsprogs-00605	sites	裁剪	同上
+e2fsprogs-00607	sites	裁剪	同上
+e2fsprogs-00608	sites	裁剪	同上
+e2fsprogs-00610	sites	裁剪	同上
+e2fsprogs-00611	sites	裁剪	同上
+e2fsprogs-00612	sites	裁剪	同上
+e2fsprogs-01974	sites	裁剪	同上
+e2fsprogs-01975	sites	裁剪	同上
+e2fsprogs-01976	sites	裁剪	同上
+e2fsprogs-01977	sites	裁剪	同上
+e2fsprogs-01978	sites	裁剪	同上
+e2fsprogs-01979	sites	裁剪	同上
+e2fsprogs-01980	sites	裁剪	同上
+e2fsprogs-01981	sites	裁剪	同上
+e2fsprogs-01982	sites	裁剪	同上
+e2fsprogs-01983	sites	裁剪	同上
+e2fsprogs-01984	sites	裁剪	同上
+e2fsprogs-01985	sites	裁剪	同上
+e2fsprogs-01986	sites	裁剪	同上
+e2fsprogs-01987	sites	裁剪	同上
+e2fsprogs-01988	sites	裁剪	同上
+e2fsprogs-01989	sites	裁剪	同上
+e2fsprogs-01990	sites	裁剪	同上
+e2fsprogs-01991	sites	裁剪	同上

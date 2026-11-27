@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-f2fs-tools-00441	sites	待判	
+f2fs-tools-00441	sites	拒绝	lib 内部分配失败路径：Rust 分配失败即中止，语义由回读证实承接。依据：SA2-010（架构差异-多虑）

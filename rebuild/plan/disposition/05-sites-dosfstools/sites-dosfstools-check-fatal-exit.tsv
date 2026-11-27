@@ -1,30 +1,30 @@
 row_id	ledger	state	note
-dosfstools-00051	sites	待判	
-dosfstools-00052	sites	待判	
-dosfstools-00054	sites	待判	
-dosfstools-00055	sites	待判	
-dosfstools-00060	sites	待判	
-dosfstools-00061	sites	待判	
-dosfstools-00062	sites	待判	
-dosfstools-00063	sites	待判	
-dosfstools-00066	sites	待判	
-dosfstools-00067	sites	待判	
-dosfstools-00068	sites	待判	
-dosfstools-00072	sites	待判	
-dosfstools-00073	sites	待判	
-dosfstools-00077	sites	待判	
-dosfstools-00078	sites	待判	
-dosfstools-00079	sites	待判	
-dosfstools-00080	sites	待判	
-dosfstools-00153	sites	待判	
-dosfstools-00180	sites	待判	
-dosfstools-00182	sites	待判	
-dosfstools-00183	sites	待判	
-dosfstools-00185	sites	待判	
-dosfstools-00187	sites	待判	
-dosfstools-00188	sites	待判	
-dosfstools-00189	sites	待判	
-dosfstools-00191	sites	待判	
-dosfstools-00192	sites	待判	
-dosfstools-00194	sites	待判	
-dosfstools-00195	sites	待判	
+dosfstools-00051	sites	裁剪	交互修复/清理提示不暴露：check 固定只读 -n（src/platform/linux/tools.rs check_arguments），修复路径不触发。依据：SA2-012、特性依据=交互修复面
+dosfstools-00052	sites	裁剪	同上
+dosfstools-00054	sites	裁剪	同上
+dosfstools-00055	sites	裁剪	同上
+dosfstools-00060	sites	裁剪	同上
+dosfstools-00061	sites	裁剪	同上
+dosfstools-00062	sites	裁剪	同上
+dosfstools-00063	sites	拒绝	工具内部不变量断言（internal error 类）：上游实现细节，行为经调用整体生效，逐点复刻属多虑。依据：SA2-012（架构差异-多虑）
+dosfstools-00066	sites	拒绝	同上
+dosfstools-00067	sites	拒绝	同上
+dosfstools-00068	sites	拒绝	同上
+dosfstools-00072	sites	裁剪	交互修复/清理提示不暴露：check 固定只读 -n（src/platform/linux/tools.rs check_arguments），修复路径不触发。依据：SA2-012、特性依据=交互修复面
+dosfstools-00073	sites	裁剪	同上
+dosfstools-00077	sites	裁剪	同上
+dosfstools-00078	sites	裁剪	同上
+dosfstools-00079	sites	裁剪	同上
+dosfstools-00080	sites	裁剪	同上
+dosfstools-00153	sites	裁剪	同上
+dosfstools-00180	sites	裁剪	同上
+dosfstools-00182	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
+dosfstools-00183	sites	裁剪	同上
+dosfstools-00185	sites	裁剪	同上
+dosfstools-00187	sites	裁剪	同上
+dosfstools-00188	sites	裁剪	同上
+dosfstools-00189	sites	裁剪	同上
+dosfstools-00191	sites	裁剪	同上
+dosfstools-00192	sites	裁剪	同上
+dosfstools-00194	sites	裁剪	同上
+dosfstools-00195	sites	裁剪	同上

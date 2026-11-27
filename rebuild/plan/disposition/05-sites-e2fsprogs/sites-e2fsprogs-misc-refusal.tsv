@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-e2fsprogs-02071	sites	待判	
-e2fsprogs-02072	sites	待判	
-e2fsprogs-02094	sites	待判	
+e2fsprogs-02071	sites	裁剪	裁剪：库/辅助工具内部输出与拒绝（print_ext2_info/syntax_err_report）——随外部工具自带，不接线
+e2fsprogs-02072	sites	裁剪	同上
+e2fsprogs-02094	sites	裁剪	同上

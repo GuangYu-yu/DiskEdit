@@ -1,87 +1,87 @@
 row_id	ledger	state	note
-parted-00008	sites	待判	
-parted-00010	sites	待判	
-parted-00016	sites	待判	
-parted-00028	sites	待判	
-parted-00031	sites	待判	
-parted-00034	sites	待判	
-parted-00036	sites	待判	
-parted-00040	sites	待判	
-parted-00085	sites	待判	
-parted-00093	sites	待判	
-parted-00129	sites	待判	
-parted-00136	sites	待判	
-parted-00139	sites	待判	
-parted-00141	sites	待判	
-parted-00143	sites	待判	
-parted-00145	sites	待判	
-parted-00163	sites	待判	
-parted-00187	sites	待判	
-parted-00273	sites	待判	
-parted-00287	sites	待判	
-parted-00551	sites	待判	
-parted-00552	sites	待判	
-parted-00553	sites	待判	
-parted-00582	sites	待判	
-parted-00585	sites	待判	
-parted-00588	sites	待判	
-parted-00592	sites	待判	
-parted-00595	sites	待判	
-parted-00598	sites	待判	
-parted-00603	sites	待判	
-parted-00606	sites	待判	
-parted-00610	sites	待判	
-parted-00613	sites	待判	
-parted-00616	sites	待判	
-parted-00620	sites	待判	
-parted-00625	sites	待判	
-parted-00628	sites	待判	
-parted-00631	sites	待判	
-parted-00635	sites	待判	
-parted-00640	sites	待判	
-parted-00642	sites	待判	
-parted-00644	sites	待判	
-parted-00646	sites	待判	
-parted-00648	sites	待判	
-parted-00651	sites	待判	
-parted-00656	sites	待判	
-parted-00695	sites	待判	
-parted-00697	sites	待判	
-parted-00699	sites	待判	
-parted-00701	sites	待判	
-parted-00703	sites	待判	
-parted-00706	sites	待判	
-parted-00711	sites	待判	
-parted-00764	sites	待判	
-parted-00766	sites	待判	
-parted-00768	sites	待判	
-parted-00770	sites	待判	
-parted-00880	sites	待判	
-parted-00884	sites	待判	
-parted-00893	sites	待判	
-parted-00902	sites	待判	
-parted-00927	sites	待判	
-parted-00929	sites	待判	
-parted-00935	sites	待判	
-parted-00938	sites	待判	
-parted-00940	sites	待判	
-parted-00942	sites	待判	
-parted-00944	sites	待判	
-parted-00951	sites	待判	
-parted-00953	sites	待判	
-parted-00955	sites	待判	
-parted-00970	sites	待判	
-parted-00973	sites	待判	
-parted-00979	sites	待判	
-parted-00986	sites	待判	
-parted-01003	sites	待判	
-parted-01006	sites	待判	
-parted-01011	sites	待判	
-parted-01014	sites	待判	
-parted-01026	sites	待判	
-parted-01030	sites	待判	
-parted-01037	sites	待判	
-parted-01040	sites	待判	
-parted-01791	sites	待判	
-parted-01798	sites	待判	
-parted-01808	sites	待判	
+parted-00008	sites	裁剪	裁剪|非 Linux 平台后端（BeOS/GNU Hurd）：本实现仅 src/platform/linux，按 SA1-021 census 口径入账
+parted-00010	sites	裁剪	同上
+parted-00016	sites	裁剪	同上
+parted-00028	sites	裁剪	同上
+parted-00031	sites	裁剪	同上
+parted-00034	sites	裁剪	同上
+parted-00036	sites	裁剪	同上
+parted-00040	sites	裁剪	同上
+parted-00085	sites	拒绝	拒绝|架构差异-多虑：设备探测错误清理 goto；探测失败经平台层拒绝（R0143/R0133）；SA1-021
+parted-00093	sites	认领	认领|设备过小的几何下界拒绝已有：R0182（crates/core/src/geometry；create.rs 下界）
+parted-00129	sites	拒绝	拒绝|架构差异-多虑：Unknown 设备类型兜底串；本实现识别失败按拒绝（R0143），不设兜底类型
+parted-00136	sites	认领	认领|R0143（不识别目标→拒绝；SA1-016 note）
+parted-00139	sites	认领	认领|写后 flush 失败向上抛并落已写待恢复已有：SA1-011（tests/fault_injection.rs::a_failed_data_flush_reports_partial）
+parted-00141	sites	认领	认领|R0143（目标打不开→拒绝；只读命令只读打开，SA1-002）
+parted-00143	sites	认领	同上
+parted-00145	sites	认领	认领|写后 flush 失败向上抛并落已写待恢复已有：SA1-011（tests/fault_injection.rs::a_failed_data_flush_reports_partial）
+parted-00163	sites	认领	认领|R0143（目标打不开→拒绝；只读命令只读打开，SA1-002）
+parted-00187	sites	认领	认领|内核视图同步失败已有：SA1-013（BLKPG 失败落 5 且不动文件系统；tests/online.rs）
+parted-00273	sites	裁剪	裁剪|坏块扫描面（ped_geometry_check/timer）不入范围：本实现无该特性
+parted-00287	sites	拒绝	拒绝|断言告示面；断言面整体按 SA1-021 拒绝，Rust panic 承担
+parted-00551	sites	拒绝	拒绝|架构差异-多虑：异常分级文案表（Information/Warning/Error/Fatal/Bug）；错误分级由 Rust 错误枚举+退出码承担（SA1-009）
+parted-00552	sites	拒绝	同上
+parted-00553	sites	拒绝	同上
+parted-00582	sites	裁剪	裁剪|Amiga 盘标/文件系统按 SA1-016/SA1-017 定案：统一按不识别拒绝
+parted-00585	sites	裁剪	同上
+parted-00588	sites	裁剪	同上
+parted-00592	sites	裁剪	同上
+parted-00595	sites	裁剪	同上
+parted-00598	sites	裁剪	同上
+parted-00603	sites	裁剪	同上
+parted-00606	sites	裁剪	同上
+parted-00610	sites	裁剪	同上
+parted-00613	sites	裁剪	同上
+parted-00616	sites	裁剪	同上
+parted-00620	sites	裁剪	同上
+parted-00625	sites	裁剪	同上
+parted-00628	sites	裁剪	同上
+parted-00631	sites	裁剪	同上
+parted-00635	sites	裁剪	同上
+parted-00640	sites	认领	认领|FAT 签名识别由内容识别承担：R0134（blkid；crates/core/src/fs）
+parted-00642	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
+parted-00644	sites	裁剪	同上
+parted-00646	sites	裁剪	同上
+parted-00648	sites	裁剪	同上
+parted-00651	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-00656	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝（FAT 逐字段识别精度层）
+parted-00695	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
+parted-00697	sites	裁剪	同上
+parted-00699	sites	裁剪	同上
+parted-00701	sites	裁剪	同上
+parted-00703	sites	裁剪	同上
+parted-00706	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）；且属 FAT 扩容路径（SA2-014）
+parted-00711	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
+parted-00764	sites	裁剪	同上
+parted-00766	sites	裁剪	同上
+parted-00768	sites	裁剪	同上
+parted-00770	sites	裁剪	同上
+parted-00880	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
+parted-00884	sites	认领	认领|文件系统须填满目标的回读证实已有：SA2-003（src/app/execute/filesystem.rs::the_size_readback_accepts_only_a_filled_filesystem）
+parted-00893	sites	认领	认领|未登记扩缩族按不支持拒绝已有：SA1-017/SA2-012（crates/core/src/fs/catalog.rs Support::Unsupported）
+parted-00902	sites	裁剪	裁剪|HFS/HFS+ 未登记族按 SA1-017 定案：识别只按档案表与只读探针（R0134），未登记族按未知拒绝
+parted-00927	sites	裁剪	同上
+parted-00929	sites	裁剪	同上
+parted-00935	sites	裁剪	同上
+parted-00938	sites	裁剪	同上
+parted-00940	sites	裁剪	同上
+parted-00942	sites	裁剪	同上
+parted-00944	sites	裁剪	同上
+parted-00951	sites	裁剪	同上
+parted-00953	sites	裁剪	同上
+parted-00955	sites	裁剪	同上
+parted-00970	sites	裁剪	同上
+parted-00973	sites	裁剪	同上
+parted-00979	sites	裁剪	同上
+parted-00986	sites	裁剪	同上
+parted-01003	sites	裁剪	同上
+parted-01006	sites	裁剪	同上
+parted-01011	sites	裁剪	同上
+parted-01014	sites	裁剪	同上
+parted-01026	sites	裁剪	同上
+parted-01030	sites	裁剪	同上
+parted-01037	sites	裁剪	同上
+parted-01040	sites	裁剪	同上
+parted-01791	sites	拒绝	拒绝|架构差异-多虑：单位格式化/解析断言；单位与大小解析由 CLI 参数层承担（R0091/R0092）；SA1-021
+parted-01798	sites	拒绝	拒绝|架构差异-多虑：C 空指针/生命周期断言，Rust 所有权与类型承担；防御面计数 SA1-021
+parted-01808	sites	拒绝	同上

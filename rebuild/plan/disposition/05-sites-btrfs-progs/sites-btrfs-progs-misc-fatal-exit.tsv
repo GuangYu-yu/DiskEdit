@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-btrfs-progs-00529	sites	待判	
-btrfs-progs-00531	sites	待判	
-btrfs-progs-00533	sites	待判	
+btrfs-progs-00529	sites	裁剪	裁剪：tune 子命令 usage 致命出口——btrfstune 未消费特性面，档案表未登记
+btrfs-progs-00531	sites	裁剪	同上
+btrfs-progs-00533	sites	裁剪	同上

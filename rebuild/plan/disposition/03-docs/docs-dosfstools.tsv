@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-dosfstools-doc-00001	docs	待判	
-dosfstools-doc-00002	docs	待判	
-dosfstools-doc-00003	docs	待判	
-dosfstools-doc-00004	docs	待判	
+dosfstools-doc-00001	docs	裁剪	fsck.fat 内部行为说明（不删空目录）；依赖工具内部，本实现按 SA2-012 调用、SA2-011 版本固定
+dosfstools-doc-00002	docs	裁剪	同 dosfstools-doc-00001
+dosfstools-doc-00003	docs	裁剪	同 dosfstools-doc-00001
+dosfstools-doc-00004	docs	裁剪	mkfs.fat 不做引导文件系统的上游限制；本实现 mkfs.vfat 以固定参数调用（SA2-012）

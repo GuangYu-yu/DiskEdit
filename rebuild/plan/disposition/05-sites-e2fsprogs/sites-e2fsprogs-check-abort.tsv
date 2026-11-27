@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-e2fsprogs-01760	sites	待判	
+e2fsprogs-01760	sites	裁剪	裁剪：e2fsck/sigcatcher 辅助程序的 abort()——工具内部崩溃兜底，随外部工具自带。本实现不实现 e2fsck，只消费其退出码（SA2-001/002）；固定参数非交互调用（src/platform/linux/tools.rs::check_arguments）

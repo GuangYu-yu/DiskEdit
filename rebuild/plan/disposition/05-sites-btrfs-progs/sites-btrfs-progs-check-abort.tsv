@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-btrfs-progs-00753	sites	待判	
-btrfs-progs-00853	sites	待判	
-btrfs-progs-00856	sites	待判	
+btrfs-progs-00753	sites	拒绝	拒绝：check 内部 abort() 不变量兜底——上游 C 防御，Rust 侧由所有权/类型承担、不逐点复刻（架构差异-多虑）；消费边界=只消费 `btrfs check --readonly` 退出码（src/platform/linux/tools.rs::check_arguments）
+btrfs-progs-00853	sites	拒绝	同上
+btrfs-progs-00856	sites	拒绝	同上

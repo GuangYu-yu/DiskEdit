@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-parted-00682	sites	待判	
-parted-00686	sites	待判	
-parted-00690	sites	待判	
+parted-00682	sites	认领	认领|swap 签名识别由内容识别承担：R0134（crates/core/src/fs/profile.rs FsKind::Swap）；未识别形态按未知拒绝（SA1-017）
+parted-00686	sites	认领	同上
+parted-00690	sites	认领	同上

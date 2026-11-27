@@ -1,24 +1,24 @@
 row_id	ledger	state	note
-libfdisk-00357	sites	待判	
-libfdisk-00377	sites	待判	
-libfdisk-00429	sites	待判	
-libfdisk-00430	sites	待判	
-libfdisk-00447	sites	待判	
-libfdisk-00448	sites	待判	
-libfdisk-00461	sites	待判	
-libfdisk-00466	sites	待判	
-libfdisk-00472	sites	待判	
-libfdisk-00473	sites	待判	
-libfdisk-00475	sites	待判	
-libfdisk-00477	sites	待判	
-libfdisk-00478	sites	待判	
-libfdisk-00491	sites	待判	
-libfdisk-00492	sites	待判	
-libfdisk-00494	sites	待判	
-libfdisk-00495	sites	待判	
-libfdisk-00497	sites	待判	
-libfdisk-00500	sites	待判	
-libfdisk-00502	sites	待判	
-libfdisk-00504	sites	待判	
-libfdisk-00532	sites	待判	
-libfdisk-00533	sites	待判	
+libfdisk-00357	sites	拒绝	测试驱动/调试输出内部件，不属行为合同。依据：SA1-022 同口径（gpt_debug_uuid 调试打印）
+libfdisk-00377	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00429	sites	认领	同上
+libfdisk-00430	sites	认领	同上
+libfdisk-00447	sites	认领	同上
+libfdisk-00448	sites	认领	同上
+libfdisk-00461	sites	认领	同上
+libfdisk-00466	sites	认领	同上
+libfdisk-00472	sites	认领	同上
+libfdisk-00473	sites	认领	同上
+libfdisk-00475	sites	认领	同上
+libfdisk-00477	sites	认领	同上
+libfdisk-00478	sites	认领	同上
+libfdisk-00491	sites	认领	add 校验已有：SlotOccupied/TableFull/NoGapFits/Overlaps/OutsideUsable（crates/core/src/table/edit.rs）。依据：SA1-008、SA1-027
+libfdisk-00492	sites	认领	同上
+libfdisk-00494	sites	认领	同上
+libfdisk-00495	sites	认领	同上
+libfdisk-00497	sites	认领	同上
+libfdisk-00500	sites	认领	同上
+libfdisk-00502	sites	认领	同上
+libfdisk-00504	sites	认领	同上
+libfdisk-00532	sites	拒绝	set_npartitions 不提供：条目布局写侧固定，不暴露条目数调整。依据：表结构合同（UEFI §5.3.1 固定 128 条目默认）
+libfdisk-00533	sites	拒绝	同上

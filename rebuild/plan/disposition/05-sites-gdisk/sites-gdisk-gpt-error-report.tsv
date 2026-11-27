@@ -1,50 +1,50 @@
 row_id	ledger	state	note
-gdisk-00081	sites	待判	
-gdisk-00082	sites	待判	
-gdisk-00084	sites	待判	
-gdisk-00089	sites	待判	
-gdisk-00090	sites	待判	
-gdisk-00091	sites	待判	
-gdisk-00102	sites	待判	
-gdisk-00103	sites	待判	
-gdisk-00104	sites	待判	
-gdisk-00105	sites	待判	
-gdisk-00110	sites	待判	
-gdisk-00113	sites	待判	
-gdisk-00114	sites	待判	
-gdisk-00115	sites	待判	
-gdisk-00116	sites	待判	
-gdisk-00117	sites	待判	
-gdisk-00119	sites	待判	
-gdisk-00121	sites	待判	
-gdisk-00123	sites	待判	
-gdisk-00124	sites	待判	
-gdisk-00131	sites	待判	
-gdisk-00135	sites	待判	
-gdisk-00136	sites	待判	
-gdisk-00138	sites	待判	
-gdisk-00145	sites	待判	
-gdisk-00146	sites	待判	
-gdisk-00147	sites	待判	
-gdisk-00148	sites	待判	
-gdisk-00149	sites	待判	
-gdisk-00150	sites	待判	
-gdisk-00151	sites	待判	
-gdisk-00152	sites	待判	
-gdisk-00153	sites	待判	
-gdisk-00154	sites	待判	
-gdisk-00157	sites	待判	
-gdisk-00159	sites	待判	
-gdisk-00160	sites	待判	
-gdisk-00161	sites	待判	
-gdisk-00163	sites	待判	
-gdisk-00166	sites	待判	
-gdisk-00167	sites	待判	
-gdisk-00168	sites	待判	
-gdisk-00171	sites	待判	
-gdisk-00172	sites	待判	
-gdisk-00175	sites	待判	
-gdisk-00176	sites	待判	
-gdisk-00177	sites	待判	
-gdisk-00179	sites	待判	
-gdisk-00192	sites	待判	
+gdisk-00081	sites	认领	头尺寸非法警告并按 HEADER_SIZE 重算 CRC ↔ 头尺寸严格校验；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
+gdisk-00082	sites	认领	头尺寸非法警告并按 HEADER_SIZE 重算 CRC ↔ 头尺寸严格校验；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
+gdisk-00084	sites	认领	PMBR 0xEE 越界自动修 ↔ 本实现只读不改（SA1-002/SA1-003），PMBR 重写只并入表写并规范化；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs
+gdisk-00089	sites	认领	主备表都装不下 ↔ 两坏按冲突拒绝不猜；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 src/app/execute/recover/tests.rs::the_second_tear_point_is_a_conflict
+gdisk-00090	sites	认领	主表 CRC 不符装备份表 ↔ 主备回退；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-00091	sites	认领	CRC 不符提示修复 ↔ 撕裂修复矩阵；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/policy/gpt.rs::repair_action
+gdisk-00102	sites	认领	条目尺寸自适应改写 ↔ 本实现条目尺寸严格校验（<128 拒绝，parse.rs），非 128 不静默改写——更保守（SA3-004 读侧校验原则）
+gdisk-00103	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00104	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00105	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00110	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00113	sites	认领	主备表不一致提示用恢复菜单核对 ↔ 主备冲突不猜，判定层按冲突拒绝；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-00114	sites	认领	备份头越盘尾搬移 ↔ 修复动作把备份头重定位到规范位置并入同一表写；依据 SA1-018；锚 tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write
+gdisk-00115	sites	认领	写中止提示 ↔ 失败不落完成态（事务状态机+已写待恢复）；依据 SA1-011；锚 tests/fault_injection.rs::a_failed_data_flush_reports_partial
+gdisk-00116	sites	认领	PMBR 条目过大提示重建 ↔ PMBR 规范化只在表写；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-00117	sites	认领	备份表写失败放弃 sync ↔ 写错误上抛+已写待恢复，不静默降级；依据 SA1-011
+gdisk-00119	sites	认领	设备写打开失败中止 ↔ 打开失败=拒绝不写；依据 SA1-005
+gdisk-00121	sites	裁剪	备份文件打开失败；备份文件特性不提供；依据 SA1-020
+gdisk-00123	sites	裁剪	备份文件不当即清空全部数据；备份文件特性不提供（SA1-020），且静默清空不采纳
+gdisk-00124	sites	裁剪	备份文件读取失败；依据 SA1-020
+gdisk-00131	sites	认领	写打开失败终止 ↔ 打开失败拒绝；依据 SA1-005
+gdisk-00135	sites	裁剪	专家菜单表位置搬移（MoveMainTable/MoveSecondTable）；专家菜单特性不纳入；备份头重定位只在修复语义（SA1-018/SA1-020）
+gdisk-00136	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00138	sites	裁剪	SetAlignment(0) 拒绝；专家对齐菜单不纳入（对齐策略固定 SA1-008/SA1-014）
+gdisk-00145	sites	拒绝	SizesOK 编译期类型尺寸断言（uint8..GUID 十行）；架构差异-多虑——类型尺寸由 Rust 编译器/布局承担，不逐点断言
+gdisk-00146	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00147	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00148	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00149	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00150	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00151	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00152	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00153	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00154	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00157	sites	认领	设置分区名失败不保存 ↔ 名称编辑经 set+判定层；锚 crates/core/src/table/edit.rs::PartitionName
+gdisk-00159	sites	认领	保存 MBR 问题提示 ↔ PMBR 只在表写规范化；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs
+gdisk-00160	sites	认领	创建分区失败不保存 ↔ add 经判定层校验+事务状态机（拒绝只由 Unwritten 构造）；锚 crates/core/src/table/create.rs、edit.rs
+gdisk-00161	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00163	sites	认领	改类型失败不保存 ↔ set type 经判定层；锚 crates/core/src/table/edit.rs（LINUX_FS_TYPE_GUID/类型集合）
+gdisk-00166	sites	裁剪	BuildMBR 混合 MBR 构建；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-00167	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00168	sites	裁剪	cgurses 删除失败 Report；菜单面
+gdisk-00171	sites	认领	内核或用旧表提示重启 ↔ 表写后 RefreshKernelView，失败落 5 并落已写待恢复；依据 SA1-013；锚 src/app/execute/table.rs::committed_unsynced
+gdisk-00172	sites	认领	保存失败提示表可能损坏 ↔ 失败即已写待恢复，不谎报完成；依据 SA1-011
+gdisk-00175	sites	裁剪	MainMenu Verify 提示/Report 窗口；菜单面（校验语义=判定层）
+gdisk-00176	sites	认领	同上（GPT 头/表校验与修复矩阵行认领；分配失败 exit 行拒绝见 ALLOC）
+gdisk-00177	sites	认领	非法 UTF-16 名称不改写 ↔ 名称经 PartitionName 解析，非法输入拒绝；锚 crates/core/src/table/edit.rs
+gdisk-00179	sites	裁剪	MakeHybrid 跳过过大分区；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-00192	sites	裁剪	gptcurses.h Report 声明；ncurses UI

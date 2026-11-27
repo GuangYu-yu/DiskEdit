@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-gdisk-00004	sites	待判	
-gdisk-00006	sites	待判	
-gdisk-00008	sites	待判	
-gdisk-00010	sites	待判	
-gdisk-00012	sites	待判	
-gdisk-00013	sites	待判	
-gdisk-00014	sites	待判	
-gdisk-00017	sites	待判	
-gdisk-00018	sites	待判	
-gdisk-00021	sites	待判	
-gdisk-00023	sites	待判	
-gdisk-00024	sites	待判	
+gdisk-00004	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00006	sites	拒绝	同上
+gdisk-00008	sites	拒绝	同上
+gdisk-00010	sites	认领	读盘失败告警 ↔ 读错误上抛；依据 SA1-011
+gdisk-00012	sites	认领	混合 MBR 上发现逻辑分区警告 ↔ 混合 MBR 读接受、诊断在 inspect；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-00013	sites	认领	逻辑分区链环检测并纠正 ↔ 环检测按损坏处理不自动纠正——更保守；锚 crates/core/src/table/mbr/extended.rs
+gdisk-00014	sites	拒绝	同上
+gdisk-00017	sites	认领	EBR 签名不符打印 ↔ EBR 签名校验；锚 crates/core/src/table/mbr/extended.rs
+gdisk-00018	sites	拒绝	同上
+gdisk-00021	sites	认领	非法包含变更拒绝 ↔ set 经判定层校验；锚 crates/core/src/table/edit.rs
+gdisk-00023	sites	认领	表状态非法中止变更 ↔ 判定层拒绝不写；依据 I1
+gdisk-00024	sites	拒绝	理由：越界分区自动删除（DeleteOversizedParts）不采纳——静默删除是破坏性行为；越界按损坏/拒绝处理，不静默改写用户数据（SA3-001 同原则）

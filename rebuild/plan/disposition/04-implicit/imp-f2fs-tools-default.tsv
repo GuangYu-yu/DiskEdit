@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-f2fs-tools-imp-00001	implicit	待判	
-f2fs-tools-imp-00002	implicit	待判	
-f2fs-tools-imp-00009	implicit	待判	
-f2fs-tools-imp-00010	implicit	待判	
-f2fs-tools-imp-00038	implicit	待判	
-f2fs-tools-imp-00039	implicit	待判	
-f2fs-tools-imp-00045	implicit	待判	
-f2fs-tools-imp-00046	implicit	待判	
-f2fs-tools-imp-00048	implicit	待判	
-f2fs-tools-imp-00049	implicit	待判	
-f2fs-tools-imp-00051	implicit	待判	
+f2fs-tools-imp-00001	implicit	裁剪	f2fs 内部常数（zone/section 布局、LZ4、重试上限、位图掩码、I/O 缓存、NLS 编码）；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs；扩容回读按 superblock block_count（SA2-010）
+f2fs-tools-imp-00002	implicit	裁剪	同上
+f2fs-tools-imp-00009	implicit	裁剪	同上
+f2fs-tools-imp-00010	implicit	裁剪	同上
+f2fs-tools-imp-00038	implicit	裁剪	同上
+f2fs-tools-imp-00039	implicit	裁剪	同上
+f2fs-tools-imp-00045	implicit	裁剪	同上
+f2fs-tools-imp-00046	implicit	裁剪	同上
+f2fs-tools-imp-00048	implicit	裁剪	同上
+f2fs-tools-imp-00049	implicit	裁剪	同上
+f2fs-tools-imp-00051	implicit	裁剪	同上

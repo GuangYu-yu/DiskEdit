@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-testdisk-00088	sites	待判	
-testdisk-00090	sites	待判	
-testdisk-00091	sites	待判	
+testdisk-00088	sites	裁剪	MBR 引导代码写入特性（未实现提示/成功提示/日志变体）；本实现写面=表结构不写引导代码（SA1-003/SA1-027）
+testdisk-00090	sites	裁剪	同上
+testdisk-00091	sites	裁剪	同上

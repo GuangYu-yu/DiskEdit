@@ -1,49 +1,49 @@
 row_id	ledger	state	note
-gdisk-00075	sites	待判	
-gdisk-00078	sites	待判	
-gdisk-00080	sites	待判	
-gdisk-00085	sites	待判	
-gdisk-00086	sites	待判	
-gdisk-00087	sites	待判	
-gdisk-00088	sites	待判	
-gdisk-00092	sites	待判	
-gdisk-00093	sites	待判	
-gdisk-00094	sites	待判	
-gdisk-00095	sites	待判	
-gdisk-00096	sites	待判	
-gdisk-00097	sites	待判	
-gdisk-00098	sites	待判	
-gdisk-00099	sites	待判	
-gdisk-00100	sites	待判	
-gdisk-00101	sites	待判	
-gdisk-00106	sites	待判	
-gdisk-00107	sites	待判	
-gdisk-00108	sites	待判	
-gdisk-00109	sites	待判	
-gdisk-00112	sites	待判	
-gdisk-00118	sites	待判	
-gdisk-00120	sites	待判	
-gdisk-00122	sites	待判	
-gdisk-00125	sites	待判	
-gdisk-00126	sites	待判	
-gdisk-00128	sites	待判	
-gdisk-00129	sites	待判	
-gdisk-00130	sites	待判	
-gdisk-00132	sites	待判	
-gdisk-00133	sites	待判	
-gdisk-00134	sites	待判	
-gdisk-00137	sites	待判	
-gdisk-00139	sites	待判	
-gdisk-00140	sites	待判	
-gdisk-00142	sites	待判	
-gdisk-00144	sites	待判	
-gdisk-00155	sites	待判	
-gdisk-00156	sites	待判	
-gdisk-00158	sites	待判	
-gdisk-00162	sites	待判	
-gdisk-00164	sites	待判	
-gdisk-00165	sites	待判	
-gdisk-00169	sites	待判	
-gdisk-00173	sites	待判	
-gdisk-00174	sites	待判	
-gdisk-00178	sites	待判	
+gdisk-00075	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00078	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00080	sites	认领	头尺寸非法警告+重设 ↔ 头尺寸严格校验；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-00085	sites	认领	Invalid partition data ↔ 条目自洽性校验失败按损坏处理；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；依据 SA3-004：任一侧可读即按其上界修复重写另一侧，不合并条目、不猜 GUID；锚 tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write
+gdisk-00086	sites	认领	备份头坏主头好→由主头重建备份 ↔ 撕裂修复矩阵坏一侧按可读副本上界修复；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/policy/gpt.rs::repair_action
+gdisk-00087	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00088	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00092	sites	认领	主备五项状态（头/表 CRC）打印 ↔ 判定层按撕裂矩阵选择并登记状态；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+gdisk-00093	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00094	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00095	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00096	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00097	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00098	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00099	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00100	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00101	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00106	sites	认领	条目尺寸非法拒绝 ↔ parse 严格校验（<128 拒绝）；锚 crates/core/src/table/gpt/parse.rs
+gdisk-00107	sites	认领	表读失败 ↔ 错误上抛不猜；依据 SA1-011
+gdisk-00108	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00109	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00112	sites	认领	CRC 复核读失败 ↔ 写后逐字节回读证实；锚 src/app/execute/write.rs::WriteChannel
+gdisk-00118	sites	认领	写表错误 'MIGHT be harmless' ↔ 本实现一律按未完成落已写待恢复，绝不'可能无害'；依据 SA1-011
+gdisk-00120	sites	裁剪	备份文件写错误；依据 SA1-020
+gdisk-00122	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00125	sites	认领	整盘擦除/重建语义对应 new（覆盖须显式确认）；部分覆写失败错误上抛；依据 SA1-005/SA1-011
+gdisk-00126	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00128	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00129	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00130	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00132	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00133	sites	裁剪	XFormDisklabel 盘标转换条目超限；MBR↔GPT 转换特性未纳入（new 为显式建表）
+gdisk-00134	sites	裁剪	SetGPTSize 专家菜单改表大小；专家菜单特性不纳入（表几何固定 128×128B）
+gdisk-00137	sites	认领	删除分区号越界 ↔ delete 范围校验拒绝；锚 crates/core/src/table/edit.rs
+gdisk-00139	sites	认领	ValidPartNum 越界 ↔ 槽位范围校验拒绝（按 Refusal 不 exit）；锚 crates/core/src/table/edit.rs
+gdisk-00140	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00142	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00144	sites	认领	ManageAttributes 分区号非法 ↔ 属性位经 set+范围校验；锚 crates/core/src/table/edit.rs::attribute_bit
+gdisk-00155	sites	裁剪	LoadBackupFile 失败；备份文件特性不提供；依据 SA1-020
+gdisk-00156	sites	认领	sgdisk 分区号非法 ↔ 分区号校验拒绝；锚 crates/core/src/table/edit.rs
+gdisk-00158	sites	认领	同上（头/表校验与命令面校验行认领；备份文件/专家菜单/转换行裁剪见各行）
+gdisk-00162	sites	裁剪	分区交换（swap）未纳入命令面；等价=delete+add（新条目派生确定性 PARTUUID，SA1-007）
+gdisk-00164	sites	认领	未知选项拒绝 ↔ 未知旗标/子命令拒绝（SA1-010 替代路径）；锚 src/app/cli/parse.rs（未知参数报错）
+gdisk-00165	sites	认领	错误即不保存（retval=4） ↔ 拒绝只由 Unwritten 构造，失败不落完成态；依据 I1/B 系
+gdisk-00169	sites	裁剪	MakeNewPart 失败 Report；菜单面
+gdisk-00173	sites	裁剪	LoadBackup 失败 Report；备份文件（SA1-020）+菜单面
+gdisk-00174	sites	裁剪	显示尺寸检查（80x14）；ncurses 菜单面
+gdisk-00178	sites	认领	SetName 分区号非法 ↔ set 范围校验；锚 crates/core/src/table/edit.rs

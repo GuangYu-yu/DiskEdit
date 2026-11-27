@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-btrfs-progs-00425	sites	待判	
-btrfs-progs-00436	sites	待判	
-btrfs-progs-00448	sites	待判	
-btrfs-progs-00451	sites	待判	
-btrfs-progs-00461	sites	待判	
-btrfs-progs-00473	sites	待判	
-btrfs-progs-00482	sites	待判	
-btrfs-progs-00525	sites	待判	
-btrfs-progs-00593	sites	待判	
+btrfs-progs-00425	sites	拒绝	拒绝：btrfstune 未消费特性内部断言——上游 C 防御逐点复刻属多虑（架构差异-多虑）；特性不在档案表消费面
+btrfs-progs-00436	sites	拒绝	同上
+btrfs-progs-00448	sites	拒绝	同上
+btrfs-progs-00451	sites	拒绝	同上
+btrfs-progs-00461	sites	拒绝	同上
+btrfs-progs-00473	sites	拒绝	同上
+btrfs-progs-00482	sites	拒绝	同上
+btrfs-progs-00525	sites	拒绝	同上
+btrfs-progs-00593	sites	拒绝	同上

@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-testdisk-00016	sites	待判	
+testdisk-00016	sites	裁剪	交互菜单入口断言（add_partition_gpt_cli assert current_cmd）；本实现无交互菜单，GPT 恢复走判定矩阵；依据 SA3-003/SA3-004

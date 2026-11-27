@@ -1,30 +1,30 @@
 row_id	ledger	state	note
-dosfstools-00209	sites	待判	
-dosfstools-00211	sites	待判	
-dosfstools-00223	sites	待判	
-dosfstools-00232	sites	待判	
-dosfstools-00235	sites	待判	
-dosfstools-00236	sites	待判	
-dosfstools-00237	sites	待判	
-dosfstools-00240	sites	待判	
-dosfstools-00243	sites	待判	
-dosfstools-00294	sites	待判	
-dosfstools-00296	sites	待判	
-dosfstools-00298	sites	待判	
-dosfstools-00300	sites	待判	
-dosfstools-00302	sites	待判	
-dosfstools-00304	sites	待判	
-dosfstools-00306	sites	待判	
-dosfstools-00308	sites	待判	
-dosfstools-00311	sites	待判	
-dosfstools-00314	sites	待判	
-dosfstools-00315	sites	待判	
-dosfstools-00321	sites	待判	
-dosfstools-00323	sites	待判	
-dosfstools-00325	sites	待判	
-dosfstools-00327	sites	待判	
-dosfstools-00330	sites	待判	
-dosfstools-00332	sites	待判	
-dosfstools-00334	sites	待判	
-dosfstools-00336	sites	待判	
-dosfstools-00344	sites	待判	
+dosfstools-00209	sites	裁剪	-c/-l 坏块特性不暴露。依据：SA2-011、特性依据=坏块扫描面
+dosfstools-00211	sites	裁剪	同上
+dosfstools-00223	sites	裁剪	同上
+dosfstools-00232	sites	认领	FAT 变体/容量决策为工具内部行为，调用时生效；输出透传。依据：SA2-012
+dosfstools-00235	sites	认领	同上
+dosfstools-00236	sites	认领	同上
+dosfstools-00237	sites	认领	同上
+dosfstools-00240	sites	认领	同上
+dosfstools-00243	sites	认领	同上
+dosfstools-00294	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
+dosfstools-00296	sites	裁剪	同上
+dosfstools-00298	sites	裁剪	同上
+dosfstools-00300	sites	裁剪	同上
+dosfstools-00302	sites	裁剪	同上
+dosfstools-00304	sites	裁剪	同上
+dosfstools-00306	sites	裁剪	同上
+dosfstools-00308	sites	裁剪	同上
+dosfstools-00311	sites	裁剪	同上
+dosfstools-00314	sites	裁剪	同上
+dosfstools-00315	sites	裁剪	同上
+dosfstools-00321	sites	裁剪	同上
+dosfstools-00323	sites	裁剪	同上
+dosfstools-00325	sites	裁剪	同上
+dosfstools-00327	sites	裁剪	同上
+dosfstools-00330	sites	裁剪	同上
+dosfstools-00332	sites	裁剪	同上
+dosfstools-00334	sites	裁剪	同上
+dosfstools-00336	sites	裁剪	同上
+dosfstools-00344	sites	裁剪	同上

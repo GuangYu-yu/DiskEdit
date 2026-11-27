@@ -1,7 +1,7 @@
 row_id	ledger	state	note
-parted-01767	sites	待判	
-parted-01769	sites	待判	
-parted-01774	sites	待判	
-parted-01776	sites	待判	
-parted-01780	sites	待判	
-parted-01781	sites	待判	
+parted-01767	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（vtoc/s390 DASD）
+parted-01769	sites	裁剪	同上
+parted-01774	sites	裁剪	同上
+parted-01776	sites	裁剪	同上
+parted-01780	sites	裁剪	同上
+parted-01781	sites	裁剪	同上

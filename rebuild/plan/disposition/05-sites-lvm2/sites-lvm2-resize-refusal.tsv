@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-lvm2-00001	sites	待判	
-lvm2-00002	sites	待判	
-lvm2-00004	sites	待判	
-lvm2-00006	sites	待判	
-lvm2-00016	sites	待判	
-lvm2-00018	sites	待判	
-lvm2-00020	sites	待判	
+lvm2-00001	sites	拒绝	拒绝（架构差异-多虑）：lvm 内部断言通道（INTERNAL_ERROR）不复制——不变量由本实现架构结构性排除，等价拒绝在判定层（src/app/decide/resize.rs）
+lvm2-00002	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
+lvm2-00004	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
+lvm2-00006	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
+lvm2-00016	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链
+lvm2-00018	sites	认领	认领：SA2-017——LV 存在性与活动性在判定层核验（src/app/lvm.rs::select_lv）；查询失败/请求不符分别归 LvmFailed/TableEdit（refusal-map R0386/R0387）；建议拆分:sites-lvm2-resize-lv-selection
+lvm2-00020	sites	裁剪	裁剪：pvresize/lvresize CLI 参数面——本实现固定参数调用 pvresize <dev> / lvextend -l +<N> -r <path>（src/app/lvm.rs::grow_chain，SA2-017），参数面不可达；范围依据：档案表只登记 grow-lv 链

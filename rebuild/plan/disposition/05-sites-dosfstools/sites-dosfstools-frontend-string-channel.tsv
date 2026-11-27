@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-dosfstools-00006	sites	待判	
-dosfstools-00007	sites	待判	
-dosfstools-00008	sites	待判	
-dosfstools-00101	sites	待判	
-dosfstools-00104	sites	待判	
-dosfstools-00111	sites	待判	
-dosfstools-00147	sites	待判	
+dosfstools-00006	sites	裁剪	交互修复/清理提示不暴露：check 固定只读 -n（src/platform/linux/tools.rs check_arguments），修复路径不触发。依据：SA2-012、特性依据=交互修复面
+dosfstools-00007	sites	裁剪	同上
+dosfstools-00008	sites	裁剪	同上
+dosfstools-00101	sites	裁剪	同上
+dosfstools-00104	sites	裁剪	同上
+dosfstools-00111	sites	裁剪	同上
+dosfstools-00147	sites	裁剪	同上

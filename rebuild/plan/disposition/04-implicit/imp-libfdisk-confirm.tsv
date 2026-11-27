@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-libfdisk-imp-00022	implicit	待判	
-libfdisk-imp-00023	implicit	待判	
-libfdisk-imp-00024	implicit	待判	
-libfdisk-imp-00025	implicit	待判	
-libfdisk-imp-00027	implicit	待判	
-libfdisk-imp-00028	implicit	待判	
-libfdisk-imp-00029	implicit	待判	
-libfdisk-imp-00030	implicit	待判	
-libfdisk-imp-00032	implicit	待判	
-libfdisk-imp-00033	implicit	待判	
-libfdisk-imp-00034	implicit	待判	
-libfdisk-imp-00035	implicit	待判	
-libfdisk-imp-00036	implicit	待判	
-libfdisk-imp-00037	implicit	待判	
-libfdisk-imp-00038	implicit	待判	
-libfdisk-imp-00039	implicit	待判	
-libfdisk-imp-00040	implicit	待判	
-libfdisk-imp-00041	implicit	待判	
-libfdisk-imp-00042	implicit	待判	
-libfdisk-imp-00043	implicit	待判	
-libfdisk-imp-00044	implicit	待判	
-libfdisk-imp-00045	implicit	待判	
-libfdisk-imp-00046	implicit	待判	
-libfdisk-imp-00047	implicit	待判	
-libfdisk-imp-00048	implicit	待判	
-libfdisk-imp-00049	implicit	待判	
-libfdisk-imp-00050	implicit	待判	
-libfdisk-imp-00051	implicit	待判	
+libfdisk-imp-00022	implicit	裁剪	script.c force_label（脚本导入强制换盘标）；不提供脚本/JSON 导入，new 需显式命令+确认；依据 SA1-010
+libfdisk-imp-00023	implicit	裁剪	sfdisk 交互提示分支（interactive/prompt/quiet 装配）；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+libfdisk-imp-00024	implicit	裁剪	同上
+libfdisk-imp-00025	implicit	裁剪	sun 老盘标 fresh label 提示；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+libfdisk-imp-00027	implicit	裁剪	ask_yesno 交互问答面板；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+libfdisk-imp-00028	implicit	裁剪	同上
+libfdisk-imp-00029	implicit	裁剪	同上
+libfdisk-imp-00030	implicit	裁剪	同上
+libfdisk-imp-00032	implicit	裁剪	同上
+libfdisk-imp-00033	implicit	裁剪	同上
+libfdisk-imp-00034	implicit	裁剪	wipemode auto（交互自动擦签名）；签名擦除不提供，遇已有数据须显式确认；依据 SA1-005
+libfdisk-imp-00035	implicit	裁剪	同上
+libfdisk-imp-00036	implicit	拒绝	理由：不采纳 --force 跳过全部一致性检查的总旁路——一致性检查是安全边界，显式确认只解锁覆写不关闭校验；依据 SA1-005（--overwrite-data 等价物）
+libfdisk-imp-00037	implicit	拒绝	同上（--force 用法行）；SA1-005
+libfdisk-imp-00038	implicit	裁剪	同上
+libfdisk-imp-00039	implicit	裁剪	同上
+libfdisk-imp-00040	implicit	裁剪	同上
+libfdisk-imp-00041	implicit	裁剪	同上
+libfdisk-imp-00042	implicit	裁剪	同上
+libfdisk-imp-00043	implicit	裁剪	同上
+libfdisk-imp-00044	implicit	裁剪	同上
+libfdisk-imp-00045	implicit	拒绝	同上（-f, --force disable all consistency checking 帮助行）；SA1-005
+libfdisk-imp-00046	implicit	裁剪	同上
+libfdisk-imp-00047	implicit	裁剪	同上
+libfdisk-imp-00048	implicit	裁剪	同上
+libfdisk-imp-00049	implicit	裁剪	同上
+libfdisk-imp-00050	implicit	裁剪	cfdisk 写确认 yes/no 交互；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+libfdisk-imp-00051	implicit	裁剪	cfdisk -r 交互只读模式；只读语义已由只读命令承担（SA1-002），交互 UI 不纳入

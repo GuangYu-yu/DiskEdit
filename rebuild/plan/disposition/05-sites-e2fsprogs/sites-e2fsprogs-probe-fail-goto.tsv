@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-e2fsprogs-00709	sites	待判	
-e2fsprogs-00711	sites	待判	
-e2fsprogs-00712	sites	待判	
+e2fsprogs-00709	sites	裁剪	裁剪：dumpe2fs 内部失败清理——随外部工具自带；本实现只消费退出码（SA2-002）
+e2fsprogs-00711	sites	裁剪	同上
+e2fsprogs-00712	sites	裁剪	同上

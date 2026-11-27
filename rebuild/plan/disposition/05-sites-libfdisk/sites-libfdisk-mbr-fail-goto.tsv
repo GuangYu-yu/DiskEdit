@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-libfdisk-00262	sites	待判	
-libfdisk-00294	sites	待判	
-libfdisk-00296	sites	待判	
-libfdisk-00298	sites	待判	
-libfdisk-00300	sites	待判	
-libfdisk-00302	sites	待判	
-libfdisk-00303	sites	待判	
-libfdisk-00304	sites	待判	
-libfdisk-00305	sites	待判	
-libfdisk-00312	sites	待判	
-libfdisk-00314	sites	待判	
+libfdisk-00262	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（dos_add_partition 交互分支）
+libfdisk-00294	sites	裁剪	同上
+libfdisk-00296	sites	裁剪	同上
+libfdisk-00298	sites	裁剪	同上
+libfdisk-00300	sites	裁剪	同上
+libfdisk-00302	sites	裁剪	同上
+libfdisk-00303	sites	裁剪	同上
+libfdisk-00304	sites	裁剪	同上
+libfdisk-00305	sites	裁剪	同上
+libfdisk-00312	sites	认领	写路径失败上抛并由事务原像承接。依据：SA1-011、SA1-012 同型
+libfdisk-00314	sites	认领	同上

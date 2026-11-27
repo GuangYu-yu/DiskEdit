@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-f2fs-tools-doc-00001	docs	待判	
+f2fs-tools-doc-00001	docs	裁剪	sload.f2fs 压缩装载不在依赖面；f2fs 面仅 mkfs/fsck/resize 登记（SA2-010/012/013，收缩按不支持拒绝）

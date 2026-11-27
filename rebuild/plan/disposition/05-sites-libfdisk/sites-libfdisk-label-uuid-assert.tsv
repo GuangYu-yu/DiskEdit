@@ -1,11 +1,11 @@
 row_id	ledger	state	note
-libfdisk-00557	sites	待判	
-libfdisk-00558	sites	待判	
-libfdisk-00559	sites	待判	
-libfdisk-00560	sites	待判	
-libfdisk-00561	sites	待判	
-libfdisk-00562	sites	待判	
-libfdisk-00564	sites	待判	
-libfdisk-00565	sites	待判	
-libfdisk-00566	sites	待判	
-libfdisk-00567	sites	待判	
+libfdisk-00557	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022
+libfdisk-00558	sites	拒绝	同上
+libfdisk-00559	sites	拒绝	同上
+libfdisk-00560	sites	拒绝	同上
+libfdisk-00561	sites	拒绝	同上
+libfdisk-00562	sites	拒绝	同上
+libfdisk-00564	sites	拒绝	同上
+libfdisk-00565	sites	拒绝	同上
+libfdisk-00566	sites	拒绝	同上
+libfdisk-00567	sites	拒绝	同上

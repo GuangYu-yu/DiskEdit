@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-libfdisk-doc-00001	docs	待判	
-libfdisk-doc-00002	docs	待判	
+libfdisk-doc-00001	docs	认领	SA1-013：写表后按分区 BLKPG 同步内核视图，无需 R/reread 选项（与 sfdisk 移除该选项的方向一致）
+libfdisk-doc-00002	docs	认领	与参考一致：DOS/IBM/ cylinders/head/sectors 等 legacy 选项不提供（CHS/老盘标面不实现 SA1-028/SA1-016；命令面契约枚举 tests/contract_surface.rs）

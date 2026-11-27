@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-gdisk-00170	sites	待判	
+gdisk-00170	sites	裁剪	cgdisk 写前 'destroy data' 逐字确认 ↔ 非交互 --yes 单点显式确认；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes

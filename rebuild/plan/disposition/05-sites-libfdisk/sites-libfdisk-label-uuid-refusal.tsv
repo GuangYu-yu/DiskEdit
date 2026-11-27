@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-libfdisk-00563	sites	待判	
+libfdisk-00563	sites	拒绝	条目重排不提供：delete 保留槽位空缺、次序原样保留。依据：SA3-001 同原则（身份与次序不静默改写）

@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-f2fs-tools-00201	sites	待判	
-f2fs-tools-00202	sites	待判	
-f2fs-tools-00203	sites	待判	
-f2fs-tools-00204	sites	待判	
-f2fs-tools-00205	sites	待判	
-f2fs-tools-00206	sites	待判	
-f2fs-tools-00207	sites	待判	
+f2fs-tools-00201	sites	拒绝	工具内部路径处理细节，经调用整体生效。依据：SA2-012（架构差异-多虑）
+f2fs-tools-00202	sites	裁剪	依赖工具子命令/usage 面（dump/defrag/sload/label 等）不暴露：固定参数调用。依据：SA2-011、特性依据=工具子命令面
+f2fs-tools-00203	sites	裁剪	同上
+f2fs-tools-00204	sites	裁剪	同上
+f2fs-tools-00205	sites	裁剪	同上
+f2fs-tools-00206	sites	裁剪	同上
+f2fs-tools-00207	sites	裁剪	同上

@@ -1,23 +1,23 @@
 row_id	ledger	state	note
-dosfstools-00022	sites	待判	
-dosfstools-00023	sites	待判	
-dosfstools-00032	sites	待判	
-dosfstools-00033	sites	待判	
-dosfstools-00034	sites	待判	
-dosfstools-00035	sites	待判	
-dosfstools-00036	sites	待判	
-dosfstools-00037	sites	待判	
-dosfstools-00038	sites	待判	
-dosfstools-00039	sites	待判	
-dosfstools-00041	sites	待判	
-dosfstools-00042	sites	待判	
-dosfstools-00043	sites	待判	
-dosfstools-00044	sites	待判	
-dosfstools-00045	sites	待判	
-dosfstools-00046	sites	待判	
-dosfstools-00047	sites	待判	
-dosfstools-00048	sites	待判	
-dosfstools-00049	sites	待判	
-dosfstools-00050	sites	待判	
-dosfstools-00200	sites	待判	
-dosfstools-00201	sites	待判	
+dosfstools-00022	sites	认领	工具运行输出/警告经 diagnose/execute 透传并按退出码分类（src/app/execute/diagnose.rs）。依据：SA2-012
+dosfstools-00023	sites	认领	同上
+dosfstools-00032	sites	裁剪	码页选择面不暴露：CP850 转换为工具内部细节，固定默认。依据：SA2-011、特性依据=码页面
+dosfstools-00033	sites	裁剪	同上
+dosfstools-00034	sites	裁剪	同上
+dosfstools-00035	sites	裁剪	同上
+dosfstools-00036	sites	裁剪	同上
+dosfstools-00037	sites	裁剪	同上
+dosfstools-00038	sites	裁剪	同上
+dosfstools-00039	sites	裁剪	同上
+dosfstools-00041	sites	裁剪	同上
+dosfstools-00042	sites	裁剪	同上
+dosfstools-00043	sites	裁剪	同上
+dosfstools-00044	sites	裁剪	同上
+dosfstools-00045	sites	裁剪	同上
+dosfstools-00046	sites	裁剪	同上
+dosfstools-00047	sites	裁剪	同上
+dosfstools-00048	sites	裁剪	同上
+dosfstools-00049	sites	裁剪	同上
+dosfstools-00050	sites	裁剪	同上
+dosfstools-00200	sites	认领	写失败不谎报完成：工具写失败→退出码映射为失败/部分。依据：SA2-002 同型
+dosfstools-00201	sites	认领	同上

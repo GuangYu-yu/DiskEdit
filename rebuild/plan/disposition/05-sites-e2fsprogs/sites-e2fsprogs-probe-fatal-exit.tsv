@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-e2fsprogs-00668	sites	待判	
-e2fsprogs-00670	sites	待判	
-e2fsprogs-00678	sites	待判	
-e2fsprogs-00680	sites	待判	
-e2fsprogs-00682	sites	待判	
-e2fsprogs-00685	sites	待判	
-e2fsprogs-00687	sites	待判	
-e2fsprogs-00689	sites	待判	
-e2fsprogs-00696	sites	待判	
-e2fsprogs-00702	sites	待判	
-e2fsprogs-00703	sites	待判	
-e2fsprogs-00706	sites	待判	
-e2fsprogs-00707	sites	待判	
+e2fsprogs-00668	sites	裁剪	裁剪：dumpe2fs usage 与出口——本实现以固定参数（-h）调用，usage 出口不可达；非零码由回读闸兜住（SA2-003）
+e2fsprogs-00670	sites	裁剪	同上
+e2fsprogs-00678	sites	裁剪	同上
+e2fsprogs-00680	sites	裁剪	同上
+e2fsprogs-00682	sites	裁剪	同上
+e2fsprogs-00685	sites	裁剪	同上
+e2fsprogs-00687	sites	裁剪	同上
+e2fsprogs-00689	sites	裁剪	同上
+e2fsprogs-00696	sites	裁剪	同上
+e2fsprogs-00702	sites	裁剪	同上
+e2fsprogs-00703	sites	裁剪	同上
+e2fsprogs-00706	sites	裁剪	同上
+e2fsprogs-00707	sites	裁剪	同上

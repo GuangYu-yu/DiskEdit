@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-lvm2-imp-00017	implicit	待判	
-lvm2-imp-00081	implicit	待判	
-lvm2-imp-00082	implicit	待判	
-lvm2-imp-00084	implicit	待判	
-lvm2-imp-00085	implicit	待判	
-lvm2-imp-00086	implicit	待判	
-lvm2-imp-00087	implicit	待判	
-lvm2-imp-00088	implicit	待判	
-lvm2-imp-00089	implicit	待判	
+lvm2-imp-00017	implicit	裁剪	O_DIRECT 调试日志；直通 I/O 不采纳（本实现缓冲 I/O+sync_all+回读，SA1-011）
+lvm2-imp-00081	implicit	裁剪	O_DIRECT 编译期断言；编译期检查由语言/CI 承担
+lvm2-imp-00082	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）
+lvm2-imp-00084	implicit	认领	依据 SA1-004/B5/B9：独占语义由目标锁+占用闸承担，锁不可得即 Occupied 拒绝，不降级共享打开；锚 src/app/decide/refusal.rs::Occupied、src/platform/linux/mod.rs（记录文件 O_CREAT|O_EXCL）
+lvm2-imp-00085	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）
+lvm2-imp-00086	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）
+lvm2-imp-00087	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）
+lvm2-imp-00088	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）
+lvm2-imp-00089	implicit	裁剪	同上（O_DIRECT 开关/编译期断言）

@@ -1,63 +1,63 @@
 row_id	ledger	state	note
-libfdisk-00794	sites	待判	
-libfdisk-00800	sites	待判	
-libfdisk-00801	sites	待判	
-libfdisk-00802	sites	待判	
-libfdisk-00812	sites	待判	
-libfdisk-00815	sites	待判	
-libfdisk-00834	sites	待判	
-libfdisk-00835	sites	待判	
-libfdisk-00858	sites	待判	
-libfdisk-00859	sites	待判	
-libfdisk-00898	sites	待判	
-libfdisk-00901	sites	待判	
-libfdisk-00902	sites	待判	
-libfdisk-00903	sites	待判	
-libfdisk-00920	sites	待判	
-libfdisk-00922	sites	待判	
-libfdisk-00945	sites	待判	
-libfdisk-00947	sites	待判	
-libfdisk-00949	sites	待判	
-libfdisk-00950	sites	待判	
-libfdisk-00951	sites	待判	
-libfdisk-00956	sites	待判	
-libfdisk-00958	sites	待判	
-libfdisk-00959	sites	待判	
-libfdisk-00965	sites	待判	
-libfdisk-00968	sites	待判	
-libfdisk-00969	sites	待判	
-libfdisk-01000	sites	待判	
-libfdisk-01002	sites	待判	
-libfdisk-01003	sites	待判	
-libfdisk-01004	sites	待判	
-libfdisk-01005	sites	待判	
-libfdisk-01006	sites	待判	
-libfdisk-01013	sites	待判	
-libfdisk-01014	sites	待判	
-libfdisk-01015	sites	待判	
-libfdisk-01016	sites	待判	
-libfdisk-01017	sites	待判	
-libfdisk-01018	sites	待判	
-libfdisk-01019	sites	待判	
-libfdisk-01020	sites	待判	
-libfdisk-01031	sites	待判	
-libfdisk-01032	sites	待判	
-libfdisk-01033	sites	待判	
-libfdisk-01034	sites	待判	
-libfdisk-01035	sites	待判	
-libfdisk-01036	sites	待判	
-libfdisk-01037	sites	待判	
-libfdisk-01038	sites	待判	
-libfdisk-01039	sites	待判	
-libfdisk-01040	sites	待判	
-libfdisk-01041	sites	待判	
-libfdisk-01043	sites	待判	
-libfdisk-01044	sites	待判	
-libfdisk-01045	sites	待判	
-libfdisk-01046	sites	待判	
-libfdisk-01047	sites	待判	
-libfdisk-01048	sites	待判	
-libfdisk-01066	sites	待判	
-libfdisk-01073	sites	待判	
-libfdisk-01074	sites	待判	
-libfdisk-01075	sites	待判	
+libfdisk-00794	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00800	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022
+libfdisk-00801	sites	拒绝	同上
+libfdisk-00802	sites	裁剪	sfdisk --backup 备份文件不提供，记录只服务崩溃回滚。依据：SA1-020
+libfdisk-00812	sites	裁剪	同上
+libfdisk-00815	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
+libfdisk-00834	sites	裁剪	类型清单输出面（sfdisk -T）不提供，类型集固定在拒绝信息中。依据：SA1-010 同口径、特性依据=类型清单
+libfdisk-00835	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022
+libfdisk-00858	sites	认领	目标解析已有：target_spec/未知目标拒绝（src/app/cli/parse.rs）。依据：R0046 族
+libfdisk-00859	sites	认领	同上
+libfdisk-00898	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
+libfdisk-00901	sites	裁剪	交互脚本输入不提供（sfdisk 脚本只输出）。依据：SA1-010
+libfdisk-00902	sites	裁剪	同上
+libfdisk-00903	sites	裁剪	同上
+libfdisk-00920	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00922	sites	裁剪	同上
+libfdisk-00945	sites	裁剪	同上
+libfdisk-00947	sites	裁剪	同上
+libfdisk-00949	sites	裁剪	同上
+libfdisk-00950	sites	裁剪	同上
+libfdisk-00951	sites	裁剪	同上
+libfdisk-00956	sites	裁剪	同上
+libfdisk-00958	sites	裁剪	同上
+libfdisk-00959	sites	裁剪	同上
+libfdisk-00965	sites	认领	dump 面定案：info JSON 为唯一结构化输出，不提供 sfdisk 脚本 dump 格式。依据：SA1-010、SA1-007
+libfdisk-00968	sites	认领	同上
+libfdisk-00969	sites	认领	同上
+libfdisk-01000	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk TUI） 建议拆分:sites-libfdisk-table-edit-assert-sfdisk
+libfdisk-01002	sites	裁剪	同上
+libfdisk-01003	sites	裁剪	同上
+libfdisk-01004	sites	裁剪	同上
+libfdisk-01005	sites	裁剪	同上
+libfdisk-01006	sites	裁剪	同上
+libfdisk-01013	sites	裁剪	同上
+libfdisk-01014	sites	裁剪	同上
+libfdisk-01015	sites	裁剪	同上
+libfdisk-01016	sites	裁剪	同上
+libfdisk-01017	sites	裁剪	同上
+libfdisk-01018	sites	裁剪	同上
+libfdisk-01019	sites	裁剪	同上
+libfdisk-01020	sites	裁剪	同上
+libfdisk-01031	sites	裁剪	同上
+libfdisk-01032	sites	裁剪	同上
+libfdisk-01033	sites	裁剪	同上
+libfdisk-01034	sites	裁剪	同上
+libfdisk-01035	sites	裁剪	同上
+libfdisk-01036	sites	裁剪	同上
+libfdisk-01037	sites	裁剪	同上
+libfdisk-01038	sites	裁剪	同上
+libfdisk-01039	sites	裁剪	同上
+libfdisk-01040	sites	裁剪	同上
+libfdisk-01041	sites	裁剪	同上
+libfdisk-01043	sites	裁剪	同上
+libfdisk-01044	sites	裁剪	同上
+libfdisk-01045	sites	裁剪	同上
+libfdisk-01046	sites	裁剪	同上
+libfdisk-01047	sites	裁剪	同上
+libfdisk-01048	sites	裁剪	同上
+libfdisk-01066	sites	裁剪	同上
+libfdisk-01073	sites	裁剪	同上
+libfdisk-01074	sites	裁剪	同上
+libfdisk-01075	sites	裁剪	同上

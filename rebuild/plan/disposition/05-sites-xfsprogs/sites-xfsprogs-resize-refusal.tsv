@@ -1,23 +1,23 @@
 row_id	ledger	state	note
-xfsprogs-00007	sites	待判	
-xfsprogs-00008	sites	待判	
-xfsprogs-00012	sites	待判	
-xfsprogs-00013	sites	待判	
-xfsprogs-00016	sites	待判	
-xfsprogs-00018	sites	待判	
-xfsprogs-00020	sites	待判	
-xfsprogs-00021	sites	待判	
-xfsprogs-00023	sites	待判	
-xfsprogs-00025	sites	待判	
-xfsprogs-00027	sites	待判	
-xfsprogs-00029	sites	待判	
-xfsprogs-00030	sites	待判	
-xfsprogs-00031	sites	待判	
-xfsprogs-00032	sites	待判	
-xfsprogs-00035	sites	待判	
-xfsprogs-00038	sites	待判	
-xfsprogs-00039	sites	待判	
-xfsprogs-00040	sites	待判	
-xfsprogs-00041	sites	待判	
-xfsprogs-00042	sites	待判	
-xfsprogs-00044	sites	待判	
+xfsprogs-00007	sites	认领	认领：xfs_growfs 只接受挂载点且只增不减的调用时校验——SA2-004（非 btrfs 在线缩容一律拒绝；xfs 不收缩由档案表 Unsupported 承担）；在线扩容固定 `xfs_growfs <mount>`（src/app/execute/filesystem.rs::online_invocation），非零退出落已写待恢复；建议拆分:sites-xfsprogs-resize-growfs-core
+xfsprogs-00008	sites	认领	认领：不是已挂载 XFS 即拒绝（SA2-004 原型行为；src/app/execute/filesystem.rs::online_invocation、tests/online.rs::online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem）
+xfsprogs-00012	sites	认领	认领：几何读取失败/回读比对——SA2-005（`xfs_growfs -n` data 几何回读，覆盖到分区末尾才算完成）；src/app/execute/filesystem.rs::verify_xfs_size、tests/online.rs::an_xfs_grow_is_verified_by_the_data_geometry
+xfsprogs-00013	sites	认领	同上
+xfsprogs-00016	sites	认领	认领：data 段访问闸（默认只扩 data 段，即本实现的唯一消费段）——SA2-004（src/app/execute/filesystem.rs::online_invocation）
+xfsprogs-00018	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00020	sites	裁剪	同上
+xfsprogs-00021	sites	裁剪	同上
+xfsprogs-00023	sites	裁剪	同上
+xfsprogs-00025	sites	裁剪	同上
+xfsprogs-00027	sites	裁剪	同上
+xfsprogs-00029	sites	认领	认领：XFS_IOC_FSGROWFSDATA 失败→非零退出——按失败/已写待恢复，不谎报完成（SA2-005 消费边界；src/app/execute/filesystem.rs::run_online_native）
+xfsprogs-00030	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00031	sites	裁剪	同上
+xfsprogs-00032	sites	裁剪	同上
+xfsprogs-00035	sites	裁剪	同上
+xfsprogs-00038	sites	裁剪	同上
+xfsprogs-00039	sites	裁剪	同上
+xfsprogs-00040	sites	裁剪	同上
+xfsprogs-00041	sites	裁剪	同上
+xfsprogs-00042	sites	认领	认领：XFS_IOC_FSGEOMETRY 失败→非零退出——几何读取失败即不承认完成（SA2-005；src/app/execute/filesystem.rs::verify_xfs_size）
+xfsprogs-00044	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）

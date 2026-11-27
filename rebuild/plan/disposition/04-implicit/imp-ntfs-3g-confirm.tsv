@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-ntfs-3g-imp-00001	implicit	待判	
-ntfs-3g-imp-00003	implicit	待判	
-ntfs-3g-imp-00004	implicit	待判	
-ntfs-3g-imp-00005	implicit	待判	
-ntfs-3g-imp-00006	implicit	待判	
-ntfs-3g-imp-00007	implicit	待判	
-ntfs-3g-imp-00008	implicit	待判	
-ntfs-3g-imp-00009	implicit	待判	
-ntfs-3g-imp-00010	implicit	待判	
-ntfs-3g-imp-00011	implicit	待判	
-ntfs-3g-imp-00012	implicit	待判	
-ntfs-3g-imp-00013	implicit	待判	
-ntfs-3g-imp-00014	implicit	待判	
-ntfs-3g-imp-00015	implicit	待判	
-ntfs-3g-imp-00016	implicit	待判	
-ntfs-3g-imp-00017	implicit	待判	
-ntfs-3g-imp-00018	implicit	待判	
-ntfs-3g-imp-00019	implicit	待判	
-ntfs-3g-imp-00020	implicit	待判	
-ntfs-3g-imp-00021	implicit	待判	
-ntfs-3g-imp-00023	implicit	待判	
-ntfs-3g-imp-00024	implicit	待判	
-ntfs-3g-imp-00025	implicit	待判	
-ntfs-3g-imp-00026	implicit	待判	
-ntfs-3g-imp-00027	implicit	待判	
-ntfs-3g-imp-00028	implicit	待判	
-ntfs-3g-imp-00029	implicit	待判	
-ntfs-3g-imp-00030	implicit	待判	
+ntfs-3g-imp-00001	implicit	认领	ntfsresize force ↔ 参数固定 -f 与绝对字节；依据 SA2-009
+ntfs-3g-imp-00003	implicit	认领	ntfsresize force ↔ 参数固定 -f 与绝对字节；依据 SA2-009
+ntfs-3g-imp-00004	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00005	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00006	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00007	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00008	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00009	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00010	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00011	implicit	认领	ntfslabel -f/NTFS_MNT_RECOVER ↔ 标签/身份操作由档案表登记的 Ntfslabel 承担（crates/core/src/fs/program.rs）；损坏卷在决策层拒绝或确认后执行
+ntfs-3g-imp-00012	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00013	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00014	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00015	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00016	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00017	implicit	裁剪	ntfsinfo 调试探针；只读探针按档案表登记集合（Dumpe2fs/Blkid/Pvs/Lvs/Vgs），inspect 给原始签名（SA1-017）
+ntfs-3g-imp-00018	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00019	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00020	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00021	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00023	implicit	认领	ntfsfix force ↔ Ntfsfix 经档案表固定参数调用（SA2-012 真内核覆盖）
+ntfs-3g-imp-00024	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00025	implicit	裁剪	ntfscluster 调试工具面；未纳入
+ntfs-3g-imp-00026	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00027	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00028	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）
+ntfs-3g-imp-00029	implicit	裁剪	库内 umount force 形参（未使用）；挂载/卸载经 Mount/Umount 程序身份（crates/core/src/fs/program.rs）
+ntfs-3g-imp-00030	implicit	认领	同上（ntfsresize -f 固定参数面；SA2-009）

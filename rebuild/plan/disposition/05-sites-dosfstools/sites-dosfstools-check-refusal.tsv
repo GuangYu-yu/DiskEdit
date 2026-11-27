@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-dosfstools-00158	sites	待判	
-dosfstools-00159	sites	待判	
-dosfstools-00160	sites	待判	
-dosfstools-00168	sites	待判	
-dosfstools-00169	sites	待判	
-dosfstools-00170	sites	待判	
-dosfstools-00181	sites	待判	
-dosfstools-00184	sites	待判	
-dosfstools-00186	sites	待判	
-dosfstools-00190	sites	待判	
-dosfstools-00193	sites	待判	
+dosfstools-00158	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
+dosfstools-00159	sites	裁剪	同上
+dosfstools-00160	sites	裁剪	同上
+dosfstools-00168	sites	裁剪	同上
+dosfstools-00169	sites	裁剪	同上
+dosfstools-00170	sites	裁剪	同上
+dosfstools-00181	sites	裁剪	同上
+dosfstools-00184	sites	裁剪	同上
+dosfstools-00186	sites	裁剪	同上
+dosfstools-00190	sites	拒绝	getopt 内部分支：上游实现细节，行为经调用整体生效。依据：SA2-012（架构差异-多虑）
+dosfstools-00193	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面

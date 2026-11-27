@@ -1,20 +1,20 @@
 row_id	ledger	state	note
-libfdisk-00208	sites	待判	
-libfdisk-00216	sites	待判	
-libfdisk-00217	sites	待判	
-libfdisk-00225	sites	待判	
-libfdisk-00250	sites	待判	
-libfdisk-00255	sites	待判	
-libfdisk-00256	sites	待判	
-libfdisk-00257	sites	待判	
-libfdisk-00261	sites	待判	
-libfdisk-00263	sites	待判	
-libfdisk-00282	sites	待判	
-libfdisk-00283	sites	待判	
-libfdisk-00288	sites	待判	
-libfdisk-00289	sites	待判	
-libfdisk-00299	sites	待判	
-libfdisk-00306	sites	待判	
-libfdisk-00307	sites	待判	
-libfdisk-00334	sites	待判	
-libfdisk-00348	sites	待判	
+libfdisk-00208	sites	认领	EBR 链读取失败整体拒绝（walk_extended 错误上抛→读失败）。依据：SA3-003 同口径
+libfdisk-00216	sites	认领	大盘 DOS 限制已有且更严格：超出 32 位 LBA 表达范围直接拒绝（edit.rs PastAddressSpace/MBR_LBA_MAX），不止告警。依据：SA1-027 同口径
+libfdisk-00217	sites	认领	同上
+libfdisk-00225	sites	差异	D17：读侧宽容差异：参考对 EBR 链尾损坏/多余数据警告并跳过，本实现整体读失败拒绝（更保守不猜）。保持拒绝语义并登记差异
+libfdisk-00250	sites	认领	起点/值越界拒绝已有（OutsideUsable；add/resize 判定）。依据：SA1-014、SA1-008
+libfdisk-00255	sites	认领	空间校验已有：NoGapFits/对齐空洞（crates/core/src/table/edit.rs）。依据：SA1-008
+libfdisk-00256	sites	认领	同上
+libfdisk-00257	sites	认领	同上
+libfdisk-00261	sites	认领	同上
+libfdisk-00263	sites	认领	起点/值越界拒绝已有（OutsideUsable；add/resize 判定）。依据：SA1-014、SA1-008
+libfdisk-00282	sites	认领	重叠校验已有（Overlaps）。依据：SA1-027
+libfdisk-00283	sites	认领	同上
+libfdisk-00288	sites	差异	D16：verify 汇总报告未复刻：info/inspect 报损伤类别与退出码，不逐项列 N errors 清单。如需人工逐项诊断可在 info 损伤字段附明细列表
+libfdisk-00289	sites	差异	同上（D16）
+libfdisk-00299	sites	认领	逻辑分区不编辑：ContainerTypeByte 一律拒绝（比参考条件拒绝更强）。依据：SA1-027 同口径
+libfdisk-00306	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（交互字母选类型）
+libfdisk-00307	sites	认领	写扇区失败上抛，不谎报完成。依据：SA1-011 同型
+libfdisk-00334	sites	认领	set type 对容器拒绝已有（set_mbr_type ContainerTypeByte）。依据：SA1-027
+libfdisk-00348	sites	认领	起点重叠盘标区拒绝已有（resize 判定 OutsideUsable；起点强制 >=1）。依据：SA1-014

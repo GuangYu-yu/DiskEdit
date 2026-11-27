@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-f2fs-tools-00329	sites	待判	
-f2fs-tools-00330	sites	待判	
-f2fs-tools-00331	sites	待判	
-f2fs-tools-00332	sites	待判	
-f2fs-tools-00333	sites	待判	
-f2fs-tools-00334	sites	待判	
-f2fs-tools-00335	sites	待判	
-f2fs-tools-00336	sites	待判	
-f2fs-tools-00337	sites	待判	
-f2fs-tools-00338	sites	待判	
-f2fs-tools-00339	sites	待判	
-f2fs-tools-00340	sites	待判	
-f2fs-tools-00341	sites	待判	
-f2fs-tools-00342	sites	待判	
-f2fs-tools-00343	sites	待判	
-f2fs-tools-00344	sites	待判	
-f2fs-tools-00345	sites	待判	
-f2fs-tools-00346	sites	待判	
-f2fs-tools-00347	sites	待判	
-f2fs-tools-00348	sites	待判	
-f2fs-tools-00349	sites	待判	
-f2fs-tools-00350	sites	待判	
-f2fs-tools-00351	sites	待判	
-f2fs-tools-00352	sites	待判	
-f2fs-tools-00353	sites	待判	
-f2fs-tools-00354	sites	待判	
-f2fs-tools-00355	sites	待判	
-f2fs-tools-00356	sites	待判	
+f2fs-tools-00329	sites	拒绝	resize.f2fs 内部断言为上游实现细节；扩容固定次序 fsck.f2fs→resize.f2fs 并以 superblock block_count 回读证实。依据：SA2-010（架构差异-多虑）
+f2fs-tools-00330	sites	拒绝	同上
+f2fs-tools-00331	sites	拒绝	同上
+f2fs-tools-00332	sites	拒绝	同上
+f2fs-tools-00333	sites	拒绝	同上
+f2fs-tools-00334	sites	拒绝	同上
+f2fs-tools-00335	sites	拒绝	同上
+f2fs-tools-00336	sites	拒绝	同上
+f2fs-tools-00337	sites	拒绝	同上
+f2fs-tools-00338	sites	拒绝	同上
+f2fs-tools-00339	sites	拒绝	同上
+f2fs-tools-00340	sites	拒绝	同上
+f2fs-tools-00341	sites	拒绝	同上
+f2fs-tools-00342	sites	拒绝	同上
+f2fs-tools-00343	sites	拒绝	同上
+f2fs-tools-00344	sites	拒绝	同上
+f2fs-tools-00345	sites	拒绝	同上
+f2fs-tools-00346	sites	拒绝	同上
+f2fs-tools-00347	sites	拒绝	同上
+f2fs-tools-00348	sites	拒绝	同上
+f2fs-tools-00349	sites	拒绝	同上
+f2fs-tools-00350	sites	拒绝	同上
+f2fs-tools-00351	sites	拒绝	同上
+f2fs-tools-00352	sites	拒绝	同上
+f2fs-tools-00353	sites	拒绝	同上
+f2fs-tools-00354	sites	拒绝	同上
+f2fs-tools-00355	sites	拒绝	同上
+f2fs-tools-00356	sites	拒绝	同上

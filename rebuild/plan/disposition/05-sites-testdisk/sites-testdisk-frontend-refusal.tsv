@@ -1,30 +1,30 @@
 row_id	ledger	state	note
-testdisk-00025	sites	待判	
-testdisk-00026	sites	待判	
-testdisk-00029	sites	待判	
-testdisk-00033	sites	待判	
-testdisk-00039	sites	待判	
-testdisk-00040	sites	待判	
-testdisk-00041	sites	待判	
-testdisk-00042	sites	待判	
-testdisk-00043	sites	待判	
-testdisk-00045	sites	待判	
-testdisk-00046	sites	待判	
-testdisk-00051	sites	待判	
-testdisk-00053	sites	待判	
-testdisk-00056	sites	待判	
-testdisk-00057	sites	待判	
-testdisk-00060	sites	待判	
-testdisk-00061	sites	待判	
-testdisk-00065	sites	待判	
-testdisk-00066	sites	待判	
-testdisk-00068	sites	待判	
-testdisk-00069	sites	待判	
-testdisk-00070	sites	待判	
-testdisk-00074	sites	待判	
-testdisk-00079	sites	待判	
-testdisk-00080	sites	待判	
-testdisk-00083	sites	待判	
-testdisk-00084	sites	待判	
-testdisk-00086	sites	待判	
-testdisk-00087	sites	待判	
+testdisk-00025	sites	裁剪	HUMAX 盘标解析；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00026	sites	裁剪	HUMAX 排序初始化；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00029	sites	裁剪	i386 排序初始化严重错误分支；交互排序菜单内部
+testdisk-00033	sites	认领	MBR 结构严重错误 ↔ 按 MBR 损坏处理不猜；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/mbr/primary.rs
+testdisk-00039	sites	认领	逻辑分区链结构规则（隐藏/multiboot/链接唯一/仅一分区/不可 bootable）↔ 扩展链结构校验；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00040	sites	裁剪	HUMAX 盘标解析；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00041	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00042	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00043	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00045	sites	认领	扩展分区包含关系校验；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00046	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00051	sites	认领	写 MBR 严重错误 ↔ 写失败错误上抛+已写待恢复；依据 SA1-011；锚 src/app/execute/write.rs
+testdisk-00053	sites	认领	扩展链 STATUS_EXT 类型校验；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00056	sites	裁剪	未处理错误码文案内部；错误文本/退出码由单源报告层承担；依据 SA1-009
+testdisk-00057	sites	认领	MBR 结构校验严重错误分支；锚 crates/core/src/table/mbr/primary.rs、extended.rs
+testdisk-00060	sites	裁剪	FAT boot sector 内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00061	sites	裁剪	BSD disklabel；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00065	sites	裁剪	NTFS/exFAT boot 内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00066	sites	裁剪	RAID 超级块内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00068	sites	裁剪	类型级内容校验告警面；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00069	sites	裁剪	MAC 盘标解析；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00070	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00074	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00079	sites	裁剪	SUN 盘标；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00080	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00083	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00084	sites	裁剪	XBOX 盘标；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00086	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）
+testdisk-00087	sites	认领	同上（MBR/扩展链结构校验行认领，锚 crates/core/src/table/mbr）

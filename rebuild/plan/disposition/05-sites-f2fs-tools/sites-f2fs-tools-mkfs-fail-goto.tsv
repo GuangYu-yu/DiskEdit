@@ -1,15 +1,15 @@
 row_id	ledger	state	note
-f2fs-tools-00009	sites	待判	
-f2fs-tools-00010	sites	待判	
-f2fs-tools-00011	sites	待判	
-f2fs-tools-00012	sites	待判	
-f2fs-tools-00013	sites	待判	
-f2fs-tools-00014	sites	待判	
-f2fs-tools-00015	sites	待判	
-f2fs-tools-00016	sites	待判	
-f2fs-tools-00017	sites	待判	
-f2fs-tools-00018	sites	待判	
-f2fs-tools-00019	sites	待判	
-f2fs-tools-00020	sites	待判	
-f2fs-tools-00021	sites	待判	
-f2fs-tools-00022	sites	待判	
+f2fs-tools-00009	sites	拒绝	C 失败 goto 清理由 Rust Result 传播取代，依赖工具内部经固定参数调用整体生效。依据：SA2-010、SA2-012（架构差异）（mkfs.f2fs 内部）
+f2fs-tools-00010	sites	拒绝	同上
+f2fs-tools-00011	sites	拒绝	同上
+f2fs-tools-00012	sites	拒绝	同上
+f2fs-tools-00013	sites	拒绝	同上
+f2fs-tools-00014	sites	拒绝	同上
+f2fs-tools-00015	sites	认领	建卷签名清除由 mkfs.f2fs 建卷时执行；本实现以 --yes 确认门控（src/app/cli/parse.rs parse_mkfs）。依据：SA1-005 同型
+f2fs-tools-00016	sites	拒绝	C 失败 goto 清理由 Rust Result 传播取代，依赖工具内部经固定参数调用整体生效。依据：SA2-010、SA2-012（架构差异）（mkfs.f2fs 内部）
+f2fs-tools-00017	sites	拒绝	同上
+f2fs-tools-00018	sites	拒绝	同上
+f2fs-tools-00019	sites	拒绝	同上
+f2fs-tools-00020	sites	拒绝	同上
+f2fs-tools-00021	sites	拒绝	同上
+f2fs-tools-00022	sites	拒绝	同上

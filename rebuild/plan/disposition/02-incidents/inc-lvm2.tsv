@@ -1,88 +1,88 @@
 row_id	ledger	state	note
-lvm2-inc-00001	incidents	待判	
-lvm2-inc-00002	incidents	待判	
-lvm2-inc-00003	incidents	待判	
-lvm2-inc-00004	incidents	待判	
-lvm2-inc-00005	incidents	待判	
-lvm2-inc-00006	incidents	待判	
-lvm2-inc-00007	incidents	待判	
-lvm2-inc-00008	incidents	待判	
-lvm2-inc-00009	incidents	待判	
-lvm2-inc-00010	incidents	待判	
-lvm2-inc-00011	incidents	待判	
-lvm2-inc-00012	incidents	待判	
-lvm2-inc-00013	incidents	待判	
-lvm2-inc-00014	incidents	待判	
-lvm2-inc-00015	incidents	待判	
-lvm2-inc-00016	incidents	待判	
-lvm2-inc-00017	incidents	待判	
-lvm2-inc-00018	incidents	待判	
-lvm2-inc-00019	incidents	待判	
-lvm2-inc-00020	incidents	待判	
-lvm2-inc-00021	incidents	待判	
-lvm2-inc-00022	incidents	待判	
-lvm2-inc-00023	incidents	待判	
-lvm2-inc-00024	incidents	待判	
-lvm2-inc-00025	incidents	待判	
-lvm2-inc-00026	incidents	待判	
-lvm2-inc-00027	incidents	待判	
-lvm2-inc-00028	incidents	待判	
-lvm2-inc-00029	incidents	待判	
-lvm2-inc-00030	incidents	待判	
-lvm2-inc-00031	incidents	待判	
-lvm2-inc-00032	incidents	待判	
-lvm2-inc-00033	incidents	待判	
-lvm2-inc-00034	incidents	待判	
-lvm2-inc-00035	incidents	待判	
-lvm2-inc-00036	incidents	待判	
-lvm2-inc-00037	incidents	待判	
-lvm2-inc-00038	incidents	待判	
-lvm2-inc-00039	incidents	待判	
-lvm2-inc-00040	incidents	待判	
-lvm2-inc-00041	incidents	待判	
-lvm2-inc-00042	incidents	待判	
-lvm2-inc-00043	incidents	待判	
-lvm2-inc-00044	incidents	待判	
-lvm2-inc-00045	incidents	待判	
-lvm2-inc-00046	incidents	待判	
-lvm2-inc-00047	incidents	待判	
-lvm2-inc-00048	incidents	待判	
-lvm2-inc-00049	incidents	待判	
-lvm2-inc-00050	incidents	待判	
-lvm2-inc-00051	incidents	待判	
-lvm2-inc-00052	incidents	待判	
-lvm2-inc-00053	incidents	待判	
-lvm2-inc-00054	incidents	待判	
-lvm2-inc-00055	incidents	待判	
-lvm2-inc-00056	incidents	待判	
-lvm2-inc-00057	incidents	待判	
-lvm2-inc-00058	incidents	待判	
-lvm2-inc-00059	incidents	待判	
-lvm2-inc-00060	incidents	待判	
-lvm2-inc-00061	incidents	待判	
-lvm2-inc-00062	incidents	待判	
-lvm2-inc-00063	incidents	待判	
-lvm2-inc-00064	incidents	待判	
-lvm2-inc-00065	incidents	待判	
-lvm2-inc-00066	incidents	待判	
-lvm2-inc-00067	incidents	待判	
-lvm2-inc-00068	incidents	待判	
-lvm2-inc-00069	incidents	待判	
-lvm2-inc-00070	incidents	待判	
-lvm2-inc-00071	incidents	待判	
-lvm2-inc-00072	incidents	待判	
-lvm2-inc-00073	incidents	待判	
-lvm2-inc-00074	incidents	待判	
-lvm2-inc-00075	incidents	待判	
-lvm2-inc-00076	incidents	待判	
-lvm2-inc-00077	incidents	待判	
-lvm2-inc-00078	incidents	待判	
-lvm2-inc-00079	incidents	待判	
-lvm2-inc-00080	incidents	待判	
-lvm2-inc-00081	incidents	待判	
-lvm2-inc-00082	incidents	待判	
-lvm2-inc-00083	incidents	待判	
-lvm2-inc-00084	incidents	待判	
-lvm2-inc-00085	incidents	待判	
-lvm2-inc-00086	incidents	待判	
-lvm2-inc-00087	incidents	待判	
+lvm2-inc-00001	incidents	裁剪	依赖工具 LVM2 的内部修复/特性（cluster/lvmetad/dmeventd/thin/cache/raid/mirror/metadata 程序自身）；本实现 LVM 链仅 pvresize→lvextend -r→pvs/vgs 证据（SA2-017），工具内部随发行版版本固定（SA2-011），不属本实现行为面
+lvm2-inc-00002	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00003	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00004	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00005	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00006	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00007	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00008	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00009	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00010	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00011	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00012	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00013	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00014	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00015	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00016	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00017	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00018	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00019	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00020	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00021	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00022	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00023	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00024	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00025	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00026	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00027	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00028	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00029	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00030	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00031	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00032	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00033	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00034	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00035	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00036	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00037	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00038	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00039	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00040	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00041	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00042	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00043	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00044	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00045	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00046	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00047	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00048	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00049	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00050	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00051	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00052	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00053	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00054	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00055	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00056	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00057	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00058	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00059	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00060	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00061	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00062	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00063	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00064	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00065	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00066	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00067	incidents	裁剪	同 lvm2-inc-00001（fsadm 联动属上游内部；本实现扩缩契约由 lvextend -r + 回读证实承接 SA2-017/SA2-011）
+lvm2-inc-00068	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00069	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00070	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00071	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00072	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00073	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00074	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00075	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00076	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00077	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00078	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00079	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00080	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00081	incidents	认领	"A pvresize implementation"（WHATS_NEW 2.02.00）——pvresize 正是本实现 LVM 链吸收新分区尺寸的依赖工具（SA2-017：先 pvresize 吸收、只扩不缩 B28）
+lvm2-inc-00082	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00083	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00084	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00085	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00086	incidents	裁剪	同 lvm2-inc-00001
+lvm2-inc-00087	incidents	裁剪	同 lvm2-inc-00001

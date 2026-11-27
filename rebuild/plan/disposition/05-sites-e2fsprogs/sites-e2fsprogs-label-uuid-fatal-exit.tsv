@@ -1,34 +1,34 @@
 row_id	ledger	state	note
-e2fsprogs-00105	sites	待判	
-e2fsprogs-00107	sites	待判	
-e2fsprogs-00128	sites	待判	
-e2fsprogs-00151	sites	待判	
-e2fsprogs-00180	sites	待判	
-e2fsprogs-00182	sites	待判	
-e2fsprogs-00184	sites	待判	
-e2fsprogs-00187	sites	待判	
-e2fsprogs-00190	sites	待判	
-e2fsprogs-00193	sites	待判	
-e2fsprogs-00196	sites	待判	
-e2fsprogs-00199	sites	待判	
-e2fsprogs-00202	sites	待判	
-e2fsprogs-00204	sites	待判	
-e2fsprogs-00206	sites	待判	
-e2fsprogs-00207	sites	待判	
-e2fsprogs-00210	sites	待判	
-e2fsprogs-00213	sites	待判	
-e2fsprogs-00216	sites	待判	
-e2fsprogs-00219	sites	待判	
-e2fsprogs-00220	sites	待判	
-e2fsprogs-00221	sites	待判	
-e2fsprogs-00222	sites	待判	
-e2fsprogs-00224	sites	待判	
-e2fsprogs-00226	sites	待判	
-e2fsprogs-00228	sites	待判	
-e2fsprogs-00294	sites	待判	
-e2fsprogs-00295	sites	待判	
-e2fsprogs-00300	sites	待判	
-e2fsprogs-00302	sites	待判	
-e2fsprogs-00312	sites	待判	
-e2fsprogs-00323	sites	待判	
-e2fsprogs-00331	sites	待判	
+e2fsprogs-00105	sites	裁剪	裁剪：tune2fs/e2label usage 与退出出口——本实现不实现 tune2fs；set label/uuid 的退出码由本实现七值映射单源决定（src/app/report/exit.rs），不承接工具 usage 码
+e2fsprogs-00107	sites	裁剪	同上
+e2fsprogs-00128	sites	裁剪	同上
+e2fsprogs-00151	sites	裁剪	同上
+e2fsprogs-00180	sites	裁剪	同上
+e2fsprogs-00182	sites	裁剪	同上
+e2fsprogs-00184	sites	裁剪	同上
+e2fsprogs-00187	sites	裁剪	同上
+e2fsprogs-00190	sites	裁剪	同上
+e2fsprogs-00193	sites	裁剪	同上
+e2fsprogs-00196	sites	裁剪	同上
+e2fsprogs-00199	sites	裁剪	同上
+e2fsprogs-00202	sites	裁剪	同上
+e2fsprogs-00204	sites	裁剪	同上
+e2fsprogs-00206	sites	裁剪	同上
+e2fsprogs-00207	sites	裁剪	同上
+e2fsprogs-00210	sites	裁剪	同上
+e2fsprogs-00213	sites	裁剪	同上
+e2fsprogs-00216	sites	裁剪	同上
+e2fsprogs-00219	sites	裁剪	同上
+e2fsprogs-00220	sites	裁剪	同上
+e2fsprogs-00221	sites	裁剪	同上
+e2fsprogs-00222	sites	裁剪	同上
+e2fsprogs-00224	sites	裁剪	同上
+e2fsprogs-00226	sites	裁剪	同上
+e2fsprogs-00228	sites	裁剪	同上
+e2fsprogs-00294	sites	裁剪	同上
+e2fsprogs-00295	sites	裁剪	同上
+e2fsprogs-00300	sites	裁剪	同上
+e2fsprogs-00302	sites	裁剪	同上
+e2fsprogs-00312	sites	裁剪	同上
+e2fsprogs-00323	sites	裁剪	同上
+e2fsprogs-00331	sites	裁剪	同上

@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-e2fsprogs-00674	sites	待判	
-e2fsprogs-00675	sites	待判	
-e2fsprogs-00676	sites	待判	
-e2fsprogs-00683	sites	待判	
-e2fsprogs-00684	sites	待判	
-e2fsprogs-00690	sites	待判	
-e2fsprogs-00692	sites	待判	
-e2fsprogs-00693	sites	待判	
-e2fsprogs-00697	sites	待判	
-e2fsprogs-00698	sites	待判	
-e2fsprogs-00699	sites	待判	
-e2fsprogs-00700	sites	待判	
+e2fsprogs-00674	sites	裁剪	裁剪：dumpe2fs 的 MMP/journal/badblocks 输出面拒绝与 -o 参数校验——本实现只用 -h 只读几何回读（SA2-003/SA2-011），不接线
+e2fsprogs-00675	sites	裁剪	同上
+e2fsprogs-00676	sites	裁剪	同上
+e2fsprogs-00683	sites	裁剪	同上
+e2fsprogs-00684	sites	裁剪	同上
+e2fsprogs-00690	sites	裁剪	同上
+e2fsprogs-00692	sites	裁剪	同上
+e2fsprogs-00693	sites	裁剪	同上
+e2fsprogs-00697	sites	裁剪	同上
+e2fsprogs-00698	sites	裁剪	同上
+e2fsprogs-00699	sites	裁剪	同上
+e2fsprogs-00700	sites	裁剪	同上

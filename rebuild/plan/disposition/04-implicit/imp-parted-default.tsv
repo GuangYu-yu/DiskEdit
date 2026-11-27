@@ -1,72 +1,72 @@
 row_id	ledger	state	note
-parted-imp-00004	implicit	待判	
-parted-imp-00005	implicit	待判	
-parted-imp-00006	implicit	待判	
-parted-imp-00023	implicit	待判	
-parted-imp-00024	implicit	待判	
-parted-imp-00025	implicit	待判	
-parted-imp-00026	implicit	待判	
-parted-imp-00027	implicit	待判	
-parted-imp-00028	implicit	待判	
-parted-imp-00029	implicit	待判	
-parted-imp-00030	implicit	待判	
-parted-imp-00031	implicit	待判	
-parted-imp-00032	implicit	待判	
-parted-imp-00033	implicit	待判	
-parted-imp-00034	implicit	待判	
-parted-imp-00035	implicit	待判	
-parted-imp-00036	implicit	待判	
-parted-imp-00037	implicit	待判	
-parted-imp-00038	implicit	待判	
-parted-imp-00039	implicit	待判	
-parted-imp-00040	implicit	待判	
-parted-imp-00041	implicit	待判	
-parted-imp-00042	implicit	待判	
-parted-imp-00043	implicit	待判	
-parted-imp-00044	implicit	待判	
-parted-imp-00045	implicit	待判	
-parted-imp-00046	implicit	待判	
-parted-imp-00047	implicit	待判	
-parted-imp-00048	implicit	待判	
-parted-imp-00049	implicit	待判	
-parted-imp-00050	implicit	待判	
-parted-imp-00051	implicit	待判	
-parted-imp-00052	implicit	待判	
-parted-imp-00053	implicit	待判	
-parted-imp-00054	implicit	待判	
-parted-imp-00055	implicit	待判	
-parted-imp-00056	implicit	待判	
-parted-imp-00057	implicit	待判	
-parted-imp-00058	implicit	待判	
-parted-imp-00059	implicit	待判	
-parted-imp-00060	implicit	待判	
-parted-imp-00061	implicit	待判	
-parted-imp-00062	implicit	待判	
-parted-imp-00063	implicit	待判	
-parted-imp-00064	implicit	待判	
-parted-imp-00065	implicit	待判	
-parted-imp-00066	implicit	待判	
-parted-imp-00067	implicit	待判	
-parted-imp-00068	implicit	待判	
-parted-imp-00069	implicit	待判	
-parted-imp-00070	implicit	待判	
-parted-imp-00071	implicit	待判	
-parted-imp-00072	implicit	待判	
-parted-imp-00073	implicit	待判	
-parted-imp-00074	implicit	待判	
-parted-imp-00075	implicit	待判	
-parted-imp-00076	implicit	待判	
-parted-imp-00077	implicit	待判	
-parted-imp-00078	implicit	待判	
-parted-imp-00079	implicit	待判	
-parted-imp-00080	implicit	待判	
-parted-imp-00081	implicit	待判	
-parted-imp-00082	implicit	待判	
-parted-imp-00083	implicit	待判	
-parted-imp-00084	implicit	待判	
-parted-imp-00085	implicit	待判	
-parted-imp-00086	implicit	待判	
-parted-imp-00087	implicit	待判	
-parted-imp-00088	implicit	待判	
-parted-imp-00089	implicit	待判	
-parted-imp-00091	implicit	待判	
+parted-imp-00004	implicit	裁剪	BLKGETLASTSECT 废弃 ioctl（读最后扇区）；本实现容量事实由平台尺寸探测承担，不使用遗留接口
+parted-imp-00005	implicit	裁剪	BLKSETLASTSECT 废弃 ioctl（写最后扇区）；不写遗留接口
+parted-imp-00006	implicit	裁剪	parted /proc/partitions 解析内部常数；本实现分区上限由表结构（MBR 槽位/GPT 条目数）决定
+parted-imp-00023	implicit	裁剪	Amiga 盘标上限；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+parted-imp-00024	implicit	裁剪	AIX 盘标上限；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+parted-imp-00025	implicit	认领	MAX_CHS_CYLINDER 1021 ↔ CHS 占位不换算；依据 SA1-027/SA1-028：CHS 一律写占位（PMBR 00 02 00 / FF FF FF，条目 FE FF FF），不实现 BIOS 几何换算；锚 crates/core/src/table/edit.rs、create.rs
+parted-imp-00026	implicit	认领	MBR 槽位上限语义 ↔ 四主槽+扩展链承载；锚 crates/core/src/table/mbr/extended.rs、crates/core/src/table/edit.rs::mbr_add_uses_the_first_empty_slot_and_rejects_overlap
+parted-imp-00027	implicit	认领	EFI_PMBR_OSTYPE 0xEE ↔ 规范保护 MBR；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs
+parted-imp-00028	implicit	认领	0xAA55 ↔ MBR 签名校验；锚 crates/core/src/table/mbr/primary.rs
+parted-imp-00029	implicit	裁剪	LEGACY_MBR_PARTITION_GUID（legacy BIOS boot 条目）；GPT 上 legacy 激活语义不采纳（SA1-015），盘标转换特性未纳入
+parted-imp-00030	implicit	认领	PMBR 位于 LBA0；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs
+parted-imp-00031	implicit	认领	PMBR 占 1 扇区；依据 SA1-019/SA1-003：PMBR 只在表写中按规范重写，输入不一致先拒绝或规范化；锚 crates/core/src/table/create.rs
+parted-imp-00032	implicit	认领	GPT 头占 1 扇区；锚 crates/core/src/table/gpt/parse.rs
+parted-imp-00033	implicit	认领	条目数组 16384B ↔ 默认表几何 128×128B=16KiB；锚 crates/core/src/table/gpt/parse.rs（number_of_partition_entries=128）
+parted-imp-00034	implicit	认领	默认 128 条目 ↔ parse 层固定 128；锚 crates/core/src/table/gpt/parse.rs
+parted-imp-00035	implicit	裁剪	pc98 盘标；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+parted-imp-00036	implicit	裁剪	parted 命令名生成器（bison pt-limit）内部常数，无盘面行为对应
+parted-imp-00037	implicit	裁剪	BLKGETLASTSECT 废弃 ioctl（读最后扇区）；本实现容量事实由平台尺寸探测承担，不使用遗留接口
+parted-imp-00038	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00039	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00040	implicit	裁剪	RDB（Amiga）盘标；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+parted-imp-00041	implicit	裁剪	RDB 块上限；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+parted-imp-00042	implicit	裁剪	parted 内嵌文件系统代码（ext2/f2fs/fat/hfs/reiserfs/xfs）布局常数；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+parted-imp-00043	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00044	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00045	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00046	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00047	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00048	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00049	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00050	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00051	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00052	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00053	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00054	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00055	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00056	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00057	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00058	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00059	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00060	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00061	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00062	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00063	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00064	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00065	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00066	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00067	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00068	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00069	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00070	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00071	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00072	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00073	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00074	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00075	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00076	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00077	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00078	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00079	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00080	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00081	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00082	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00083	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00084	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00085	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00086	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00087	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00088	implicit	裁剪	同上（parted 内嵌文件系统/盘标/UI 内部常数，见首行）
+parted-imp-00089	implicit	裁剪	MIN_FREESPACE：交互建分区自由空间提示阈值（交互面）；起点由对齐与占用计算（SA1-008）
+parted-imp-00091	implicit	裁剪	parted 交互 UI 词法上限 MAX_WORDS；交互面不纳入

@@ -1,110 +1,110 @@
 row_id	ledger	state	note
-libfdisk-00004	sites	待判	
-libfdisk-00005	sites	待判	
-libfdisk-00006	sites	待判	
-libfdisk-00007	sites	待判	
-libfdisk-00008	sites	待判	
-libfdisk-00009	sites	待判	
-libfdisk-00010	sites	待判	
-libfdisk-00014	sites	待判	
-libfdisk-00015	sites	待判	
-libfdisk-00016	sites	待判	
-libfdisk-00017	sites	待判	
-libfdisk-00018	sites	待判	
-libfdisk-00636	sites	待判	
-libfdisk-00637	sites	待判	
-libfdisk-00638	sites	待判	
-libfdisk-00639	sites	待判	
-libfdisk-00798	sites	待判	
-libfdisk-00799	sites	待判	
-libfdisk-00810	sites	待判	
-libfdisk-00811	sites	待判	
-libfdisk-00813	sites	待判	
-libfdisk-00814	sites	待判	
-libfdisk-00836	sites	待判	
-libfdisk-00839	sites	待判	
-libfdisk-00840	sites	待判	
-libfdisk-00841	sites	待判	
-libfdisk-00843	sites	待判	
-libfdisk-00845	sites	待判	
-libfdisk-00847	sites	待判	
-libfdisk-00848	sites	待判	
-libfdisk-00850	sites	待判	
-libfdisk-00851	sites	待判	
-libfdisk-00852	sites	待判	
-libfdisk-00853	sites	待判	
-libfdisk-00854	sites	待判	
-libfdisk-00855	sites	待判	
-libfdisk-00856	sites	待判	
-libfdisk-00857	sites	待判	
-libfdisk-00860	sites	待判	
-libfdisk-00861	sites	待判	
-libfdisk-00862	sites	待判	
-libfdisk-00863	sites	待判	
-libfdisk-00864	sites	待判	
-libfdisk-00865	sites	待判	
-libfdisk-00867	sites	待判	
-libfdisk-00868	sites	待判	
-libfdisk-00869	sites	待判	
-libfdisk-00870	sites	待判	
-libfdisk-00871	sites	待判	
-libfdisk-00872	sites	待判	
-libfdisk-00874	sites	待判	
-libfdisk-00875	sites	待判	
-libfdisk-00876	sites	待判	
-libfdisk-00877	sites	待判	
-libfdisk-00878	sites	待判	
-libfdisk-00879	sites	待判	
-libfdisk-00881	sites	待判	
-libfdisk-00882	sites	待判	
-libfdisk-00883	sites	待判	
-libfdisk-00884	sites	待判	
-libfdisk-00885	sites	待判	
-libfdisk-00886	sites	待判	
-libfdisk-00888	sites	待判	
-libfdisk-00889	sites	待判	
-libfdisk-00890	sites	待判	
-libfdisk-00891	sites	待判	
-libfdisk-00892	sites	待判	
-libfdisk-00893	sites	待判	
-libfdisk-00894	sites	待判	
-libfdisk-00895	sites	待判	
-libfdisk-00896	sites	待判	
-libfdisk-00897	sites	待判	
-libfdisk-00909	sites	待判	
-libfdisk-00911	sites	待判	
-libfdisk-00912	sites	待判	
-libfdisk-00913	sites	待判	
-libfdisk-00914	sites	待判	
-libfdisk-00918	sites	待判	
-libfdisk-00919	sites	待判	
-libfdisk-00926	sites	待判	
-libfdisk-00929	sites	待判	
-libfdisk-00933	sites	待判	
-libfdisk-00936	sites	待判	
-libfdisk-00937	sites	待判	
-libfdisk-00938	sites	待判	
-libfdisk-00940	sites	待判	
-libfdisk-00970	sites	待判	
-libfdisk-00971	sites	待判	
-libfdisk-00974	sites	待判	
-libfdisk-00975	sites	待判	
-libfdisk-00976	sites	待判	
-libfdisk-00978	sites	待判	
-libfdisk-00980	sites	待判	
-libfdisk-00981	sites	待判	
-libfdisk-00985	sites	待判	
-libfdisk-00986	sites	待判	
-libfdisk-00987	sites	待判	
-libfdisk-00988	sites	待判	
-libfdisk-00989	sites	待判	
-libfdisk-00994	sites	待判	
-libfdisk-01001	sites	待判	
-libfdisk-01027	sites	待判	
-libfdisk-01030	sites	待判	
-libfdisk-01050	sites	待判	
-libfdisk-01082	sites	待判	
-libfdisk-01085	sites	待判	
-libfdisk-01086	sites	待判	
-libfdisk-01088	sites	待判	
-libfdisk-01089	sites	待判	
+libfdisk-00004	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00005	sites	认领	前端失败出口已有对应：建表/写失败/加分区失败按七值退出码映射（src/app/report/exit.rs）。依据：SA1-009
+libfdisk-00006	sites	认领	同上
+libfdisk-00007	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00008	sites	认领	同上
+libfdisk-00009	sites	认领	前端失败出口已有对应：建表/写失败/加分区失败按七值退出码映射（src/app/report/exit.rs）。依据：SA1-009
+libfdisk-00010	sites	认领	同上
+libfdisk-00014	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00015	sites	认领	前端失败出口已有对应：建表/写失败/加分区失败按七值退出码映射（src/app/report/exit.rs）。依据：SA1-009
+libfdisk-00016	sites	认领	同上
+libfdisk-00017	sites	认领	同上
+libfdisk-00018	sites	认领	同上
+libfdisk-00636	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00637	sites	裁剪	同上
+libfdisk-00638	sites	裁剪	同上
+libfdisk-00639	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
+libfdisk-00798	sites	裁剪	同上
+libfdisk-00799	sites	裁剪	同上
+libfdisk-00810	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00811	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
+libfdisk-00813	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00814	sites	裁剪	同上
+libfdisk-00836	sites	裁剪	同上
+libfdisk-00839	sites	认领	GPT 激活语义定案：set flag boot 落 ESP 类型 GUID，legacy active 不写保护 MBR。依据：SA1-015
+libfdisk-00840	sites	认领	同上
+libfdisk-00841	sites	认领	同上
+libfdisk-00843	sites	认领	同上
+libfdisk-00845	sites	认领	同上
+libfdisk-00847	sites	认领	set/delete 已实现（parse.rs 白名单与目标校验）。依据：SA1-015、SA1-027
+libfdisk-00848	sites	认领	同上
+libfdisk-00850	sites	认领	同上
+libfdisk-00851	sites	拒绝	条目重排不提供：delete 保留槽位空缺、次序原样保留。依据：SA3-001 同原则（身份与次序不静默改写）
+libfdisk-00852	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00853	sites	裁剪	同上
+libfdisk-00854	sites	裁剪	同上
+libfdisk-00855	sites	裁剪	同上
+libfdisk-00856	sites	裁剪	同上
+libfdisk-00857	sites	裁剪	同上
+libfdisk-00860	sites	裁剪	同上
+libfdisk-00861	sites	裁剪	同上
+libfdisk-00862	sites	裁剪	同上
+libfdisk-00863	sites	裁剪	同上
+libfdisk-00864	sites	认领	set/delete 已实现（parse.rs 白名单与目标校验）。依据：SA1-015、SA1-027
+libfdisk-00865	sites	认领	同上
+libfdisk-00867	sites	认领	同上
+libfdisk-00868	sites	认领	同上
+libfdisk-00869	sites	认领	同上
+libfdisk-00870	sites	认领	同上
+libfdisk-00871	sites	认领	同上
+libfdisk-00872	sites	认领	同上
+libfdisk-00874	sites	认领	同上
+libfdisk-00875	sites	认领	同上
+libfdisk-00876	sites	认领	同上
+libfdisk-00877	sites	认领	同上
+libfdisk-00878	sites	认领	同上
+libfdisk-00879	sites	认领	同上
+libfdisk-00881	sites	认领	同上
+libfdisk-00882	sites	认领	同上
+libfdisk-00883	sites	认领	同上
+libfdisk-00884	sites	认领	同上
+libfdisk-00885	sites	认领	同上
+libfdisk-00886	sites	认领	同上
+libfdisk-00888	sites	认领	同上
+libfdisk-00889	sites	认领	同上
+libfdisk-00890	sites	认领	同上
+libfdisk-00891	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00892	sites	裁剪	同上
+libfdisk-00893	sites	裁剪	同上
+libfdisk-00894	sites	认领	 relocate 已实现（src/app/execute/relocate.rs）。依据：SA1-007
+libfdisk-00895	sites	认领	同上
+libfdisk-00896	sites	认领	同上
+libfdisk-00897	sites	认领	同上
+libfdisk-00909	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
+libfdisk-00911	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00912	sites	裁剪	同上
+libfdisk-00913	sites	裁剪	同上
+libfdisk-00914	sites	裁剪	同上
+libfdisk-00918	sites	裁剪	同上
+libfdisk-00919	sites	裁剪	同上
+libfdisk-00926	sites	裁剪	同上
+libfdisk-00929	sites	裁剪	同上
+libfdisk-00933	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00936	sites	认领	同上
+libfdisk-00937	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
+libfdisk-00938	sites	认领	同上
+libfdisk-00940	sites	认领	move 需分区选择器：解析层拒绝缺 :N。依据：R0082 族、SA1-012
+libfdisk-00970	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
+libfdisk-00971	sites	裁剪	同上
+libfdisk-00974	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00975	sites	裁剪	同上
+libfdisk-00976	sites	认领	前端失败出口已有对应：建表/写失败/加分区失败按七值退出码映射（src/app/report/exit.rs）。依据：SA1-009
+libfdisk-00978	sites	认领	--sector-size 校验已有（parse.rs，2 的幂）。依据：R0092
+libfdisk-00980	sites	认领	盘标白名单已有：GPT/MBR 之外按不支持拒绝（src/app/observe/new.rs TableFormat）。依据：SA1-016
+libfdisk-00981	sites	认领	前端失败出口已有对应：建表/写失败/加分区失败按七值退出码映射（src/app/report/exit.rs）。依据：SA1-009
+libfdisk-00985	sites	认领	盘标白名单已有：GPT/MBR 之外按不支持拒绝（src/app/observe/new.rs TableFormat）。依据：SA1-016
+libfdisk-00986	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00987	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
+libfdisk-00988	sites	认领	同上
+libfdisk-00989	sites	认领	用法错误退 2 单源（UsageError）。依据：SA1-009、R0046 族
+libfdisk-00994	sites	认领	目标打开失败→环境/拒绝出口单源（report/exit.rs）。依据：SA1-009
+libfdisk-01001	sites	认领	中断安全已有：写入登记原像，可 recover 回滚（src/app/execute/transaction.rs、recover）。依据：SA1-012
+libfdisk-01027	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-01030	sites	裁剪	同上
+libfdisk-01050	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（sfdisk 交互/备份文件名面）
+libfdisk-01082	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-01085	sites	裁剪	同上
+libfdisk-01086	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（cfdisk main）
+libfdisk-01088	sites	裁剪	同上
+libfdisk-01089	sites	裁剪	同上

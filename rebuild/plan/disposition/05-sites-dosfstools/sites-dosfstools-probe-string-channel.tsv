@@ -1,11 +1,11 @@
 row_id	ledger	state	note
-dosfstools-00364	sites	待判	
-dosfstools-00365	sites	待判	
-dosfstools-00366	sites	待判	
-dosfstools-00367	sites	待判	
-dosfstools-00368	sites	待判	
-dosfstools-00369	sites	待判	
-dosfstools-00370	sites	待判	
-dosfstools-00371	sites	待判	
-dosfstools-00372	sites	待判	
-dosfstools-00373	sites	待判	
+dosfstools-00364	sites	裁剪	fatlabel --info 设备信息打印面不暴露；等价信息由 info JSON 提供。依据：SA2-011、SA1-026
+dosfstools-00365	sites	裁剪	同上
+dosfstools-00366	sites	裁剪	同上
+dosfstools-00367	sites	裁剪	同上
+dosfstools-00368	sites	裁剪	同上
+dosfstools-00369	sites	裁剪	同上
+dosfstools-00370	sites	裁剪	同上
+dosfstools-00371	sites	裁剪	同上
+dosfstools-00372	sites	裁剪	同上
+dosfstools-00373	sites	裁剪	同上

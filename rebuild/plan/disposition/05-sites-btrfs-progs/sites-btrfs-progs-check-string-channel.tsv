@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-btrfs-progs-00727	sites	待判	
-btrfs-progs-00944	sites	待判	
-btrfs-progs-00974	sites	待判	
+btrfs-progs-00727	sites	裁剪	裁剪：check 腐蚀清单/修复提示 printf——随外部工具自带，本实现只消费退出码（src/app/execute/diagnose.rs::run），不复刻显示面
+btrfs-progs-00944	sites	裁剪	同上
+btrfs-progs-00974	sites	裁剪	同上

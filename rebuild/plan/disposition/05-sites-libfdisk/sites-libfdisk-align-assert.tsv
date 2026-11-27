@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-libfdisk-00020	sites	待判	
-libfdisk-00021	sites	待判	
-libfdisk-00022	sites	待判	
-libfdisk-00023	sites	待判	
-libfdisk-00024	sites	待判	
+libfdisk-00020	sites	拒绝	C 防御断言为库内不变量（census：断言计数已入账 SA1-022）；Rust 架构下空指针/标签类型由所有权与枚举结构性排除，逐点复刻属多虑。依据：SA1-022
+libfdisk-00021	sites	拒绝	同上
+libfdisk-00022	sites	拒绝	同上
+libfdisk-00023	sites	拒绝	同上
+libfdisk-00024	sites	拒绝	同上

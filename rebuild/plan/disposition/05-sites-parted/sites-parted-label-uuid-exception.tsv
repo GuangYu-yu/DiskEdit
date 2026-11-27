@@ -1,99 +1,99 @@
 row_id	ledger	state	note
-parted-01045	sites	待判	
-parted-01046	sites	待判	
-parted-01047	sites	待判	
-parted-01048	sites	待判	
-parted-01050	sites	待判	
-parted-01051	sites	待判	
-parted-01053	sites	待判	
-parted-01054	sites	待判	
-parted-01057	sites	待判	
-parted-01067	sites	待判	
-parted-01068	sites	待判	
-parted-01072	sites	待判	
-parted-01082	sites	待判	
-parted-01084	sites	待判	
-parted-01088	sites	待判	
-parted-01089	sites	待判	
-parted-01101	sites	待判	
-parted-01104	sites	待判	
-parted-01107	sites	待判	
-parted-01111	sites	待判	
-parted-01117	sites	待判	
-parted-01141	sites	待判	
-parted-01148	sites	待判	
-parted-01151	sites	待判	
-parted-01182	sites	待判	
-parted-01183	sites	待判	
-parted-01195	sites	待判	
-parted-01212	sites	待判	
-parted-01228	sites	待判	
-parted-01229	sites	待判	
-parted-01277	sites	待判	
-parted-01280	sites	待判	
-parted-01317	sites	待判	
-parted-01318	sites	待判	
-parted-01325	sites	待判	
-parted-01338	sites	待判	
-parted-01344	sites	待判	
-parted-01359	sites	待判	
-parted-01360	sites	待判	
-parted-01361	sites	待判	
-parted-01362	sites	待判	
-parted-01365	sites	待判	
-parted-01367	sites	待判	
-parted-01386	sites	待判	
-parted-01408	sites	待判	
-parted-01412	sites	待判	
-parted-01413	sites	待判	
-parted-01417	sites	待判	
-parted-01418	sites	待判	
-parted-01421	sites	待判	
-parted-01424	sites	待判	
-parted-01429	sites	待判	
-parted-01465	sites	待判	
-parted-01469	sites	待判	
-parted-01472	sites	待判	
-parted-01488	sites	待判	
-parted-01489	sites	待判	
-parted-01492	sites	待判	
-parted-01498	sites	待判	
-parted-01506	sites	待判	
-parted-01509	sites	待判	
-parted-01512	sites	待判	
-parted-01515	sites	待判	
-parted-01517	sites	待判	
-parted-01519	sites	待判	
-parted-01521	sites	待判	
-parted-01523	sites	待判	
-parted-01531	sites	待判	
-parted-01537	sites	待判	
-parted-01564	sites	待判	
-parted-01568	sites	待判	
-parted-01571	sites	待判	
-parted-01596	sites	待判	
-parted-01602	sites	待判	
-parted-01612	sites	待判	
-parted-01628	sites	待判	
-parted-01632	sites	待判	
-parted-01641	sites	待判	
-parted-01643	sites	待判	
-parted-01645	sites	待判	
-parted-01659	sites	待判	
-parted-01662	sites	待判	
-parted-01663	sites	待判	
-parted-01668	sites	待判	
-parted-01671	sites	待判	
-parted-01674	sites	待判	
-parted-01677	sites	待判	
-parted-01683	sites	待判	
-parted-01707	sites	待判	
-parted-01710	sites	待判	
-parted-01721	sites	待判	
-parted-01727	sites	待判	
-parted-01728	sites	待判	
-parted-01739	sites	待判	
-parted-01749	sites	待判	
-parted-01750	sites	待判	
-parted-01752	sites	待判	
-parted-01766	sites	待判	
+parted-01045	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01046	sites	裁剪	同上
+parted-01047	sites	裁剪	同上
+parted-01048	sites	裁剪	同上
+parted-01050	sites	裁剪	同上
+parted-01051	sites	裁剪	同上
+parted-01053	sites	裁剪	同上
+parted-01054	sites	裁剪	同上
+parted-01057	sites	裁剪	同上
+parted-01067	sites	裁剪	同上
+parted-01068	sites	裁剪	同上
+parted-01072	sites	裁剪	同上
+parted-01082	sites	裁剪	同上
+parted-01084	sites	裁剪	同上
+parted-01088	sites	裁剪	同上
+parted-01089	sites	裁剪	同上
+parted-01101	sites	裁剪	同上
+parted-01104	sites	裁剪	同上
+parted-01107	sites	裁剪	同上
+parted-01111	sites	裁剪	同上
+parted-01117	sites	裁剪	同上
+parted-01141	sites	裁剪	同上
+parted-01148	sites	裁剪	同上
+parted-01151	sites	裁剪	同上
+parted-01182	sites	裁剪	同上
+parted-01183	sites	裁剪	同上
+parted-01195	sites	裁剪	同上
+parted-01212	sites	裁剪	同上
+parted-01228	sites	裁剪	同上
+parted-01229	sites	裁剪	同上
+parted-01277	sites	认领	认领|MBR 签名校验已有：R0132（crates/core/src/table/mbr/primary.rs）
+parted-01280	sites	认领	认领|扩展链递归拒绝已有：crates/core/src/table/mbr/extended.rs（ExtendedChainLoop）
+parted-01317	sites	认领	认领|Windows 动态盘（LDM）按占用/不支持处理已有：SA1-025（holders 递归）+SA1-004 占用闸
+parted-01318	sites	认领	认领|约束不可满足时拒绝已有：SA1-014（resize 拒绝不安全收缩；R0173/R0174）
+parted-01325	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs EditError::TableFull
+parted-01338	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01344	sites	裁剪	同上
+parted-01359	sites	裁剪	同上
+parted-01360	sites	裁剪	同上
+parted-01361	sites	裁剪	同上
+parted-01362	sites	裁剪	同上
+parted-01365	sites	裁剪	同上
+parted-01367	sites	裁剪	同上
+parted-01386	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（fdasd/s390）
+parted-01408	sites	认领	认领|R0182（设备过小→地址空间越界拒绝）
+parted-01412	sites	认领	认领|待实现：GPT 头 revision 高于 0x00010200 时应拒绝识别；本实现 parse 仅在主备间比较 revision，无版本上限校验。|缺校验(签名/边界/容量)|未知版本结构可能被误读|建议硬约束：parse 层对 revision>0x00010200 返回 UnsupportedRevision 并加单测（tests/case_runner.rs）
+parted-01413	sites	认领	认领|grown 容器修复已有：SA1-018/SA1-001（tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write；非交互直接按上界修复，不设问询）
+parted-01417	sites	认领	认领|备份头重定位并入同一表写已有：SA1-001/SA1-018（crates/core/src/table/gpt）
+parted-01418	sites	认领	认领|主备双副本均损坏→拒绝已有：R0131（TableView::Damaged；src/app/observe/table.rs）
+parted-01421	sites	认领	认领|单侧损坏回退另一副本已有：SA3-003（crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup；非交互自动回退并标记修复）
+parted-01424	sites	认领	同上
+parted-01429	sites	认领	认领|条目数组 CRC 校验已有：crates/core/src/table/gpt/header.rs（OFFSET_ARRAY_CRC）
+parted-01465	sites	拒绝	拒绝|架构差异-多虑：iconv 分区名转译失败告警；Rust UTF-16 名字处理承担
+parted-01469	sites	拒绝	同上
+parted-01472	sites	认领	认领|约束不可满足时拒绝已有：R0173/R0174/R0182（decide 层）
+parted-01488	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（loop 伪盘标）
+parted-01489	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01492	sites	裁剪	同上
+parted-01498	sites	裁剪	同上
+parted-01506	sites	裁剪	同上
+parted-01509	sites	裁剪	同上
+parted-01512	sites	裁剪	同上
+parted-01515	sites	裁剪	同上
+parted-01517	sites	裁剪	同上
+parted-01519	sites	裁剪	同上
+parted-01521	sites	裁剪	同上
+parted-01523	sites	裁剪	同上
+parted-01531	sites	裁剪	同上
+parted-01537	sites	裁剪	同上
+parted-01564	sites	裁剪	同上
+parted-01568	sites	裁剪	同上
+parted-01571	sites	裁剪	同上
+parted-01596	sites	裁剪	同上
+parted-01602	sites	裁剪	同上
+parted-01612	sites	裁剪	同上
+parted-01628	sites	裁剪	同上
+parted-01632	sites	裁剪	同上
+parted-01641	sites	认领	认领|分区长度/起点超上限拒绝已有：R0168/R0182（crates/core/src/table 几何边界）
+parted-01643	sites	认领	同上
+parted-01645	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回
+parted-01659	sites	裁剪	同上
+parted-01662	sites	裁剪	同上
+parted-01663	sites	裁剪	同上
+parted-01668	sites	裁剪	同上
+parted-01671	sites	裁剪	同上
+parted-01674	sites	裁剪	同上
+parted-01677	sites	裁剪	同上
+parted-01683	sites	裁剪	同上
+parted-01707	sites	裁剪	同上
+parted-01710	sites	裁剪	同上
+parted-01721	sites	裁剪	同上
+parted-01727	sites	裁剪	同上
+parted-01728	sites	裁剪	同上
+parted-01739	sites	裁剪	同上
+parted-01749	sites	裁剪	同上
+parted-01750	sites	裁剪	同上
+parted-01752	sites	裁剪	同上
+parted-01766	sites	裁剪	裁剪|老盘标按 SA1-016 定案：不识别统一按未知拒绝并提示，不实现该盘标探测/断言/写回（vtoc/s390 DASD）

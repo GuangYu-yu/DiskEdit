@@ -1,16 +1,16 @@
 row_id	ledger	state	note
-parted-imp-00001	implicit	待判	
-parted-imp-00002	implicit	待判	
-parted-imp-00003	implicit	待判	
-parted-imp-00010	implicit	待判	
-parted-imp-00011	implicit	待判	
-parted-imp-00012	implicit	待判	
-parted-imp-00013	implicit	待判	
-parted-imp-00014	implicit	待判	
-parted-imp-00015	implicit	待判	
-parted-imp-00016	implicit	待判	
-parted-imp-00017	implicit	待判	
-parted-imp-00018	implicit	待判	
-parted-imp-00019	implicit	待判	
-parted-imp-00020	implicit	待判	
-parted-imp-00022	implicit	待判	
+parted-imp-00001	implicit	裁剪	GNU/Hurd 后端的 BLKRRPART 定义/调用点；本实现仅 Linux 平台后端（src/platform/linux），该 ioctl 语义由 Linux 侧 refresh_partitions 承担；依据 平台范围（Linux-only）
+parted-imp-00002	implicit	裁剪	同上（gnu.c Hurd ioctl 调用点）
+parted-imp-00003	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+parted-imp-00010	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00011	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+parted-imp-00012	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+parted-imp-00013	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+parted-imp-00014	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+parted-imp-00015	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00016	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00017	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00018	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00019	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00020	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+parted-imp-00022	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView

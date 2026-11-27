@@ -1,66 +1,66 @@
 row_id	ledger	state	note
-xfsprogs-00050	sites	待判	
-xfsprogs-00053	sites	待判	
-xfsprogs-00056	sites	待判	
-xfsprogs-00113	sites	待判	
-xfsprogs-00121	sites	待判	
-xfsprogs-00122	sites	待判	
-xfsprogs-00123	sites	待判	
-xfsprogs-00131	sites	待判	
-xfsprogs-00136	sites	待判	
-xfsprogs-00138	sites	待判	
-xfsprogs-00146	sites	待判	
-xfsprogs-00148	sites	待判	
-xfsprogs-00152	sites	待判	
-xfsprogs-00154	sites	待判	
-xfsprogs-00155	sites	待判	
-xfsprogs-00174	sites	待判	
-xfsprogs-00175	sites	待判	
-xfsprogs-00180	sites	待判	
-xfsprogs-00182	sites	待判	
-xfsprogs-00184	sites	待判	
-xfsprogs-00185	sites	待判	
-xfsprogs-00190	sites	待判	
-xfsprogs-00192	sites	待判	
-xfsprogs-00194	sites	待判	
-xfsprogs-00196	sites	待判	
-xfsprogs-00198	sites	待判	
-xfsprogs-00200	sites	待判	
-xfsprogs-00202	sites	待判	
-xfsprogs-00203	sites	待判	
-xfsprogs-00205	sites	待判	
-xfsprogs-00207	sites	待判	
-xfsprogs-00209	sites	待判	
-xfsprogs-00211	sites	待判	
-xfsprogs-00213	sites	待判	
-xfsprogs-00215	sites	待判	
-xfsprogs-00250	sites	待判	
-xfsprogs-00252	sites	待判	
-xfsprogs-00254	sites	待判	
-xfsprogs-00255	sites	待判	
-xfsprogs-00256	sites	待判	
-xfsprogs-00258	sites	待判	
-xfsprogs-00262	sites	待判	
-xfsprogs-00281	sites	待判	
-xfsprogs-00296	sites	待判	
-xfsprogs-00297	sites	待判	
-xfsprogs-00298	sites	待判	
-xfsprogs-00299	sites	待判	
-xfsprogs-00310	sites	待判	
-xfsprogs-00312	sites	待判	
-xfsprogs-00321	sites	待判	
-xfsprogs-00328	sites	待判	
-xfsprogs-00330	sites	待判	
-xfsprogs-00335	sites	待判	
-xfsprogs-00336	sites	待判	
-xfsprogs-00343	sites	待判	
-xfsprogs-00344	sites	待判	
-xfsprogs-00346	sites	待判	
-xfsprogs-00349	sites	待判	
-xfsprogs-00392	sites	待判	
-xfsprogs-00394	sites	待判	
-xfsprogs-00396	sites	待判	
-xfsprogs-00398	sites	待判	
-xfsprogs-00400	sites	待判	
-xfsprogs-00404	sites	待判	
-xfsprogs-00411	sites	待判	
+xfsprogs-00050	sites	裁剪	裁剪：mkfs.xfs 建卷过程消息（fprintf/fail 管道，含 proto 文件路径）——随外部工具自带，本实现不复刻打印面、只消费退出码（src/app/execute/filesystem.rs::mkfs_invocation）
+xfsprogs-00053	sites	裁剪	同上
+xfsprogs-00056	sites	裁剪	同上
+xfsprogs-00113	sites	裁剪	同上
+xfsprogs-00121	sites	裁剪	同上
+xfsprogs-00122	sites	裁剪	同上
+xfsprogs-00123	sites	裁剪	同上
+xfsprogs-00131	sites	裁剪	同上
+xfsprogs-00136	sites	裁剪	同上
+xfsprogs-00138	sites	裁剪	同上
+xfsprogs-00146	sites	裁剪	同上
+xfsprogs-00148	sites	裁剪	同上
+xfsprogs-00152	sites	裁剪	同上
+xfsprogs-00154	sites	裁剪	同上
+xfsprogs-00155	sites	裁剪	同上
+xfsprogs-00174	sites	裁剪	同上
+xfsprogs-00175	sites	裁剪	同上
+xfsprogs-00180	sites	裁剪	同上
+xfsprogs-00182	sites	裁剪	同上
+xfsprogs-00184	sites	裁剪	同上
+xfsprogs-00185	sites	裁剪	同上
+xfsprogs-00190	sites	裁剪	同上
+xfsprogs-00192	sites	裁剪	同上
+xfsprogs-00194	sites	裁剪	同上
+xfsprogs-00196	sites	裁剪	同上
+xfsprogs-00198	sites	裁剪	同上
+xfsprogs-00200	sites	裁剪	同上
+xfsprogs-00202	sites	裁剪	同上
+xfsprogs-00203	sites	裁剪	同上
+xfsprogs-00205	sites	裁剪	同上
+xfsprogs-00207	sites	裁剪	同上
+xfsprogs-00209	sites	裁剪	同上
+xfsprogs-00211	sites	裁剪	同上
+xfsprogs-00213	sites	裁剪	同上
+xfsprogs-00215	sites	裁剪	同上
+xfsprogs-00250	sites	裁剪	同上
+xfsprogs-00252	sites	裁剪	同上
+xfsprogs-00254	sites	裁剪	同上
+xfsprogs-00255	sites	裁剪	同上
+xfsprogs-00256	sites	裁剪	同上
+xfsprogs-00258	sites	裁剪	同上
+xfsprogs-00262	sites	裁剪	同上
+xfsprogs-00281	sites	裁剪	同上
+xfsprogs-00296	sites	裁剪	同上
+xfsprogs-00297	sites	裁剪	同上
+xfsprogs-00298	sites	裁剪	同上
+xfsprogs-00299	sites	裁剪	同上
+xfsprogs-00310	sites	裁剪	同上
+xfsprogs-00312	sites	裁剪	同上
+xfsprogs-00321	sites	裁剪	同上
+xfsprogs-00328	sites	裁剪	同上
+xfsprogs-00330	sites	裁剪	同上
+xfsprogs-00335	sites	裁剪	同上
+xfsprogs-00336	sites	裁剪	同上
+xfsprogs-00343	sites	裁剪	同上
+xfsprogs-00344	sites	裁剪	同上
+xfsprogs-00346	sites	裁剪	同上
+xfsprogs-00349	sites	裁剪	同上
+xfsprogs-00392	sites	裁剪	同上
+xfsprogs-00394	sites	裁剪	同上
+xfsprogs-00396	sites	裁剪	同上
+xfsprogs-00398	sites	裁剪	同上
+xfsprogs-00400	sites	裁剪	同上
+xfsprogs-00404	sites	裁剪	同上
+xfsprogs-00411	sites	裁剪	同上

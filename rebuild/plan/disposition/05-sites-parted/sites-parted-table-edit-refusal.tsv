@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-parted-00367	sites	待判	
-parted-00390	sites	待判	
-parted-00502	sites	待判	
-parted-00515	sites	待判	
-parted-00533	sites	待判	
-parted-00548	sites	待判	
-parted-00865	sites	待判	
+parted-00367	sites	认领	认领|SA1-016（不识别盘标统一拒绝并提示）
+parted-00390	sites	认领	认领|R0119/R0120（未知/非法旗标拒绝）
+parted-00502	sites	认领	认领|TableFull 已有：crates/core/src/table/edit.rs
+parted-00515	sites	认领	认领|重叠拒绝已有：crates/core/src/table/edit.rs
+parted-00533	sites	认领	同上
+parted-00548	sites	认领	认领|R0119/R0120（未知/非法旗标拒绝）
+parted-00865	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）

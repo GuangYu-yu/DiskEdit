@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-btrfs-progs-00491	sites	待判	
-btrfs-progs-00493	sites	待判	
-btrfs-progs-00495	sites	待判	
-btrfs-progs-00496	sites	待判	
-btrfs-progs-00497	sites	待判	
-btrfs-progs-00498	sites	待判	
-btrfs-progs-00499	sites	待判	
-btrfs-progs-00500	sites	待判	
-btrfs-progs-00501	sites	待判	
-btrfs-progs-00503	sites	待判	
-btrfs-progs-00505	sites	待判	
-btrfs-progs-00507	sites	待判	
-btrfs-progs-00508	sites	待判	
+btrfs-progs-00491	sites	拒绝	拒绝：btrfstune fsid 变更内部失败清理跳转——C 防御模式，本实现只消费其退出码（uuid_program→Btrfstune，crates/core/src/fs/attrs.rs、src/app/execute/filesystem.rs content_property），逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00493	sites	拒绝	同上
+btrfs-progs-00495	sites	拒绝	同上
+btrfs-progs-00496	sites	拒绝	同上
+btrfs-progs-00497	sites	拒绝	同上
+btrfs-progs-00498	sites	拒绝	同上
+btrfs-progs-00499	sites	拒绝	同上
+btrfs-progs-00500	sites	拒绝	同上
+btrfs-progs-00501	sites	拒绝	同上
+btrfs-progs-00503	sites	拒绝	同上
+btrfs-progs-00505	sites	拒绝	同上
+btrfs-progs-00507	sites	拒绝	同上
+btrfs-progs-00508	sites	拒绝	同上

@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-f2fs-tools-00432	sites	待判	
-f2fs-tools-00436	sites	待判	
-f2fs-tools-00437	sites	待判	
-f2fs-tools-00438	sites	待判	
-f2fs-tools-00439	sites	待判	
-f2fs-tools-00440	sites	待判	
-f2fs-tools-00442	sites	待判	
-f2fs-tools-00443	sites	待判	
-f2fs-tools-00444	sites	待判	
-f2fs-tools-00445	sites	待判	
-f2fs-tools-00446	sites	待判	
-f2fs-tools-00447	sites	待判	
+f2fs-tools-00432	sites	拒绝	fsck/mkfs/resize.f2fs 内部断言为上游实现细节；f2fs 只读检查按档案表不支持拒绝（catalog.rs check=Unsupported），扩容按固定次序调用并回读证实。依据：SA2-010、SA2-013（架构差异-多虑）（lib/uevent/sysfs 内部）
+f2fs-tools-00436	sites	拒绝	同上
+f2fs-tools-00437	sites	拒绝	同上
+f2fs-tools-00438	sites	拒绝	同上
+f2fs-tools-00439	sites	拒绝	同上
+f2fs-tools-00440	sites	拒绝	同上
+f2fs-tools-00442	sites	拒绝	同上
+f2fs-tools-00443	sites	拒绝	同上
+f2fs-tools-00444	sites	拒绝	同上
+f2fs-tools-00445	sites	拒绝	同上
+f2fs-tools-00446	sites	拒绝	同上
+f2fs-tools-00447	sites	拒绝	同上

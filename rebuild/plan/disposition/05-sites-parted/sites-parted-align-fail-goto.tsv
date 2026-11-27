@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-parted-00226	sites	待判	
-parted-00227	sites	待判	
-parted-00279	sites	待判	
-parted-00280	sites	待判	
+parted-00226	sites	拒绝	拒绝|架构差异-多虑：分配失败/错误清理 goto，Rust Result 与所有权承担；SA1-021
+parted-00227	sites	拒绝	同上
+parted-00279	sites	拒绝	同上
+parted-00280	sites	拒绝	同上

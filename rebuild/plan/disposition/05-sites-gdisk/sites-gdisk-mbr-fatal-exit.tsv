@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-gdisk-00005	sites	待判	
-gdisk-00007	sites	待判	
-gdisk-00009	sites	待判	
+gdisk-00005	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00007	sites	拒绝	同上
+gdisk-00009	sites	拒绝	同上

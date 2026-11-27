@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-btrfs-progs-00009	sites	待判	
-btrfs-progs-00021	sites	待判	
-btrfs-progs-00029	sites	待判	
-btrfs-progs-00133	sites	待判	
-btrfs-progs-00134	sites	待判	
+btrfs-progs-00009	sites	裁剪	裁剪：show/defrag/device scan 的 usage 与 exit(1) 出口——绑定未消费子命令（档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00021	sites	裁剪	同上
+btrfs-progs-00029	sites	裁剪	同上
+btrfs-progs-00133	sites	裁剪	同上
+btrfs-progs-00134	sites	裁剪	同上

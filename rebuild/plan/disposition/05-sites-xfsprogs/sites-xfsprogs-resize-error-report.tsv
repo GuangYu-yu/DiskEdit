@@ -1,11 +1,11 @@
 row_id	ledger	state	note
-xfsprogs-00002	sites	待判	
-xfsprogs-00009	sites	待判	
-xfsprogs-00010	sites	待判	
-xfsprogs-00024	sites	待判	
-xfsprogs-00026	sites	待判	
-xfsprogs-00028	sites	待判	
-xfsprogs-00033	sites	待判	
-xfsprogs-00034	sites	待判	
-xfsprogs-00036	sites	待判	
-xfsprogs-00037	sites	待判	
+xfsprogs-00002	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00009	sites	认领	认领：挂载点路径解析失败即退——调用时参数校验（SA2-004；xfs_growfs 只接受挂载点，src/app/execute/filesystem.rs::online_invocation）；建议拆分:sites-xfsprogs-resize-growfs-core
+xfsprogs-00010	sites	认领	认领：目标确认在 XFS 文件系统上的调用时校验（SA2-004；src/app/execute/filesystem.rs::online_invocation）
+xfsprogs-00024	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00026	sites	认领	认领：data 尺寸未变仍退 0——本实现不以退出码当成功，`xfs_growfs -n` 几何回读兜住（SA2-005；src/app/execute/filesystem.rs::verify_xfs_size）
+xfsprogs-00028	sites	认领	认领：growfs operation in progress 调用时拒绝面——非零退出按已写待恢复处理（SA2-004 依赖行为；src/app/execute/filesystem.rs::run_online_native）
+xfsprogs-00033	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00034	sites	裁剪	同上
+xfsprogs-00036	sites	裁剪	同上
+xfsprogs-00037	sites	裁剪	同上

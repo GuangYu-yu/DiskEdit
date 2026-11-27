@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-f2fs-tools-00433	sites	待判	
-f2fs-tools-00434	sites	待判	
-f2fs-tools-00435	sites	待判	
-f2fs-tools-00448	sites	待判	
-f2fs-tools-00449	sites	待判	
-f2fs-tools-00450	sites	待判	
-f2fs-tools-00451	sites	待判	
-f2fs-tools-00452	sites	待判	
-f2fs-tools-00453	sites	待判	
-f2fs-tools-00454	sites	待判	
-f2fs-tools-00455	sites	待判	
-f2fs-tools-00456	sites	待判	
-f2fs-tools-00457	sites	待判	
+f2fs-tools-00433	sites	拒绝	C 失败 goto 清理由 Rust Result 传播取代，依赖工具内部经固定参数调用整体生效。依据：SA2-010、SA2-012（架构差异）（lib/uevent/sysfs 内部）
+f2fs-tools-00434	sites	拒绝	同上
+f2fs-tools-00435	sites	拒绝	同上
+f2fs-tools-00448	sites	拒绝	同上
+f2fs-tools-00449	sites	拒绝	同上
+f2fs-tools-00450	sites	拒绝	同上
+f2fs-tools-00451	sites	拒绝	同上
+f2fs-tools-00452	sites	拒绝	同上
+f2fs-tools-00453	sites	拒绝	同上
+f2fs-tools-00454	sites	拒绝	同上
+f2fs-tools-00455	sites	拒绝	同上
+f2fs-tools-00456	sites	拒绝	同上
+f2fs-tools-00457	sites	拒绝	同上

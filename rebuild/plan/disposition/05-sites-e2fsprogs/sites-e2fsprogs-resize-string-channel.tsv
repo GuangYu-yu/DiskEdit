@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-e2fsprogs-00102	sites	待判	
-e2fsprogs-00103	sites	待判	
+e2fsprogs-00102	sites	裁剪	裁剪：calculate_minimum_resize_size 的 #if DEBUG 打印——非可观察契约；收缩安全由 resize2fs 自身拒绝+回读兜住（SA2-002/003）
+e2fsprogs-00103	sites	裁剪	同上

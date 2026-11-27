@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-ntfs-3g-imp-00002	implicit	待判	
-ntfs-3g-imp-00022	implicit	待判	
+ntfs-3g-imp-00002	implicit	认领	NTFS_MBYTE 十进制换算口径 ↔ ntfsresize 尺寸按绝对字节传递；依据 SA2-009
+ntfs-3g-imp-00022	implicit	裁剪	ntfsfix DEFAULT_SECTOR_SIZE 回退；工具内部常数（扇区事实经探测，Unknown 不猜）

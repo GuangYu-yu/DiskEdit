@@ -1,68 +1,68 @@
 row_id	ledger	state	note
-btrfs-progs-inc-00001	incidents	待判	
-btrfs-progs-inc-00002	incidents	待判	
-btrfs-progs-inc-00003	incidents	待判	
-btrfs-progs-inc-00004	incidents	待判	
-btrfs-progs-inc-00005	incidents	待判	
-btrfs-progs-inc-00006	incidents	待判	
-btrfs-progs-inc-00007	incidents	待判	
-btrfs-progs-inc-00008	incidents	待判	
-btrfs-progs-inc-00009	incidents	待判	
-btrfs-progs-inc-00010	incidents	待判	
-btrfs-progs-inc-00011	incidents	待判	
-btrfs-progs-inc-00012	incidents	待判	
-btrfs-progs-inc-00013	incidents	待判	
-btrfs-progs-inc-00014	incidents	待判	
-btrfs-progs-inc-00015	incidents	待判	
-btrfs-progs-inc-00016	incidents	待判	
-btrfs-progs-inc-00017	incidents	待判	
-btrfs-progs-inc-00018	incidents	待判	
-btrfs-progs-inc-00019	incidents	待判	
-btrfs-progs-inc-00020	incidents	待判	
-btrfs-progs-inc-00021	incidents	待判	
-btrfs-progs-inc-00022	incidents	待判	
-btrfs-progs-inc-00023	incidents	待判	
-btrfs-progs-inc-00024	incidents	待判	
-btrfs-progs-inc-00025	incidents	待判	
-btrfs-progs-inc-00026	incidents	待判	
-btrfs-progs-inc-00027	incidents	待判	
-btrfs-progs-inc-00028	incidents	待判	
-btrfs-progs-inc-00029	incidents	待判	
-btrfs-progs-inc-00030	incidents	待判	
-btrfs-progs-inc-00031	incidents	待判	
-btrfs-progs-inc-00032	incidents	待判	
-btrfs-progs-inc-00033	incidents	待判	
-btrfs-progs-inc-00034	incidents	待判	
-btrfs-progs-inc-00035	incidents	待判	
-btrfs-progs-inc-00036	incidents	待判	
-btrfs-progs-inc-00037	incidents	待判	
-btrfs-progs-inc-00038	incidents	待判	
-btrfs-progs-inc-00039	incidents	待判	
-btrfs-progs-inc-00040	incidents	待判	
-btrfs-progs-inc-00041	incidents	待判	
-btrfs-progs-inc-00042	incidents	待判	
-btrfs-progs-inc-00043	incidents	待判	
-btrfs-progs-inc-00044	incidents	待判	
-btrfs-progs-inc-00045	incidents	待判	
-btrfs-progs-inc-00046	incidents	待判	
-btrfs-progs-inc-00047	incidents	待判	
-btrfs-progs-inc-00048	incidents	待判	
-btrfs-progs-inc-00049	incidents	待判	
-btrfs-progs-inc-00050	incidents	待判	
-btrfs-progs-inc-00051	incidents	待判	
-btrfs-progs-inc-00052	incidents	待判	
-btrfs-progs-inc-00053	incidents	待判	
-btrfs-progs-inc-00054	incidents	待判	
-btrfs-progs-inc-00055	incidents	待判	
-btrfs-progs-inc-00056	incidents	待判	
-btrfs-progs-inc-00057	incidents	待判	
-btrfs-progs-inc-00058	incidents	待判	
-btrfs-progs-inc-00059	incidents	待判	
-btrfs-progs-inc-00060	incidents	待判	
-btrfs-progs-inc-00061	incidents	待判	
-btrfs-progs-inc-00062	incidents	待判	
-btrfs-progs-inc-00063	incidents	待判	
-btrfs-progs-inc-00064	incidents	待判	
-btrfs-progs-inc-00065	incidents	待判	
-btrfs-progs-inc-00066	incidents	待判	
-btrfs-progs-inc-00067	incidents	待判	
+btrfs-progs-inc-00001	incidents	裁剪	依赖工具 btrfs-progs 的内部修复/特性（check/convert/inspect/send/receive/quota/scrub/image/restore 程序自身）；本实现仅按档案表以 btrfs resize 承接在线扩缩（SA2-006/007/008/016）及登记的 mkfs/attrs/check 面（SA2-012），工具内部随发行版版本固定（SA2-011），不属本实现行为面
+btrfs-progs-inc-00002	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00003	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00004	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00005	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00006	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00007	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00008	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00009	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00010	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00011	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00012	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00013	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00014	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00015	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00016	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00017	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00018	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00019	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00020	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00021	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00022	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00023	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00024	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00025	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00026	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00027	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00028	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00029	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00030	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00031	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00032	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00033	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00034	incidents	裁剪	同 btrfs-progs-inc-00001（check 挂载检测属上游内部；本实现占用闸自建 SA1-004）
+btrfs-progs-inc-00035	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00036	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00037	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00038	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00039	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00040	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00041	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00042	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00043	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00044	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00045	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00046	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00047	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00048	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00049	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00050	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00051	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00052	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00053	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00054	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00055	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00056	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00057	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00058	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00059	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00060	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00061	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00062	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00063	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00064	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00065	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00066	incidents	裁剪	同 btrfs-progs-inc-00001
+btrfs-progs-inc-00067	incidents	裁剪	同 btrfs-progs-inc-00001

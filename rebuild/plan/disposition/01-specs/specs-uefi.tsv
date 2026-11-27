@@ -1,24 +1,24 @@
 row_id	ledger	state	note
-GPT-001	specs	待判	
-GPT-002	specs	待判	
-GPT-003	specs	待判	
-GPT-004	specs	待判	
-GPT-005	specs	待判	
-GPT-006	specs	待判	
-GPT-007	specs	待判	
-GPT-008	specs	待判	
-GPT-009	specs	待判	
-GPT-010	specs	待判	
-GPT-011	specs	待判	
-GPT-012	specs	待判	
-GPT-013	specs	待判	
-GPT-014	specs	待判	
-GPT-015	specs	待判	
-GPT-016	specs	待判	
-GPT-017	specs	待判	
-GPT-018	specs	待判	
-GPT-019	specs	待判	
-GPT-020	specs	待判	
-GPT-021	specs	待判	
-GPT-022	specs	待判	
-GPT-023	specs	待判	
+GPT-001	specs	认领	64 位 LBA：全实现 u64（crates/core/src/geometry/units.rs、table/*）；溢出 checked 返回 None 不截断，>2TiB 天然支持
+GPT-002	specs	认领	主备同写：SA1-001/SA1-018/SA3-003；create.rs::gpt_content 一次产出备份头+备份数组+主数组+主头四段；tests/case_runner.rs::add_delete_and_set_rewrite_both_copies
+GPT-003	specs	认领	revision/header_size 按字段携带并以 HeaderSize 限 CRC 范围（crates/core/src/table/gpt/header.rs:58,96）；条目形状另经 entries.rs::validate_shape 校验，未知值不按已知布局强解
+GPT-004	specs	认领	头 CRC 与条目数组 CRC 分离且两侧都验（gpt/header.rs OFFSET_ARRAY_CRC、gpt/write.rs::array_crc；SA1-001 回读并入表写）
+GPT-005	specs	认领	类型 GUID/唯一 GUID/attributes 三字段独立（gpt/entries.rs::PartitionEntry）；copy 派生确定性新 PARTUUID（SA1-007）、已有重复身份保留不静默改写（SA3-001）
+GPT-006	specs	认领	名称按 36 个 UTF-16 码元编解码（gpt/entries.rs:61,69 encode_utf16/from_utf16_lossy）
+GPT-007	specs	认领	签名按字节 0x55/0xAA 校验不按字（mbr/primary.rs:66，MbrSignatureMissing）；规范字节序描述与本实现一致
+GPT-008	specs	认领	记录有效性按 OSType/SizeInLBA 判定，空记录不当有效分区（primary.rs::is_empty）；PMBR 一致性先拒绝或规范化（SA1-019）
+GPT-009	specs	认领	BootIndicator/CHS 不参与判定，不实现 BIOS 几何（SA1-028）；PMBR 写 UEFI §5.2.3 推荐占位（SA1-027）
+GPT-010	specs	认领	PMBR 六字段硬约束逐字段核对（create.rs::protective_mbr_content 386-409：BootIndicator 0x00、StartCHS 00 02 00、0xEE、EndCHS FF FF FF、LBA1、SizeInLBA）；SA1-019/SA1-027
+GPT-011	specs	差异	"D13：重写 PMBR 保留 0..446（引导代码+磁盘签名），不按本条把 Disk Signature 清零；新建空盘时自然为零（create.rs::protective_mbr_image 注释""保留 0..446""）。保留 0..446 属有意兼容策略（签名稳定），不改；与基线二进制等价测试一致"
+GPT-012	specs	认领	备份头定于盘尾 last LBA 且 MyLBA/AlternateLBA 互换（create.rs::gpt_content 260-266）；扩容后重定位并入同一表写（SA1-018/SA1-001）
+GPT-013	specs	认领	条目越出可用区间即非法（gpt/entries.rs:193-199 usable 边界检查）；create.rs::gpt_layout 推导 first/last usable
+GPT-014	specs	认领	CRC 按 header_size 限界（header.rs:96）；条目 size/count 形状校验拒绝非法值（entries.rs::validate_shape）——gdisk CVE-2020-0256 同型缺陷由 Rust 边界检查承担
+GPT-015	specs	认领	条目数组按 PartitionEntryLBA/count/entry_size 解析与序列化（entries.rs:108-135,148-165）
+GPT-016	specs	认领	"CRC 只覆盖 count*entry_size，尾块保留区不计入（entries.rs:148 注释与实现""末端补齐到整扇区；CRC 只覆盖 count*entry_size""）"
+GPT-017	specs	认领	写路径先算数组 CRC 再算头 CRC（entries.rs::serialize_entries → create.rs::gpt_content 243-256；gpt/write.rs）
+GPT-018	specs	认领	主数组止于 first usable、备数组止于备份头（create.rs::gpt_layout 183-189 backup_array_lba=last_lba-span；GptLayout::regions 五段）
+GPT-019	specs	认领	重叠拒绝（crates/core/src/table/edit.rs::mbr_add_uses_the_first_empty_slot_and_rejects_overlap 及 GPT add 同面）；全零条目=空闲（create.rs::empty_entry）
+GPT-020	specs	认领	DEFAULT_ENTRY_COUNT=128、DEFAULT_ENTRY_SIZE=128B（create.rs:19-21，16384B 下限即 128 条）
+GPT-021	specs	认领	512B 扇区 first usable=34（create.rs::gpt_layout；测试 gpt_content_writes_both_copies_with_consistent_crc 断言 34；4Kn 自动为 1+1+4 结构）
+GPT-022	specs	认领	"SA1-008：自动放置按 1 MiB 对齐（geometry/align.rs；--align mib|none，observe/mod.rs Alignment）；1MiB 覆盖参考""物理块与 OTLG 取大""的 8 扇区示例情形"
+GPT-023	specs	认领	Disk GUID 独立字段、new 由调用方给定（create.rs::gpt_content disk_guid 参数）；已有身份保留语义见 SA3-001

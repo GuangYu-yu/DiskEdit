@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-f2fs-tools-00031	sites	待判	
-f2fs-tools-00032	sites	待判	
-f2fs-tools-00033	sites	待判	
-f2fs-tools-00034	sites	待判	
-f2fs-tools-00035	sites	待判	
-f2fs-tools-00196	sites	待判	
-f2fs-tools-00197	sites	待判	
-f2fs-tools-00198	sites	待判	
+f2fs-tools-00031	sites	拒绝	测试驱动/调试输出内部件，不属行为合同。依据：SA1-022 同口径
+f2fs-tools-00032	sites	拒绝	同上
+f2fs-tools-00033	sites	拒绝	同上
+f2fs-tools-00034	sites	拒绝	同上
+f2fs-tools-00035	sites	拒绝	同上
+f2fs-tools-00196	sites	认领	工具运行输出经 diagnose/execute 透传并按退出码分类。依据：SA2-010、SA2-012
+f2fs-tools-00197	sites	认领	同上
+f2fs-tools-00198	sites	认领	同上

@@ -1,116 +1,116 @@
 row_id	ledger	state	note
-libfdisk-00067	sites	待判	
-libfdisk-00105	sites	待判	
-libfdisk-00106	sites	待判	
-libfdisk-00113	sites	待判	
-libfdisk-00121	sites	待判	
-libfdisk-00122	sites	待判	
-libfdisk-00126	sites	待判	
-libfdisk-00127	sites	待判	
-libfdisk-00129	sites	待判	
-libfdisk-00131	sites	待判	
-libfdisk-00132	sites	待判	
-libfdisk-00133	sites	待判	
-libfdisk-00150	sites	待判	
-libfdisk-00151	sites	待判	
-libfdisk-00156	sites	待判	
-libfdisk-00158	sites	待判	
-libfdisk-00159	sites	待判	
-libfdisk-00160	sites	待判	
-libfdisk-00572	sites	待判	
-libfdisk-00579	sites	待判	
-libfdisk-00655	sites	待判	
-libfdisk-00673	sites	待判	
-libfdisk-00677	sites	待判	
-libfdisk-00685	sites	待判	
-libfdisk-00689	sites	待判	
-libfdisk-00690	sites	待判	
-libfdisk-00703	sites	待判	
-libfdisk-00704	sites	待判	
-libfdisk-00718	sites	待判	
-libfdisk-00719	sites	待判	
-libfdisk-00731	sites	待判	
-libfdisk-00752	sites	待判	
-libfdisk-00804	sites	待判	
-libfdisk-00806	sites	待判	
-libfdisk-00808	sites	待判	
-libfdisk-00816	sites	待判	
-libfdisk-00817	sites	待判	
-libfdisk-00818	sites	待判	
-libfdisk-00819	sites	待判	
-libfdisk-00820	sites	待判	
-libfdisk-00823	sites	待判	
-libfdisk-00826	sites	待判	
-libfdisk-00827	sites	待判	
-libfdisk-00829	sites	待判	
-libfdisk-00830	sites	待判	
-libfdisk-00831	sites	待判	
-libfdisk-00832	sites	待判	
-libfdisk-00833	sites	待判	
-libfdisk-00837	sites	待判	
-libfdisk-00838	sites	待判	
-libfdisk-00842	sites	待判	
-libfdisk-00844	sites	待判	
-libfdisk-00846	sites	待判	
-libfdisk-00849	sites	待判	
-libfdisk-00866	sites	待判	
-libfdisk-00873	sites	待判	
-libfdisk-00880	sites	待判	
-libfdisk-00887	sites	待判	
-libfdisk-00899	sites	待判	
-libfdisk-00900	sites	待判	
-libfdisk-00910	sites	待判	
-libfdisk-00916	sites	待判	
-libfdisk-00917	sites	待判	
-libfdisk-00921	sites	待判	
-libfdisk-00923	sites	待判	
-libfdisk-00924	sites	待判	
-libfdisk-00925	sites	待判	
-libfdisk-00927	sites	待判	
-libfdisk-00928	sites	待判	
-libfdisk-00935	sites	待判	
-libfdisk-00939	sites	待判	
-libfdisk-00944	sites	待判	
-libfdisk-00946	sites	待判	
-libfdisk-00948	sites	待判	
-libfdisk-00955	sites	待判	
-libfdisk-00957	sites	待判	
-libfdisk-00961	sites	待判	
-libfdisk-00962	sites	待判	
-libfdisk-00963	sites	待判	
-libfdisk-00966	sites	待判	
-libfdisk-00967	sites	待判	
-libfdisk-00977	sites	待判	
-libfdisk-00979	sites	待判	
-libfdisk-00982	sites	待判	
-libfdisk-00983	sites	待判	
-libfdisk-00984	sites	待判	
-libfdisk-00991	sites	待判	
-libfdisk-00992	sites	待判	
-libfdisk-00993	sites	待判	
-libfdisk-00995	sites	待判	
-libfdisk-00997	sites	待判	
-libfdisk-00998	sites	待判	
-libfdisk-00999	sites	待判	
-libfdisk-01021	sites	待判	
-libfdisk-01042	sites	待判	
-libfdisk-01053	sites	待判	
-libfdisk-01056	sites	待判	
-libfdisk-01057	sites	待判	
-libfdisk-01058	sites	待判	
-libfdisk-01059	sites	待判	
-libfdisk-01061	sites	待判	
-libfdisk-01063	sites	待判	
-libfdisk-01065	sites	待判	
-libfdisk-01070	sites	待判	
-libfdisk-01071	sites	待判	
-libfdisk-01072	sites	待判	
-libfdisk-01076	sites	待判	
-libfdisk-01077	sites	待判	
-libfdisk-01078	sites	待判	
-libfdisk-01079	sites	待判	
-libfdisk-01080	sites	待判	
-libfdisk-01081	sites	待判	
-libfdisk-01083	sites	待判	
-libfdisk-01084	sites	待判	
-libfdisk-01087	sites	待判	
+libfdisk-00067	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00105	sites	裁剪	同上
+libfdisk-00106	sites	裁剪	同上
+libfdisk-00113	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027 建议拆分:sites-libfdisk-table-edit-refusal-frontend
+libfdisk-00121	sites	认领	同上
+libfdisk-00122	sites	认领	同上
+libfdisk-00126	sites	认领	同上
+libfdisk-00127	sites	认领	同上
+libfdisk-00129	sites	认领	同上
+libfdisk-00131	sites	认领	同上
+libfdisk-00132	sites	认领	同上
+libfdisk-00133	sites	认领	同上
+libfdisk-00150	sites	拒绝	设备持有/去持有概念不存在：只读打开与单写事务由平台端口管理。依据：SA1-002（架构差异）
+libfdisk-00151	sites	拒绝	同上
+libfdisk-00156	sites	认领	写表后按分区 BLKPG 同步内核视图。依据：SA1-013
+libfdisk-00158	sites	认领	同上
+libfdisk-00159	sites	认领	同上
+libfdisk-00160	sites	认领	同上
+libfdisk-00572	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00579	sites	裁剪	同上
+libfdisk-00655	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00673	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
+libfdisk-00677	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
+libfdisk-00685	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00689	sites	认领	同上
+libfdisk-00690	sites	认领	同上
+libfdisk-00703	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
+libfdisk-00704	sites	认领	同上
+libfdisk-00718	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00719	sites	认领	同上
+libfdisk-00731	sites	差异	D16：verify 汇总报告未复刻：info/inspect 报损伤类别与退出码，不逐项列 N errors 清单。如需人工逐项诊断可在 info 损伤字段附明细列表
+libfdisk-00752	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00804	sites	裁剪	sfdisk --backup 备份文件不提供，记录只服务崩溃回滚。依据：SA1-020
+libfdisk-00806	sites	裁剪	同上
+libfdisk-00808	sites	裁剪	同上
+libfdisk-00816	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
+libfdisk-00817	sites	认领	同上
+libfdisk-00818	sites	认领	同上
+libfdisk-00819	sites	认领	同上
+libfdisk-00820	sites	认领	同上
+libfdisk-00823	sites	认领	同上
+libfdisk-00826	sites	认领	同上
+libfdisk-00827	sites	认领	同上
+libfdisk-00829	sites	认领	同上
+libfdisk-00830	sites	认领	同上
+libfdisk-00831	sites	认领	同上
+libfdisk-00832	sites	认领	同上
+libfdisk-00833	sites	认领	同上
+libfdisk-00837	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00838	sites	裁剪	同上
+libfdisk-00842	sites	认领	GPT 激活语义定案：set flag boot 落 ESP 类型 GUID，legacy active 不写保护 MBR。依据：SA1-015
+libfdisk-00844	sites	认领	同上
+libfdisk-00846	sites	认领	同上
+libfdisk-00849	sites	认领	set/delete 已实现（parse 白名单、类型/UUID 解析拒绝）。依据：SA1-015、SA1-027、R0089 族
+libfdisk-00866	sites	认领	同上
+libfdisk-00873	sites	认领	同上
+libfdisk-00880	sites	认领	同上
+libfdisk-00887	sites	认领	同上
+libfdisk-00899	sites	认领	loop 绑定已有（src/platform loop binding；镜像分区经 loop 视图检查）。依据：SA1-002 同口径
+libfdisk-00900	sites	认领	同上
+libfdisk-00910	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（fdisk 菜单循环/失败提示）
+libfdisk-00916	sites	裁剪	同上
+libfdisk-00917	sites	认领	占用闸在决策层，写前拒绝（挂载/占用沿 holders 递归）。依据：SA1-004、SA1-025
+libfdisk-00921	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
+libfdisk-00923	sites	认领	同上
+libfdisk-00924	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（fdisk 菜单循环/失败提示）
+libfdisk-00925	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
+libfdisk-00927	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00928	sites	认领	同上
+libfdisk-00935	sites	认领	同上
+libfdisk-00939	sites	认领	同上
+libfdisk-00944	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00946	sites	裁剪	同上
+libfdisk-00948	sites	裁剪	同上
+libfdisk-00955	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00957	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00961	sites	认领	set type 已实现（0xNN 白名单、隐藏类型对应检查）。依据：SA1-027
+libfdisk-00962	sites	认领	同上
+libfdisk-00963	sites	认领	同上
+libfdisk-00966	sites	认领	 dump 面定案：info JSON 输出。依据：SA1-010
+libfdisk-00967	sites	认领	同上
+libfdisk-00977	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00979	sites	认领	同上
+libfdisk-00982	sites	认领	同上
+libfdisk-00983	sites	认领	同上
+libfdisk-00984	sites	认领	同上
+libfdisk-00991	sites	认领	同上
+libfdisk-00992	sites	认领	同上
+libfdisk-00993	sites	认领	同上
+libfdisk-00995	sites	认领	同上
+libfdisk-00997	sites	认领	同上
+libfdisk-00998	sites	认领	同上
+libfdisk-00999	sites	认领	同上
+libfdisk-01021	sites	认领	同上
+libfdisk-01042	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-01053	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-01056	sites	认领	同上
+libfdisk-01057	sites	认领	同上
+libfdisk-01058	sites	认领	同上
+libfdisk-01059	sites	认领	同上
+libfdisk-01061	sites	认领	同上
+libfdisk-01063	sites	认领	同上
+libfdisk-01065	sites	认领	同上
+libfdisk-01070	sites	认领	同上
+libfdisk-01071	sites	认领	同上
+libfdisk-01072	sites	认领	同上
+libfdisk-01076	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-01077	sites	裁剪	同上
+libfdisk-01078	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-01079	sites	认领	同上
+libfdisk-01080	sites	认领	同上
+libfdisk-01081	sites	认领	同上
+libfdisk-01083	sites	认领	同上
+libfdisk-01084	sites	认领	同上
+libfdisk-01087	sites	认领	同上

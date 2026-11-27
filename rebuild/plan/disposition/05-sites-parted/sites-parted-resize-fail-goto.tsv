@@ -1,15 +1,15 @@
 row_id	ledger	state	note
-parted-00838	sites	待判	
-parted-00839	sites	待判	
-parted-00840	sites	待判	
-parted-00842	sites	待判	
-parted-00843	sites	待判	
-parted-00844	sites	待判	
-parted-00846	sites	待判	
-parted-00847	sites	待判	
-parted-00848	sites	待判	
-parted-00849	sites	待判	
-parted-00850	sites	待判	
-parted-00851	sites	待判	
-parted-00852	sites	待判	
-parted-00853	sites	待判	
+parted-00838	sites	裁剪	裁剪|FAT 扩缩容路径按 SA2-014 定案：档案表对 vfat 扩容/收缩按不支持拒绝（crates/core/src/fs/catalog.rs）
+parted-00839	sites	裁剪	同上
+parted-00840	sites	裁剪	同上
+parted-00842	sites	裁剪	同上
+parted-00843	sites	裁剪	同上
+parted-00844	sites	裁剪	同上
+parted-00846	sites	裁剪	同上
+parted-00847	sites	裁剪	同上
+parted-00848	sites	裁剪	同上
+parted-00849	sites	裁剪	同上
+parted-00850	sites	裁剪	同上
+parted-00851	sites	裁剪	同上
+parted-00852	sites	裁剪	同上
+parted-00853	sites	裁剪	同上

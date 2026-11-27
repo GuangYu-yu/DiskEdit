@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-gdisk-00011	sites	待判	
-gdisk-00015	sites	待判	
-gdisk-00016	sites	待判	
-gdisk-00019	sites	待判	
-gdisk-00020	sites	待判	
-gdisk-00022	sites	待判	
-gdisk-00025	sites	待判	
-gdisk-00026	sites	待判	
-gdisk-00182	sites	待判	
-gdisk-00183	sites	待判	
-gdisk-00184	sites	待判	
+gdisk-00011	sites	认领	逻辑分区读取失败列表截断告警 ↔ 扩展链损坏按损坏处理不静默截断；锚 crates/core/src/table/mbr/extended.rs
+gdisk-00015	sites	认领	逻辑分区读取失败列表截断告警 ↔ 扩展链损坏按损坏处理不静默截断；锚 crates/core/src/table/mbr/extended.rs
+gdisk-00016	sites	认领	EBR 签名非法 ↔ EBR 签名校验；锚 crates/core/src/table/mbr/extended.rs
+gdisk-00019	sites	认领	写 MBR 失败/seek 失败 ↔ 写错误上抛+已写待恢复；依据 SA1-011
+gdisk-00020	sites	认领	同上
+gdisk-00022	sites	拒绝	理由：非法包含码 exit 提示 ↔ 范围/语义校验拒绝（Refusal），不 exit；依据 SA1-009 退出码单源
+gdisk-00025	sites	裁剪	RemoveLogicalsFromFirstFour（混合 MBR 构建内部）；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-00026	sites	认领	创建扩展分区无空位 ↔ MBR 首空槽+拒绝重叠；锚 crates/core/src/table/edit.rs::mbr_add_uses_the_first_empty_slot_and_rejects_overlap
+gdisk-00182	sites	认领	SetStartLBA/SetLengthLBA/SetLocation 越界钳制继续 ↔ 本实现越界拒绝不钳制——钳制会落出越界条目，违背不猜边界；对齐下取整是唯一合法化路径（SA1-014）；锚 crates/core/src/table/mbr
+gdisk-00183	sites	认领	同上
+gdisk-00184	sites	认领	同上

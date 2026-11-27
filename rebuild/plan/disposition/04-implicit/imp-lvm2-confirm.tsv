@@ -1,76 +1,76 @@
 row_id	ledger	state	note
-lvm2-imp-00001	implicit	待判	
-lvm2-imp-00002	implicit	待判	
-lvm2-imp-00003	implicit	待判	
-lvm2-imp-00004	implicit	待判	
-lvm2-imp-00005	implicit	待判	
-lvm2-imp-00006	implicit	待判	
-lvm2-imp-00007	implicit	待判	
-lvm2-imp-00008	implicit	待判	
-lvm2-imp-00009	implicit	待判	
-lvm2-imp-00010	implicit	待判	
-lvm2-imp-00011	implicit	待判	
-lvm2-imp-00012	implicit	待判	
-lvm2-imp-00013	implicit	待判	
-lvm2-imp-00014	implicit	待判	
-lvm2-imp-00018	implicit	待判	
-lvm2-imp-00019	implicit	待判	
-lvm2-imp-00020	implicit	待判	
-lvm2-imp-00021	implicit	待判	
-lvm2-imp-00022	implicit	待判	
-lvm2-imp-00023	implicit	待判	
-lvm2-imp-00024	implicit	待判	
-lvm2-imp-00025	implicit	待判	
-lvm2-imp-00026	implicit	待判	
-lvm2-imp-00027	implicit	待判	
-lvm2-imp-00028	implicit	待判	
-lvm2-imp-00029	implicit	待判	
-lvm2-imp-00030	implicit	待判	
-lvm2-imp-00031	implicit	待判	
-lvm2-imp-00032	implicit	待判	
-lvm2-imp-00033	implicit	待判	
-lvm2-imp-00034	implicit	待判	
-lvm2-imp-00035	implicit	待判	
-lvm2-imp-00036	implicit	待判	
-lvm2-imp-00037	implicit	待判	
-lvm2-imp-00038	implicit	待判	
-lvm2-imp-00039	implicit	待判	
-lvm2-imp-00040	implicit	待判	
-lvm2-imp-00042	implicit	待判	
-lvm2-imp-00043	implicit	待判	
-lvm2-imp-00044	implicit	待判	
-lvm2-imp-00045	implicit	待判	
-lvm2-imp-00046	implicit	待判	
-lvm2-imp-00047	implicit	待判	
-lvm2-imp-00048	implicit	待判	
-lvm2-imp-00049	implicit	待判	
-lvm2-imp-00050	implicit	待判	
-lvm2-imp-00051	implicit	待判	
-lvm2-imp-00052	implicit	待判	
-lvm2-imp-00053	implicit	待判	
-lvm2-imp-00054	implicit	待判	
-lvm2-imp-00055	implicit	待判	
-lvm2-imp-00056	implicit	待判	
-lvm2-imp-00057	implicit	待判	
-lvm2-imp-00058	implicit	待判	
-lvm2-imp-00059	implicit	待判	
-lvm2-imp-00060	implicit	待判	
-lvm2-imp-00061	implicit	待判	
-lvm2-imp-00062	implicit	待判	
-lvm2-imp-00063	implicit	待判	
-lvm2-imp-00064	implicit	待判	
-lvm2-imp-00065	implicit	待判	
-lvm2-imp-00066	implicit	待判	
-lvm2-imp-00067	implicit	待判	
-lvm2-imp-00068	implicit	待判	
-lvm2-imp-00069	implicit	待判	
-lvm2-imp-00070	implicit	待判	
-lvm2-imp-00071	implicit	待判	
-lvm2-imp-00072	implicit	待判	
-lvm2-imp-00073	implicit	待判	
-lvm2-imp-00074	implicit	待判	
-lvm2-imp-00075	implicit	待判	
-lvm2-imp-00076	implicit	待判	
-lvm2-imp-00078	implicit	待判	
-lvm2-imp-00079	implicit	待判	
-lvm2-imp-00080	implicit	待判	
+lvm2-imp-00001	implicit	认领	lvresize force ↔ 本实现固定步序 写表→pvresize→lvextend -r（SA2-017），不传递 force 旁路
+lvm2-imp-00002	implicit	裁剪	pvchange/vgchange 特性面（system ID、集群锁、foreign 提示）；LVM 纳入面仅 --grow-lv；依据 SA2-017
+lvm2-imp-00003	implicit	认领	lvresize force ↔ 本实现固定步序 写表→pvresize→lvextend -r（SA2-017），不传递 force 旁路
+lvm2-imp-00004	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00005	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00006	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00007	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00008	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00009	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00010	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00011	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00012	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00013	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00014	implicit	裁剪	yes/no 参数解析交互面；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+lvm2-imp-00018	implicit	裁剪	pvcreate/pvremove 初始化与擦除确认面；未纳入（LVM 仅 grow；SA2-017）
+lvm2-imp-00019	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00020	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00021	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00022	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00023	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00024	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00025	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00026	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00027	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00028	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00029	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00030	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00031	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00032	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00033	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00034	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00035	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00036	implicit	裁剪	pv_manip 尺寸不符 yes_no_prompt；尺寸事实由判定层边界校验+回读证实承担（SA2-002/003）
+lvm2-imp-00037	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00038	implicit	裁剪	raid 全量 resync 询问；raid 特性面未纳入
+lvm2-imp-00039	implicit	裁剪	lvreduce 收缩确认；LVM 收缩未纳入（仅 grow；SA2-017）
+lvm2-imp-00040	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00042	implicit	认领	fsadm force/yes 装配 ↔ 扩容语义已有：直接 lvextend -r 固定参数（SA2-017），force 旁路不复制
+lvm2-imp-00043	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00044	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00045	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00046	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00047	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00048	implicit	裁剪	lv remove/cache/pool/snapshot 依赖删除确认面；未纳入（LVM 仅 grow；SA2-017）
+lvm2-imp-00049	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00050	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00051	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00052	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00053	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00054	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00055	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00056	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00057	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00058	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00059	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00060	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00061	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00062	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00063	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00064	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00065	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00066	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00067	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00068	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00069	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00070	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00071	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00072	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00073	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00074	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00075	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00076	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00078	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）
+lvm2-imp-00079	implicit	裁剪	force_access_clustered 集群面；未纳入
+lvm2-imp-00080	implicit	裁剪	同上（lvm2 交互确认/特性面，LVM 纳入面仅 --grow-lv；SA2-017）

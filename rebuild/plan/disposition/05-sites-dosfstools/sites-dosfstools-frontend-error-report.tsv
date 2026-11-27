@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-dosfstools-00020	sites	待判	
-dosfstools-00040	sites	待判	
-dosfstools-00082	sites	待判	
-dosfstools-00083	sites	待判	
-dosfstools-00084	sites	待判	
-dosfstools-00086	sites	待判	
-dosfstools-00087	sites	待判	
-dosfstools-00088	sites	待判	
-dosfstools-00092	sites	待判	
-dosfstools-00196	sites	待判	
-dosfstools-00202	sites	待判	
+dosfstools-00020	sites	认领	工具运行输出/警告经 diagnose/execute 透传并按退出码分类（src/app/execute/diagnose.rs）。依据：SA2-012
+dosfstools-00040	sites	裁剪	码页选择面不暴露：CP850 转换为工具内部细节，固定默认。依据：SA2-011、特性依据=码页面
+dosfstools-00082	sites	认领	工具运行输出/警告经 diagnose/execute 透传并按退出码分类（src/app/execute/diagnose.rs）。依据：SA2-012
+dosfstools-00083	sites	认领	同上
+dosfstools-00084	sites	认领	同上
+dosfstools-00086	sites	认领	同上
+dosfstools-00087	sites	认领	同上
+dosfstools-00088	sites	认领	同上
+dosfstools-00092	sites	裁剪	码页选择面不暴露：CP850 转换为工具内部细节，固定默认。依据：SA2-011、特性依据=码页面
+dosfstools-00196	sites	认领	工具运行输出/警告经 diagnose/execute 透传并按退出码分类（src/app/execute/diagnose.rs）。依据：SA2-012
+dosfstools-00202	sites	认领	同上

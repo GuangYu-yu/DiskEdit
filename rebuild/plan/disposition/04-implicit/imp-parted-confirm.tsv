@@ -1,5 +1,5 @@
 row_id	ledger	state	note
-parted-imp-00090	implicit	待判	
-parted-imp-00092	implicit	待判	
-parted-imp-00093	implicit	待判	
-parted-imp-00094	implicit	待判	
+parted-imp-00090	implicit	裁剪	parted 交互模式（interactive_mode 入口/调用/用法提示）；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes；依据 SA1-005：覆写已有数据须显式确认，否则写任何字节前拒绝；锚 src/app/decide/new.rs::TableOccupied、src/app/cli/parse.rs::--yes
+parted-imp-00092	implicit	裁剪	同上
+parted-imp-00093	implicit	裁剪	同上
+parted-imp-00094	implicit	裁剪	同上

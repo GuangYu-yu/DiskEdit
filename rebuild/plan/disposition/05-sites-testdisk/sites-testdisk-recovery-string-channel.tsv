@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-testdisk-00001	sites	待判	
+testdisk-00001	sites	裁剪	ncurses 提示'分区不得挂载'；等价语义=占用闸拒绝+拒绝文本提示；依据 SA1-004；锚 src/app/decide/refusal.rs::Occupied

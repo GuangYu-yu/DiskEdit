@@ -1,33 +1,33 @@
 row_id	ledger	state	note
-e2fsprogs-00126	sites	待判	
-e2fsprogs-00129	sites	待判	
-e2fsprogs-00130	sites	待判	
-e2fsprogs-00131	sites	待判	
-e2fsprogs-00132	sites	待判	
-e2fsprogs-00167	sites	待判	
-e2fsprogs-00169	sites	待判	
-e2fsprogs-00171	sites	待判	
-e2fsprogs-00249	sites	待判	
-e2fsprogs-00250	sites	待判	
-e2fsprogs-00251	sites	待判	
-e2fsprogs-00252	sites	待判	
-e2fsprogs-00253	sites	待判	
-e2fsprogs-00254	sites	待判	
-e2fsprogs-00255	sites	待判	
-e2fsprogs-00256	sites	待判	
-e2fsprogs-00257	sites	待判	
-e2fsprogs-00258	sites	待判	
-e2fsprogs-00259	sites	待判	
-e2fsprogs-00260	sites	待判	
-e2fsprogs-00265	sites	待判	
-e2fsprogs-00267	sites	待判	
-e2fsprogs-00268	sites	待判	
-e2fsprogs-00269	sites	待判	
-e2fsprogs-00270	sites	待判	
-e2fsprogs-00272	sites	待判	
-e2fsprogs-00273	sites	待判	
-e2fsprogs-00275	sites	待判	
-e2fsprogs-00276	sites	待判	
-e2fsprogs-00278	sites	待判	
-e2fsprogs-00279	sites	待判	
-e2fsprogs-00280	sites	待判	
+e2fsprogs-00126	sites	裁剪	裁剪：tune2fs 内部失败清理路径——随外部工具自带；本实现不实现 tune2fs，非零退出即失败（src/app/execute/filesystem.rs::run_checked）
+e2fsprogs-00129	sites	裁剪	同上
+e2fsprogs-00130	sites	裁剪	同上
+e2fsprogs-00131	sites	裁剪	同上
+e2fsprogs-00132	sites	裁剪	同上
+e2fsprogs-00167	sites	裁剪	同上
+e2fsprogs-00169	sites	裁剪	同上
+e2fsprogs-00171	sites	裁剪	同上
+e2fsprogs-00249	sites	裁剪	同上
+e2fsprogs-00250	sites	裁剪	同上
+e2fsprogs-00251	sites	裁剪	同上
+e2fsprogs-00252	sites	裁剪	同上
+e2fsprogs-00253	sites	裁剪	同上
+e2fsprogs-00254	sites	裁剪	同上
+e2fsprogs-00255	sites	裁剪	同上
+e2fsprogs-00256	sites	裁剪	同上
+e2fsprogs-00257	sites	裁剪	同上
+e2fsprogs-00258	sites	裁剪	同上
+e2fsprogs-00259	sites	裁剪	同上
+e2fsprogs-00260	sites	裁剪	同上
+e2fsprogs-00265	sites	裁剪	同上
+e2fsprogs-00267	sites	裁剪	同上
+e2fsprogs-00268	sites	裁剪	同上
+e2fsprogs-00269	sites	裁剪	同上
+e2fsprogs-00270	sites	裁剪	同上
+e2fsprogs-00272	sites	裁剪	同上
+e2fsprogs-00273	sites	裁剪	同上
+e2fsprogs-00275	sites	裁剪	同上
+e2fsprogs-00276	sites	裁剪	同上
+e2fsprogs-00278	sites	裁剪	同上
+e2fsprogs-00279	sites	裁剪	同上
+e2fsprogs-00280	sites	裁剪	同上

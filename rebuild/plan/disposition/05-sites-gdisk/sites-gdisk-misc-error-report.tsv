@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-gdisk-00002	sites	待判	
-gdisk-00003	sites	待判	
-gdisk-00027	sites	待判	
-gdisk-00060	sites	待判	
-gdisk-00062	sites	待判	
-gdisk-00064	sites	待判	
-gdisk-00065	sites	待判	
-gdisk-00181	sites	待判	
-gdisk-00185	sites	待判	
-gdisk-00186	sites	待判	
-gdisk-00190	sites	待判	
+gdisk-00002	sites	认领	属性操作非法运算符/掩码解析错误返回 false ↔ 属性位经 set+解析校验拒绝；锚 crates/core/src/table/edit.rs::attribute_bit
+gdisk-00003	sites	认领	属性操作非法运算符/掩码解析错误返回 false ↔ 属性位经 set+解析校验拒绝；锚 crates/core/src/table/edit.rs::attribute_bit
+gdisk-00027	sites	裁剪	BSD 盘标读分配；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+gdisk-00060	sites	裁剪	fixparts 用法/读失败；fixparts 子工具未纳入命令面（特性依据：本实现命令清单固定）
+gdisk-00062	sites	认领	同上
+gdisk-00064	sites	裁剪	fixparts 对 GPT 盘拒绝提示；fixparts 未纳入
+gdisk-00065	sites	认领	同上
+gdisk-00181	sites	认领	UUID 生成失败降级警告 ↔ 身份生成为错误路径，不落'不当 UUID'（更保守）；依据 SA3-001
+gdisk-00185	sites	裁剪	类型库动态 AddType 失败；类型集合固定（crates/core/src/table/edit.rs）
+gdisk-00186	sites	认领	同上
+gdisk-00190	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源

@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-libfdisk-imp-00007	implicit	待判	
-libfdisk-imp-00008	implicit	待判	
-libfdisk-imp-00009	implicit	待判	
-libfdisk-imp-00010	implicit	待判	
-libfdisk-imp-00011	implicit	待判	
+libfdisk-imp-00007	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions
+libfdisk-imp-00008	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+libfdisk-imp-00009	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+libfdisk-imp-00010	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView
+libfdisk-imp-00011	implicit	认领	依据 SA1-013：BLKPG 语义承接——resize 走专用 BLKPG_RESIZE_PARTITION 步、add/del 由表写后统一刷新承担，失败落 5；锚 src/platform/linux/mod.rs、src/app/decide/step.rs::RefreshKernelView

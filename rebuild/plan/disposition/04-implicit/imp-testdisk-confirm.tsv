@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-testdisk-imp-00001	implicit	待判	
+testdisk-imp-00001	implicit	裁剪	MBR 引导代码写入的二次确认应答（ask_YN+ask_confirmation）；本实现写面=表结构不写引导代码（SA1-003/SA1-019 PMBR 规范化、SA1-027 CHS 占位），引导代码安装未纳入

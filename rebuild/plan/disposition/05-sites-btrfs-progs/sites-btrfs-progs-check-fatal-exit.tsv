@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-btrfs-progs-00758	sites	待判	
-btrfs-progs-00763	sites	待判	
-btrfs-progs-00765	sites	待判	
-btrfs-progs-00887	sites	待判	
-btrfs-progs-00917	sites	待判	
-btrfs-progs-00963	sites	待判	
-btrfs-progs-00964	sites	待判	
-btrfs-progs-00966	sites	待判	
-btrfs-progs-00968	sites	待判	
-btrfs-progs-00970	sites	待判	
-btrfs-progs-00971	sites	待判	
-btrfs-progs-00973	sites	待判	
+btrfs-progs-00758	sites	裁剪	裁剪：check 自身 usage/修复模式（--repair/--force/--clear-*，--readonly 固定下不可达）/内部致命出口——非零退出码统一按 check 失败映射（src/app/execute/diagnose.rs::run）
+btrfs-progs-00763	sites	裁剪	同上
+btrfs-progs-00765	sites	裁剪	同上
+btrfs-progs-00887	sites	裁剪	同上
+btrfs-progs-00917	sites	裁剪	同上
+btrfs-progs-00963	sites	裁剪	同上
+btrfs-progs-00964	sites	裁剪	同上
+btrfs-progs-00966	sites	裁剪	同上
+btrfs-progs-00968	sites	裁剪	同上
+btrfs-progs-00970	sites	裁剪	同上
+btrfs-progs-00971	sites	裁剪	同上
+btrfs-progs-00973	sites	裁剪	同上

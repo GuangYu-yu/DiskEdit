@@ -1,86 +1,86 @@
 row_id	ledger	state	note
-e2fsprogs-01992	sites	待判	
-e2fsprogs-01993	sites	待判	
-e2fsprogs-01994	sites	待判	
-e2fsprogs-01995	sites	待判	
-e2fsprogs-01996	sites	待判	
-e2fsprogs-01997	sites	待判	
-e2fsprogs-01998	sites	待判	
-e2fsprogs-01999	sites	待判	
-e2fsprogs-02000	sites	待判	
-e2fsprogs-02001	sites	待判	
-e2fsprogs-02002	sites	待判	
-e2fsprogs-02003	sites	待判	
-e2fsprogs-02004	sites	待判	
-e2fsprogs-02005	sites	待判	
-e2fsprogs-02006	sites	待判	
-e2fsprogs-02007	sites	待判	
-e2fsprogs-02008	sites	待判	
-e2fsprogs-02009	sites	待判	
-e2fsprogs-02010	sites	待判	
-e2fsprogs-02011	sites	待判	
-e2fsprogs-02012	sites	待判	
-e2fsprogs-02013	sites	待判	
-e2fsprogs-02014	sites	待判	
-e2fsprogs-02015	sites	待判	
-e2fsprogs-02016	sites	待判	
-e2fsprogs-02017	sites	待判	
-e2fsprogs-02018	sites	待判	
-e2fsprogs-02019	sites	待判	
-e2fsprogs-02020	sites	待判	
-e2fsprogs-02021	sites	待判	
-e2fsprogs-02022	sites	待判	
-e2fsprogs-02023	sites	待判	
-e2fsprogs-02024	sites	待判	
-e2fsprogs-02025	sites	待判	
-e2fsprogs-02026	sites	待判	
-e2fsprogs-02027	sites	待判	
-e2fsprogs-02028	sites	待判	
-e2fsprogs-02029	sites	待判	
-e2fsprogs-02030	sites	待判	
-e2fsprogs-02031	sites	待判	
-e2fsprogs-02032	sites	待判	
-e2fsprogs-02035	sites	待判	
-e2fsprogs-02036	sites	待判	
-e2fsprogs-02038	sites	待判	
-e2fsprogs-02058	sites	待判	
-e2fsprogs-02059	sites	待判	
-e2fsprogs-02060	sites	待判	
-e2fsprogs-02061	sites	待判	
-e2fsprogs-02062	sites	待判	
-e2fsprogs-02064	sites	待判	
-e2fsprogs-02065	sites	待判	
-e2fsprogs-02066	sites	待判	
-e2fsprogs-02067	sites	待判	
-e2fsprogs-02070	sites	待判	
-e2fsprogs-02073	sites	待判	
-e2fsprogs-02074	sites	待判	
-e2fsprogs-02075	sites	待判	
-e2fsprogs-02083	sites	待判	
-e2fsprogs-02084	sites	待判	
-e2fsprogs-02085	sites	待判	
-e2fsprogs-02086	sites	待判	
-e2fsprogs-02087	sites	待判	
-e2fsprogs-02088	sites	待判	
-e2fsprogs-02089	sites	待判	
-e2fsprogs-02090	sites	待判	
-e2fsprogs-02102	sites	待判	
-e2fsprogs-02103	sites	待判	
-e2fsprogs-02104	sites	待判	
-e2fsprogs-02105	sites	待判	
-e2fsprogs-02106	sites	待判	
-e2fsprogs-02107	sites	待判	
-e2fsprogs-02108	sites	待判	
-e2fsprogs-02109	sites	待判	
-e2fsprogs-02110	sites	待判	
-e2fsprogs-02111	sites	待判	
-e2fsprogs-02112	sites	待判	
-e2fsprogs-02113	sites	待判	
-e2fsprogs-02114	sites	待判	
-e2fsprogs-02115	sites	待判	
-e2fsprogs-02116	sites	待判	
-e2fsprogs-02117	sites	待判	
-e2fsprogs-02118	sites	待判	
-e2fsprogs-02119	sites	待判	
-e2fsprogs-02120	sites	待判	
-e2fsprogs-02121	sites	待判	
+e2fsprogs-01992	sites	裁剪	裁剪：ext2fs_open2/ext2fs_flush2/quota/profile 库内部失败清理——随外部工具自带，退出码非零即失败
+e2fsprogs-01993	sites	裁剪	同上
+e2fsprogs-01994	sites	裁剪	同上
+e2fsprogs-01995	sites	裁剪	同上
+e2fsprogs-01996	sites	裁剪	同上
+e2fsprogs-01997	sites	裁剪	同上
+e2fsprogs-01998	sites	裁剪	同上
+e2fsprogs-01999	sites	裁剪	同上
+e2fsprogs-02000	sites	裁剪	同上
+e2fsprogs-02001	sites	裁剪	同上
+e2fsprogs-02002	sites	裁剪	同上
+e2fsprogs-02003	sites	裁剪	同上
+e2fsprogs-02004	sites	裁剪	同上
+e2fsprogs-02005	sites	裁剪	同上
+e2fsprogs-02006	sites	裁剪	同上
+e2fsprogs-02007	sites	裁剪	同上
+e2fsprogs-02008	sites	裁剪	同上
+e2fsprogs-02009	sites	裁剪	同上
+e2fsprogs-02010	sites	裁剪	同上
+e2fsprogs-02011	sites	裁剪	同上
+e2fsprogs-02012	sites	裁剪	同上
+e2fsprogs-02013	sites	裁剪	同上
+e2fsprogs-02014	sites	裁剪	同上
+e2fsprogs-02015	sites	裁剪	同上
+e2fsprogs-02016	sites	裁剪	同上
+e2fsprogs-02017	sites	裁剪	同上
+e2fsprogs-02018	sites	裁剪	同上
+e2fsprogs-02019	sites	裁剪	同上
+e2fsprogs-02020	sites	裁剪	同上
+e2fsprogs-02021	sites	裁剪	同上
+e2fsprogs-02022	sites	裁剪	同上
+e2fsprogs-02023	sites	裁剪	同上
+e2fsprogs-02024	sites	裁剪	同上
+e2fsprogs-02025	sites	裁剪	同上
+e2fsprogs-02026	sites	裁剪	同上
+e2fsprogs-02027	sites	裁剪	同上
+e2fsprogs-02028	sites	裁剪	同上
+e2fsprogs-02029	sites	裁剪	同上
+e2fsprogs-02030	sites	裁剪	同上
+e2fsprogs-02031	sites	裁剪	同上
+e2fsprogs-02032	sites	裁剪	同上
+e2fsprogs-02035	sites	裁剪	同上
+e2fsprogs-02036	sites	裁剪	同上
+e2fsprogs-02038	sites	裁剪	同上
+e2fsprogs-02058	sites	裁剪	同上
+e2fsprogs-02059	sites	裁剪	同上
+e2fsprogs-02060	sites	裁剪	同上
+e2fsprogs-02061	sites	裁剪	同上
+e2fsprogs-02062	sites	裁剪	同上
+e2fsprogs-02064	sites	裁剪	同上
+e2fsprogs-02065	sites	裁剪	同上
+e2fsprogs-02066	sites	裁剪	同上
+e2fsprogs-02067	sites	裁剪	同上
+e2fsprogs-02070	sites	裁剪	同上
+e2fsprogs-02073	sites	裁剪	同上
+e2fsprogs-02074	sites	裁剪	同上
+e2fsprogs-02075	sites	裁剪	同上
+e2fsprogs-02083	sites	裁剪	同上
+e2fsprogs-02084	sites	裁剪	同上
+e2fsprogs-02085	sites	裁剪	同上
+e2fsprogs-02086	sites	裁剪	同上
+e2fsprogs-02087	sites	裁剪	同上
+e2fsprogs-02088	sites	裁剪	同上
+e2fsprogs-02089	sites	裁剪	同上
+e2fsprogs-02090	sites	裁剪	同上
+e2fsprogs-02102	sites	裁剪	同上
+e2fsprogs-02103	sites	裁剪	同上
+e2fsprogs-02104	sites	裁剪	同上
+e2fsprogs-02105	sites	裁剪	同上
+e2fsprogs-02106	sites	裁剪	同上
+e2fsprogs-02107	sites	裁剪	同上
+e2fsprogs-02108	sites	裁剪	同上
+e2fsprogs-02109	sites	裁剪	同上
+e2fsprogs-02110	sites	裁剪	同上
+e2fsprogs-02111	sites	裁剪	同上
+e2fsprogs-02112	sites	裁剪	同上
+e2fsprogs-02113	sites	裁剪	同上
+e2fsprogs-02114	sites	裁剪	同上
+e2fsprogs-02115	sites	裁剪	同上
+e2fsprogs-02116	sites	裁剪	同上
+e2fsprogs-02117	sites	裁剪	同上
+e2fsprogs-02118	sites	裁剪	同上
+e2fsprogs-02119	sites	裁剪	同上
+e2fsprogs-02120	sites	裁剪	同上
+e2fsprogs-02121	sites	裁剪	同上

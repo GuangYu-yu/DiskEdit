@@ -1,41 +1,41 @@
 row_id	ledger	state	note
-libfdisk-00358	sites	待判	
-libfdisk-00359	sites	待判	
-libfdisk-00372	sites	待判	
-libfdisk-00373	sites	待判	
-libfdisk-00374	sites	待判	
-libfdisk-00375	sites	待判	
-libfdisk-00376	sites	待判	
-libfdisk-00382	sites	待判	
-libfdisk-00383	sites	待判	
-libfdisk-00384	sites	待判	
-libfdisk-00385	sites	待判	
-libfdisk-00386	sites	待判	
-libfdisk-00416	sites	待判	
-libfdisk-00423	sites	待判	
-libfdisk-00424	sites	待判	
-libfdisk-00426	sites	待判	
-libfdisk-00428	sites	待判	
-libfdisk-00441	sites	待判	
-libfdisk-00442	sites	待判	
-libfdisk-00454	sites	待判	
-libfdisk-00455	sites	待判	
-libfdisk-00456	sites	待判	
-libfdisk-00457	sites	待判	
-libfdisk-00458	sites	待判	
-libfdisk-00459	sites	待判	
-libfdisk-00460	sites	待判	
-libfdisk-00462	sites	待判	
-libfdisk-00496	sites	待判	
-libfdisk-00498	sites	待判	
-libfdisk-00501	sites	待判	
-libfdisk-00503	sites	待判	
-libfdisk-00505	sites	待判	
-libfdisk-00509	sites	待判	
-libfdisk-00515	sites	待判	
-libfdisk-00517	sites	待判	
-libfdisk-00518	sites	待判	
-libfdisk-00519	sites	待判	
-libfdisk-00520	sites	待判	
-libfdisk-00521	sites	待判	
-libfdisk-00522	sites	待判	
+libfdisk-00358	sites	认领	备份头/表位置归一并入同一表写（crates/core/src/table/edit.rs 序列化段序：备份表→备份头→主表→主头）。依据：SA1-018
+libfdisk-00359	sites	认领	同上
+libfdisk-00372	sites	认领	PMBR 判定已有：非规范 PMBR 只在表写归一（crates/core/src/table/create.rs protective_mbr_is_rewritten_only_when_non_canonical）。依据：SA1-003、SA3-002
+libfdisk-00373	sites	认领	同上
+libfdisk-00374	sites	认领	同上
+libfdisk-00375	sites	认领	同上
+libfdisk-00376	sites	认领	同上
+libfdisk-00382	sites	认领	条目读取错误上抛为 TableError（entries.rs）。依据：SA3-003 同口径
+libfdisk-00383	sites	认领	同上
+libfdisk-00384	sites	认领	LBA sanity 已有：first/last usable 与 MyLBA 判定（crates/core/src/table/gpt/parse.rs）。依据：SA3-003
+libfdisk-00385	sites	认领	同上
+libfdisk-00386	sites	认领	同上
+libfdisk-00416	sites	拒绝	C 失败 goto 清理由 Rust Result/? 错误传播取代（SA1-022 fail-goto 计数入账），无逐点对应。依据：SA1-022
+libfdisk-00423	sites	认领	探测期单侧损坏回退已有。依据：SA3-003（classify_falls_back_to_backup）
+libfdisk-00424	sites	认领	同上
+libfdisk-00426	sites	认领	同上
+libfdisk-00428	sites	认领	同上
+libfdisk-00441	sites	拒绝	C 失败 goto 清理由 Rust Result/? 错误传播取代（SA1-022 fail-goto 计数入账），无逐点对应。依据：SA1-022
+libfdisk-00442	sites	拒绝	同上
+libfdisk-00454	sites	认领	唯一表写已有：写前重叠校验+固定段序（backup array→backup header→primary array→primary header；crates/core/src/table/edit.rs）。依据：SA1-001、SA1-027
+libfdisk-00455	sites	认领	同上
+libfdisk-00456	sites	认领	同上
+libfdisk-00457	sites	认领	同上
+libfdisk-00458	sites	认领	同上
+libfdisk-00459	sites	认领	同上
+libfdisk-00460	sites	认领	同上
+libfdisk-00462	sites	认领	同上
+libfdisk-00496	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00498	sites	裁剪	同上
+libfdisk-00501	sites	拒绝	C 失败 goto 清理由 Rust Result/? 错误传播取代（SA1-022 fail-goto 计数入账），无逐点对应。依据：SA1-022
+libfdisk-00503	sites	拒绝	同上
+libfdisk-00505	sites	拒绝	同上
+libfdisk-00509	sites	认领	新条目派生新身份已有：add/copy 生成确定性 GUID，不继承源。依据：SA1-007
+libfdisk-00515	sites	认领	建表（new）已实现：GPT/MBR 创建与规范化，未知盘标拒绝。依据：SA1-016、crates/core/src/table/create.rs
+libfdisk-00517	sites	认领	同上
+libfdisk-00518	sites	认领	同上
+libfdisk-00519	sites	认领	同上
+libfdisk-00520	sites	认领	同上
+libfdisk-00521	sites	认领	同上
+libfdisk-00522	sites	认领	同上

@@ -1,21 +1,21 @@
 row_id	ledger	state	note
-dosfstools-00154	sites	待判	
-dosfstools-00155	sites	待判	
-dosfstools-00156	sites	待判	
-dosfstools-00157	sites	待判	
-dosfstools-00161	sites	待判	
-dosfstools-00162	sites	待判	
-dosfstools-00163	sites	待判	
-dosfstools-00164	sites	待判	
-dosfstools-00165	sites	待判	
-dosfstools-00166	sites	待判	
-dosfstools-00167	sites	待判	
-dosfstools-00171	sites	待判	
-dosfstools-00172	sites	待判	
-dosfstools-00173	sites	待判	
-dosfstools-00174	sites	待判	
-dosfstools-00175	sites	待判	
-dosfstools-00176	sites	待判	
-dosfstools-00177	sites	待判	
-dosfstools-00178	sites	待判	
-dosfstools-00179	sites	待判	
+dosfstools-00154	sites	裁剪	依赖工具自身 CLI/usage/选项面不复刻：固定参数调用。依据：SA2-011、特性依据=工具命令行面
+dosfstools-00155	sites	裁剪	同上
+dosfstools-00156	sites	裁剪	同上
+dosfstools-00157	sites	裁剪	同上
+dosfstools-00161	sites	裁剪	同上
+dosfstools-00162	sites	裁剪	同上
+dosfstools-00163	sites	裁剪	同上
+dosfstools-00164	sites	裁剪	同上
+dosfstools-00165	sites	裁剪	同上
+dosfstools-00166	sites	裁剪	同上
+dosfstools-00167	sites	裁剪	同上
+dosfstools-00171	sites	裁剪	同上
+dosfstools-00172	sites	裁剪	同上
+dosfstools-00173	sites	裁剪	同上
+dosfstools-00174	sites	裁剪	同上
+dosfstools-00175	sites	裁剪	同上
+dosfstools-00176	sites	裁剪	同上
+dosfstools-00177	sites	裁剪	同上
+dosfstools-00178	sites	裁剪	同上
+dosfstools-00179	sites	裁剪	同上

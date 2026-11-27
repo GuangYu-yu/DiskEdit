@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-gdisk-00028	sites	待判	
-gdisk-00061	sites	待判	
-gdisk-00063	sites	待判	
-gdisk-00066	sites	待判	
-gdisk-00068	sites	待判	
-gdisk-00070	sites	待判	
-gdisk-00187	sites	待判	
-gdisk-00188	sites	待判	
-gdisk-00191	sites	待判	
+gdisk-00028	sites	裁剪	BSD 盘标分配 exit；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+gdisk-00061	sites	裁剪	fixparts exit 出口；fixparts 未纳入
+gdisk-00063	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00066	sites	拒绝	同上
+gdisk-00068	sites	拒绝	同上
+gdisk-00070	sites	拒绝	同上
+gdisk-00187	sites	裁剪	交互 ReadString/GetNumber EOF exit(5)；交互输入面不纳入（非交互 CLI）
+gdisk-00188	sites	拒绝	同上
+gdisk-00191	sites	拒绝	同上

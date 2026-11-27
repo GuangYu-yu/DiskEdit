@@ -1,125 +1,125 @@
 row_id	ledger	state	note
-e2fsprogs-00338	sites	待判	
-e2fsprogs-00341	sites	待判	
-e2fsprogs-00342	sites	待判	
-e2fsprogs-00346	sites	待判	
-e2fsprogs-00347	sites	待判	
-e2fsprogs-00349	sites	待判	
-e2fsprogs-00350	sites	待判	
-e2fsprogs-00353	sites	待判	
-e2fsprogs-00354	sites	待判	
-e2fsprogs-00355	sites	待判	
-e2fsprogs-00356	sites	待判	
-e2fsprogs-00376	sites	待判	
-e2fsprogs-00377	sites	待判	
-e2fsprogs-00393	sites	待判	
-e2fsprogs-00394	sites	待判	
-e2fsprogs-00395	sites	待判	
-e2fsprogs-00396	sites	待判	
-e2fsprogs-00397	sites	待判	
-e2fsprogs-00398	sites	待判	
-e2fsprogs-00399	sites	待判	
-e2fsprogs-00400	sites	待判	
-e2fsprogs-00401	sites	待判	
-e2fsprogs-00402	sites	待判	
-e2fsprogs-00403	sites	待判	
-e2fsprogs-00404	sites	待判	
-e2fsprogs-00405	sites	待判	
-e2fsprogs-00406	sites	待判	
-e2fsprogs-00407	sites	待判	
-e2fsprogs-00408	sites	待判	
-e2fsprogs-00409	sites	待判	
-e2fsprogs-00410	sites	待判	
-e2fsprogs-00411	sites	待判	
-e2fsprogs-00412	sites	待判	
-e2fsprogs-00413	sites	待判	
-e2fsprogs-00414	sites	待判	
-e2fsprogs-00415	sites	待判	
-e2fsprogs-00417	sites	待判	
-e2fsprogs-00418	sites	待判	
-e2fsprogs-00419	sites	待判	
-e2fsprogs-00420	sites	待判	
-e2fsprogs-00421	sites	待判	
-e2fsprogs-00423	sites	待判	
-e2fsprogs-00424	sites	待判	
-e2fsprogs-00425	sites	待判	
-e2fsprogs-00429	sites	待判	
-e2fsprogs-00431	sites	待判	
-e2fsprogs-00433	sites	待判	
-e2fsprogs-00434	sites	待判	
-e2fsprogs-00436	sites	待判	
-e2fsprogs-00438	sites	待判	
-e2fsprogs-00446	sites	待判	
-e2fsprogs-00448	sites	待判	
-e2fsprogs-00449	sites	待判	
-e2fsprogs-00452	sites	待判	
-e2fsprogs-00453	sites	待判	
-e2fsprogs-00456	sites	待判	
-e2fsprogs-00457	sites	待判	
-e2fsprogs-00461	sites	待判	
-e2fsprogs-00462	sites	待判	
-e2fsprogs-00466	sites	待判	
-e2fsprogs-00467	sites	待判	
-e2fsprogs-00469	sites	待判	
-e2fsprogs-00470	sites	待判	
-e2fsprogs-00472	sites	待判	
-e2fsprogs-00473	sites	待判	
-e2fsprogs-00475	sites	待判	
-e2fsprogs-00476	sites	待判	
-e2fsprogs-00481	sites	待判	
-e2fsprogs-00482	sites	待判	
-e2fsprogs-00483	sites	待判	
-e2fsprogs-00485	sites	待判	
-e2fsprogs-00486	sites	待判	
-e2fsprogs-00490	sites	待判	
-e2fsprogs-00491	sites	待判	
-e2fsprogs-00507	sites	待判	
-e2fsprogs-00508	sites	待判	
-e2fsprogs-00517	sites	待判	
-e2fsprogs-00518	sites	待判	
-e2fsprogs-00521	sites	待判	
-e2fsprogs-00535	sites	待判	
-e2fsprogs-00536	sites	待判	
-e2fsprogs-00543	sites	待判	
-e2fsprogs-00545	sites	待判	
-e2fsprogs-00546	sites	待判	
-e2fsprogs-00548	sites	待判	
-e2fsprogs-00550	sites	待判	
-e2fsprogs-00551	sites	待判	
-e2fsprogs-00553	sites	待判	
-e2fsprogs-00557	sites	待判	
-e2fsprogs-00558	sites	待判	
-e2fsprogs-00565	sites	待判	
-e2fsprogs-00566	sites	待判	
-e2fsprogs-00568	sites	待判	
-e2fsprogs-00569	sites	待判	
-e2fsprogs-00572	sites	待判	
-e2fsprogs-00573	sites	待判	
-e2fsprogs-00577	sites	待判	
-e2fsprogs-00580	sites	待判	
-e2fsprogs-00581	sites	待判	
-e2fsprogs-00583	sites	待判	
-e2fsprogs-00584	sites	待判	
-e2fsprogs-00588	sites	待判	
-e2fsprogs-00589	sites	待判	
-e2fsprogs-00591	sites	待判	
-e2fsprogs-00592	sites	待判	
-e2fsprogs-00594	sites	待判	
-e2fsprogs-00595	sites	待判	
-e2fsprogs-00596	sites	待判	
-e2fsprogs-00598	sites	待判	
-e2fsprogs-00599	sites	待判	
-e2fsprogs-00606	sites	待判	
-e2fsprogs-00613	sites	待判	
-e2fsprogs-00615	sites	待判	
-e2fsprogs-00620	sites	待判	
-e2fsprogs-00621	sites	待判	
-e2fsprogs-00628	sites	待判	
-e2fsprogs-00629	sites	待判	
-e2fsprogs-00633	sites	待判	
-e2fsprogs-00638	sites	待判	
-e2fsprogs-00639	sites	待判	
-e2fsprogs-00645	sites	待判	
-e2fsprogs-00646	sites	待判	
-e2fsprogs-00648	sites	待判	
-e2fsprogs-00660	sites	待判	
+e2fsprogs-00338	sites	裁剪	裁剪：mke2fs CLI 参数与内部校验（扩展选项/bad blocks/revision/特性组合/设备尺寸）——本实现 mkfs 面只有类型（ext2/3/4）与卷标，其余参数不接线；mke2fs 以固定参数调用，内部校验随外部工具自带，非零退出即失败（档案表 mkfs 列 + 命令面冻结）
+e2fsprogs-00341	sites	裁剪	同上
+e2fsprogs-00342	sites	裁剪	同上
+e2fsprogs-00346	sites	裁剪	同上
+e2fsprogs-00347	sites	裁剪	同上
+e2fsprogs-00349	sites	裁剪	同上
+e2fsprogs-00350	sites	裁剪	同上
+e2fsprogs-00353	sites	裁剪	同上
+e2fsprogs-00354	sites	裁剪	同上
+e2fsprogs-00355	sites	裁剪	同上
+e2fsprogs-00356	sites	裁剪	同上
+e2fsprogs-00376	sites	裁剪	同上
+e2fsprogs-00377	sites	裁剪	同上
+e2fsprogs-00393	sites	裁剪	同上
+e2fsprogs-00394	sites	裁剪	同上
+e2fsprogs-00395	sites	裁剪	同上
+e2fsprogs-00396	sites	裁剪	同上
+e2fsprogs-00397	sites	裁剪	同上
+e2fsprogs-00398	sites	裁剪	同上
+e2fsprogs-00399	sites	裁剪	同上
+e2fsprogs-00400	sites	裁剪	同上
+e2fsprogs-00401	sites	裁剪	同上
+e2fsprogs-00402	sites	裁剪	同上
+e2fsprogs-00403	sites	裁剪	同上
+e2fsprogs-00404	sites	裁剪	同上
+e2fsprogs-00405	sites	裁剪	同上
+e2fsprogs-00406	sites	裁剪	同上
+e2fsprogs-00407	sites	裁剪	同上
+e2fsprogs-00408	sites	裁剪	同上
+e2fsprogs-00409	sites	裁剪	同上
+e2fsprogs-00410	sites	裁剪	同上
+e2fsprogs-00411	sites	裁剪	同上
+e2fsprogs-00412	sites	裁剪	同上
+e2fsprogs-00413	sites	裁剪	同上
+e2fsprogs-00414	sites	裁剪	同上
+e2fsprogs-00415	sites	裁剪	同上
+e2fsprogs-00417	sites	裁剪	同上
+e2fsprogs-00418	sites	裁剪	同上
+e2fsprogs-00419	sites	裁剪	同上
+e2fsprogs-00420	sites	裁剪	同上
+e2fsprogs-00421	sites	裁剪	同上
+e2fsprogs-00423	sites	裁剪	同上
+e2fsprogs-00424	sites	裁剪	同上
+e2fsprogs-00425	sites	裁剪	同上
+e2fsprogs-00429	sites	裁剪	同上
+e2fsprogs-00431	sites	裁剪	同上
+e2fsprogs-00433	sites	裁剪	同上
+e2fsprogs-00434	sites	裁剪	同上
+e2fsprogs-00436	sites	裁剪	同上
+e2fsprogs-00438	sites	裁剪	同上
+e2fsprogs-00446	sites	裁剪	同上
+e2fsprogs-00448	sites	裁剪	同上
+e2fsprogs-00449	sites	裁剪	同上
+e2fsprogs-00452	sites	裁剪	同上
+e2fsprogs-00453	sites	裁剪	同上
+e2fsprogs-00456	sites	裁剪	同上
+e2fsprogs-00457	sites	裁剪	同上
+e2fsprogs-00461	sites	裁剪	同上
+e2fsprogs-00462	sites	裁剪	同上
+e2fsprogs-00466	sites	裁剪	同上
+e2fsprogs-00467	sites	裁剪	同上
+e2fsprogs-00469	sites	裁剪	同上
+e2fsprogs-00470	sites	裁剪	同上
+e2fsprogs-00472	sites	裁剪	同上
+e2fsprogs-00473	sites	裁剪	同上
+e2fsprogs-00475	sites	裁剪	同上
+e2fsprogs-00476	sites	裁剪	同上
+e2fsprogs-00481	sites	差异	D15：mkfs/ext 卷标超长时在擦除任何字节前按 16 字节 s_volume_name 容量拒绝，不采纳 mke2fs 的“截断后建卷”——依据 src/app/decide/mkfs.rs 的 label_problem 前置闸、crates/core/src/fs/attrs.rs::label_problem。建议拆分: sites-e2fsprogs-mkfs-surface
+e2fsprogs-00482	sites	裁剪	裁剪：mke2fs CLI 参数与内部校验（扩展选项/bad blocks/revision/特性组合/设备尺寸）——本实现 mkfs 面只有类型（ext2/3/4）与卷标，其余参数不接线；mke2fs 以固定参数调用，内部校验随外部工具自带，非零退出即失败（档案表 mkfs 列 + 命令面冻结）
+e2fsprogs-00483	sites	裁剪	同上
+e2fsprogs-00485	sites	裁剪	同上
+e2fsprogs-00486	sites	裁剪	同上
+e2fsprogs-00490	sites	裁剪	同上
+e2fsprogs-00491	sites	裁剪	同上
+e2fsprogs-00507	sites	裁剪	同上
+e2fsprogs-00508	sites	裁剪	同上
+e2fsprogs-00517	sites	裁剪	同上
+e2fsprogs-00518	sites	裁剪	同上
+e2fsprogs-00521	sites	裁剪	同上
+e2fsprogs-00535	sites	裁剪	同上
+e2fsprogs-00536	sites	裁剪	同上
+e2fsprogs-00543	sites	裁剪	同上
+e2fsprogs-00545	sites	裁剪	同上
+e2fsprogs-00546	sites	裁剪	同上
+e2fsprogs-00548	sites	裁剪	同上
+e2fsprogs-00550	sites	裁剪	同上
+e2fsprogs-00551	sites	裁剪	同上
+e2fsprogs-00553	sites	裁剪	同上
+e2fsprogs-00557	sites	裁剪	同上
+e2fsprogs-00558	sites	裁剪	同上
+e2fsprogs-00565	sites	裁剪	同上
+e2fsprogs-00566	sites	裁剪	同上
+e2fsprogs-00568	sites	裁剪	同上
+e2fsprogs-00569	sites	裁剪	同上
+e2fsprogs-00572	sites	裁剪	同上
+e2fsprogs-00573	sites	裁剪	同上
+e2fsprogs-00577	sites	裁剪	同上
+e2fsprogs-00580	sites	裁剪	同上
+e2fsprogs-00581	sites	裁剪	同上
+e2fsprogs-00583	sites	裁剪	同上
+e2fsprogs-00584	sites	裁剪	同上
+e2fsprogs-00588	sites	裁剪	同上
+e2fsprogs-00589	sites	裁剪	同上
+e2fsprogs-00591	sites	裁剪	同上
+e2fsprogs-00592	sites	裁剪	同上
+e2fsprogs-00594	sites	裁剪	同上
+e2fsprogs-00595	sites	裁剪	同上
+e2fsprogs-00596	sites	裁剪	同上
+e2fsprogs-00598	sites	裁剪	同上
+e2fsprogs-00599	sites	裁剪	同上
+e2fsprogs-00606	sites	裁剪	裁剪：绑定 e2undo 撤销面——本实现以事务记录（不可逆意图记录+回滚原像）承担崩溃安全，不提供工具级 undo
+e2fsprogs-00613	sites	裁剪	
+e2fsprogs-00615	sites	裁剪	裁剪：mke2fs discard 失败提示——本实现不发送 discard/TRIM（同 SA1-006 取舍），建卷前只做残留签名擦除（src/app/execute/filesystem.rs 的 ERASE_* 常量）
+e2fsprogs-00620	sites	裁剪	裁剪：mke2fs CLI 参数与内部校验（扩展选项/bad blocks/revision/特性组合/设备尺寸）——本实现 mkfs 面只有类型（ext2/3/4）与卷标，其余参数不接线；mke2fs 以固定参数调用，内部校验随外部工具自带，非零退出即失败（档案表 mkfs 列 + 命令面冻结）
+e2fsprogs-00621	sites	裁剪	同上
+e2fsprogs-00628	sites	裁剪	同上
+e2fsprogs-00629	sites	裁剪	同上
+e2fsprogs-00633	sites	裁剪	同上
+e2fsprogs-00638	sites	裁剪	同上
+e2fsprogs-00639	sites	裁剪	同上
+e2fsprogs-00645	sites	裁剪	同上
+e2fsprogs-00646	sites	裁剪	同上
+e2fsprogs-00648	sites	裁剪	同上
+e2fsprogs-00660	sites	裁剪	同上

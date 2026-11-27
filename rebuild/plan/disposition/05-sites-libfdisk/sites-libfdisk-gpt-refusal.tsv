@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-libfdisk-00365	sites	待判	
-libfdisk-00370	sites	待判	
-libfdisk-00371	sites	待判	
-libfdisk-00378	sites	待判	
-libfdisk-00379	sites	待判	
-libfdisk-00425	sites	待判	
-libfdisk-00427	sites	待判	
-libfdisk-00431	sites	待判	
-libfdisk-00436	sites	待判	
-libfdisk-00437	sites	待判	
-libfdisk-00446	sites	待判	
-libfdisk-00467	sites	待判	
-libfdisk-00468	sites	待判	
-libfdisk-00469	sites	待判	
-libfdisk-00470	sites	待判	
-libfdisk-00471	sites	待判	
-libfdisk-00474	sites	待判	
-libfdisk-00476	sites	待判	
-libfdisk-00479	sites	待判	
-libfdisk-00480	sites	待判	
-libfdisk-00493	sites	待判	
-libfdisk-00499	sites	待判	
-libfdisk-00526	sites	待判	
-libfdisk-00527	sites	待判	
-libfdisk-00528	sites	待判	
-libfdisk-00529	sites	待判	
-libfdisk-00534	sites	待判	
-libfdisk-00546	sites	待判	
+libfdisk-00365	sites	拒绝	内存分配失败路径：Rust 分配失败即中止不留半状态，语义由事务原像与 recover 承接。依据：SA1-011/012 同型
+libfdisk-00370	sites	认领	脚本导入不提供（SA1-010）；显式起止越界在 add 拒绝 OutsideUsable（crates/core/src/table/edit.rs）。依据：SA1-010、SA1-008
+libfdisk-00371	sites	认领	同上
+libfdisk-00378	sites	认领	目标尺寸读取已有：镜像/块设备快照（src/app/observe/snapshot.rs）。依据：SA1-002 同口径
+libfdisk-00379	sites	认领	同上
+libfdisk-00425	sites	认领	撕裂回退已有：单侧可读按其上界修复并重写另一侧（crates/core/src/table/gpt/parse.rs classify_falls_back_to_backup）。依据：SA3-003
+libfdisk-00427	sites	认领	同上
+libfdisk-00431	sites	认领	备份头位置重算并入同一表写。依据：SA1-018
+libfdisk-00436	sites	认领	属性串解析拒绝已有（GptFlag::parse 白名单）。依据：SA1-015 同口径
+libfdisk-00437	sites	认领	同上
+libfdisk-00446	sites	认领	set name 已实现（PartitionName from_str_lossy；src/app/decide/edit.rs）。依据：SA1-026 同口径
+libfdisk-00467	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00468	sites	认领	同上
+libfdisk-00469	sites	认领	同上
+libfdisk-00470	sites	认领	同上
+libfdisk-00471	sites	认领	同上
+libfdisk-00474	sites	认领	同上
+libfdisk-00476	sites	认领	同上
+libfdisk-00479	sites	差异	D16：verify 汇总报告未复刻：info/inspect 报损伤类别与退出码，不逐项列 N errors 清单。如需人工逐项诊断可在 info 损伤字段附明细列表
+libfdisk-00480	sites	差异	同上（D16）
+libfdisk-00493	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027
+libfdisk-00499	sites	认领	同上
+libfdisk-00526	sites	认领	同上
+libfdisk-00527	sites	认领	同上
+libfdisk-00528	sites	认领	同上
+libfdisk-00529	sites	认领	同上
+libfdisk-00534	sites	拒绝	内存分配失败路径：Rust 分配失败即中止不留半状态，语义由事务原像与 recover 承接。依据：SA1-011/012 同型
+libfdisk-00546	sites	认领	GPT 损伤判定与编辑校验在判定层实现（crates/core/src/table/gpt/parse.rs、crates/core/src/table/edit.rs：OutsideUsable/Overlaps/SlotOccupied/NoGapFits）；呈现为 info/inspect 损伤类别与退出码。依据：SA3-003、SA1-027

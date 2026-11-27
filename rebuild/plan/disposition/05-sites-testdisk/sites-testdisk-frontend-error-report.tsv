@@ -1,35 +1,35 @@
 row_id	ledger	state	note
-testdisk-00024	sites	待判	
-testdisk-00028	sites	待判	
-testdisk-00030	sites	待判	
-testdisk-00031	sites	待判	
-testdisk-00032	sites	待判	
-testdisk-00034	sites	待判	
-testdisk-00035	sites	待判	
-testdisk-00036	sites	待判	
-testdisk-00037	sites	待判	
-testdisk-00038	sites	待判	
-testdisk-00044	sites	待判	
-testdisk-00047	sites	待判	
-testdisk-00048	sites	待判	
-testdisk-00049	sites	待判	
-testdisk-00050	sites	待判	
-testdisk-00052	sites	待判	
-testdisk-00054	sites	待判	
-testdisk-00055	sites	待判	
-testdisk-00059	sites	待判	
-testdisk-00062	sites	待判	
-testdisk-00063	sites	待判	
-testdisk-00064	sites	待判	
-testdisk-00067	sites	待判	
-testdisk-00071	sites	待判	
-testdisk-00073	sites	待判	
-testdisk-00075	sites	待判	
-testdisk-00078	sites	待判	
-testdisk-00082	sites	待判	
-testdisk-00095	sites	待判	
-testdisk-00096	sites	待判	
-testdisk-00097	sites	待判	
-testdisk-00098	sites	待判	
-testdisk-00100	sites	待判	
-testdisk-00101	sites	待判	
+testdisk-00024	sites	裁剪	HUMAX 读错误；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00028	sites	认领	不信任 MBR 几何 ↔ 不读 BIOS 几何、CHS 占位；依据 SA1-027/SA1-028：CHS 一律写占位（PMBR 00 02 00 / FF FF FF，条目 FE FF FF），不实现 BIOS 几何换算；锚 crates/core/src/table/edit.rs、create.rs
+testdisk-00030	sites	认领	表读失败 ↔ 读错误上抛；依据 SA1-011
+testdisk-00031	sites	认领	无 MBR 标记 ↔ 签名缺失即无表；锚 crates/core/src/table/mbr/primary.rs
+testdisk-00032	sites	认领	条目错误信息 ↔ 条目级校验；锚 crates/core/src/table/mbr
+testdisk-00034	sites	认领	扩展分区唯一性 ↔ 唯一主扩展；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00035	sites	裁剪	隐藏分区/过时语义提示；隐藏类型语义不纳入（类型集合固定，锚 crates/core/src/table/edit.rs）
+testdisk-00036	sites	裁剪	bootable 旗标诊断提示；本实现不校验 bootable（写面=表结构；SA1-027）
+testdisk-00037	sites	裁剪	HUMAX 读错误；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00038	sites	认领	逻辑链遍历校验；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00044	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00047	sites	认领	SAME_SPACE 重叠校验 ↔ 重叠拒绝；锚 crates/core/src/table/edit.rs::mbr_add_uses_the_first_empty_slot_and_rejects_overlap
+testdisk-00048	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00049	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00050	sites	认领	写 MBR 读失败 ↔ 错误上抛；依据 SA1-011
+testdisk-00052	sites	认领	扩展起点唯一；锚 crates/core/src/table/mbr/extended.rs
+testdisk-00054	sites	裁剪	MBR 引导代码写路径读错误；引导代码写入未纳入（SA1-027）
+testdisk-00055	sites	认领	BAD_RS LBA 不符 ↔ 起点/长度边界校验拒绝；锚 crates/core/src/table/mbr
+testdisk-00059	sites	认领	读失败错误上抛；依据 SA1-011
+testdisk-00062	sites	裁剪	内容级标记检查；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00063	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00064	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00067	sites	裁剪	类型无测试告警；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00071	sites	裁剪	MAC dpme 类型日志；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00073	sites	裁剪	MAC 内容标记；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00075	sites	裁剪	MAC 写未实现提示；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00078	sites	裁剪	SUN 读错误；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+testdisk-00082	sites	裁剪	SUN 内容标记；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00095	sites	裁剪	分区类型列表交互展示；类型语义=固定集合（crates/core/src/table/edit.rs），交互列表不纳入
+testdisk-00096	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00097	sites	裁剪	改类型交互菜单内部错误分支；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+testdisk-00098	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）
+testdisk-00100	sites	裁剪	backup.log 备份日志特性；不提供菜单式备份文件（类比 SA1-020：记录只服务崩溃回滚）
+testdisk-00101	sites	认领	同上（MBR 结构/重叠/读写错误行认领，见各行锚）

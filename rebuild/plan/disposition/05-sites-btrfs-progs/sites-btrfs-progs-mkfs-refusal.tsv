@@ -1,114 +1,114 @@
 row_id	ledger	state	note
-btrfs-progs-00160	sites	待判	
-btrfs-progs-00162	sites	待判	
-btrfs-progs-00183	sites	待判	
-btrfs-progs-00184	sites	待判	
-btrfs-progs-00185	sites	待判	
-btrfs-progs-00186	sites	待判	
-btrfs-progs-00187	sites	待判	
-btrfs-progs-00188	sites	待判	
-btrfs-progs-00189	sites	待判	
-btrfs-progs-00190	sites	待判	
-btrfs-progs-00191	sites	待判	
-btrfs-progs-00192	sites	待判	
-btrfs-progs-00193	sites	待判	
-btrfs-progs-00194	sites	待判	
-btrfs-progs-00195	sites	待判	
-btrfs-progs-00197	sites	待判	
-btrfs-progs-00199	sites	待判	
-btrfs-progs-00208	sites	待判	
-btrfs-progs-00210	sites	待判	
-btrfs-progs-00229	sites	待判	
-btrfs-progs-00231	sites	待判	
-btrfs-progs-00233	sites	待判	
-btrfs-progs-00235	sites	待判	
-btrfs-progs-00237	sites	待判	
-btrfs-progs-00239	sites	待判	
-btrfs-progs-00240	sites	待判	
-btrfs-progs-00241	sites	待判	
-btrfs-progs-00242	sites	待判	
-btrfs-progs-00244	sites	待判	
-btrfs-progs-00246	sites	待判	
-btrfs-progs-00248	sites	待判	
-btrfs-progs-00250	sites	待判	
-btrfs-progs-00252	sites	待判	
-btrfs-progs-00257	sites	待判	
-btrfs-progs-00259	sites	待判	
-btrfs-progs-00261	sites	待判	
-btrfs-progs-00263	sites	待判	
-btrfs-progs-00265	sites	待判	
-btrfs-progs-00267	sites	待判	
-btrfs-progs-00270	sites	待判	
-btrfs-progs-00272	sites	待判	
-btrfs-progs-00274	sites	待判	
-btrfs-progs-00276	sites	待判	
-btrfs-progs-00278	sites	待判	
-btrfs-progs-00280	sites	待判	
-btrfs-progs-00282	sites	待判	
-btrfs-progs-00285	sites	待判	
-btrfs-progs-00287	sites	待判	
-btrfs-progs-00289	sites	待判	
-btrfs-progs-00291	sites	待判	
-btrfs-progs-00293	sites	待判	
-btrfs-progs-00294	sites	待判	
-btrfs-progs-00296	sites	待判	
-btrfs-progs-00297	sites	待判	
-btrfs-progs-00299	sites	待判	
-btrfs-progs-00301	sites	待判	
-btrfs-progs-00302	sites	待判	
-btrfs-progs-00305	sites	待判	
-btrfs-progs-00308	sites	待判	
-btrfs-progs-00310	sites	待判	
-btrfs-progs-00312	sites	待判	
-btrfs-progs-00314	sites	待判	
-btrfs-progs-00316	sites	待判	
-btrfs-progs-00318	sites	待判	
-btrfs-progs-00320	sites	待判	
-btrfs-progs-00322	sites	待判	
-btrfs-progs-00325	sites	待判	
-btrfs-progs-00327	sites	待判	
-btrfs-progs-00329	sites	待判	
-btrfs-progs-00333	sites	待判	
-btrfs-progs-00334	sites	待判	
-btrfs-progs-00336	sites	待判	
-btrfs-progs-00338	sites	待判	
-btrfs-progs-00342	sites	待判	
-btrfs-progs-00344	sites	待判	
-btrfs-progs-00347	sites	待判	
-btrfs-progs-00349	sites	待判	
-btrfs-progs-00351	sites	待判	
-btrfs-progs-00353	sites	待判	
-btrfs-progs-00355	sites	待判	
-btrfs-progs-00357	sites	待判	
-btrfs-progs-00358	sites	待判	
-btrfs-progs-00359	sites	待判	
-btrfs-progs-00360	sites	待判	
-btrfs-progs-00362	sites	待判	
-btrfs-progs-00364	sites	待判	
-btrfs-progs-00365	sites	待判	
-btrfs-progs-00366	sites	待判	
-btrfs-progs-00367	sites	待判	
-btrfs-progs-00368	sites	待判	
-btrfs-progs-00369	sites	待判	
-btrfs-progs-00370	sites	待判	
-btrfs-progs-00372	sites	待判	
-btrfs-progs-00374	sites	待判	
-btrfs-progs-00376	sites	待判	
-btrfs-progs-00378	sites	待判	
-btrfs-progs-00380	sites	待判	
-btrfs-progs-00382	sites	待判	
-btrfs-progs-00384	sites	待判	
-btrfs-progs-00386	sites	待判	
-btrfs-progs-00388	sites	待判	
-btrfs-progs-00391	sites	待判	
-btrfs-progs-00394	sites	待判	
-btrfs-progs-00396	sites	待判	
-btrfs-progs-00400	sites	待判	
-btrfs-progs-00403	sites	待判	
-btrfs-progs-00406	sites	待判	
-btrfs-progs-00408	sites	待判	
-btrfs-progs-00413	sites	待判	
-btrfs-progs-00414	sites	待判	
-btrfs-progs-00415	sites	待判	
-btrfs-progs-00416	sites	待判	
-btrfs-progs-00417	sites	待判	
+btrfs-progs-00160	sites	裁剪	裁剪：mkfs.btrfs 自身 CLI 解析/建卷路径校验/覆写检查（BOX_MAIN getopt、-r rootdir 填充、check_overwrite、test_dev_for_mkfs）——随外部工具自带：固定 `mkfs.btrfs -f [-L label]` 调用（src/app/execute/filesystem.rs::mkfs_invocation），usage/选项面不可达；覆写与占用闸由本实现决策层承担（SA1-005）
+btrfs-progs-00162	sites	裁剪	同上
+btrfs-progs-00183	sites	裁剪	同上
+btrfs-progs-00184	sites	裁剪	同上
+btrfs-progs-00185	sites	裁剪	同上
+btrfs-progs-00186	sites	裁剪	同上
+btrfs-progs-00187	sites	裁剪	同上
+btrfs-progs-00188	sites	裁剪	同上
+btrfs-progs-00189	sites	裁剪	同上
+btrfs-progs-00190	sites	裁剪	同上
+btrfs-progs-00191	sites	裁剪	同上
+btrfs-progs-00192	sites	裁剪	同上
+btrfs-progs-00193	sites	裁剪	同上
+btrfs-progs-00194	sites	裁剪	同上
+btrfs-progs-00195	sites	裁剪	同上
+btrfs-progs-00197	sites	裁剪	同上
+btrfs-progs-00199	sites	裁剪	同上
+btrfs-progs-00208	sites	裁剪	同上
+btrfs-progs-00210	sites	裁剪	同上
+btrfs-progs-00229	sites	裁剪	同上
+btrfs-progs-00231	sites	裁剪	同上
+btrfs-progs-00233	sites	裁剪	同上
+btrfs-progs-00235	sites	裁剪	同上
+btrfs-progs-00237	sites	裁剪	同上
+btrfs-progs-00239	sites	裁剪	同上
+btrfs-progs-00240	sites	裁剪	同上
+btrfs-progs-00241	sites	裁剪	同上
+btrfs-progs-00242	sites	裁剪	同上
+btrfs-progs-00244	sites	裁剪	同上
+btrfs-progs-00246	sites	裁剪	同上
+btrfs-progs-00248	sites	裁剪	同上
+btrfs-progs-00250	sites	裁剪	同上
+btrfs-progs-00252	sites	裁剪	同上
+btrfs-progs-00257	sites	裁剪	同上
+btrfs-progs-00259	sites	裁剪	同上
+btrfs-progs-00261	sites	裁剪	同上
+btrfs-progs-00263	sites	裁剪	同上
+btrfs-progs-00265	sites	裁剪	同上
+btrfs-progs-00267	sites	裁剪	同上
+btrfs-progs-00270	sites	裁剪	同上
+btrfs-progs-00272	sites	裁剪	同上
+btrfs-progs-00274	sites	裁剪	同上
+btrfs-progs-00276	sites	裁剪	同上
+btrfs-progs-00278	sites	裁剪	同上
+btrfs-progs-00280	sites	裁剪	同上
+btrfs-progs-00282	sites	裁剪	同上
+btrfs-progs-00285	sites	裁剪	同上
+btrfs-progs-00287	sites	裁剪	同上
+btrfs-progs-00289	sites	裁剪	同上
+btrfs-progs-00291	sites	裁剪	同上
+btrfs-progs-00293	sites	裁剪	同上
+btrfs-progs-00294	sites	裁剪	同上
+btrfs-progs-00296	sites	裁剪	同上
+btrfs-progs-00297	sites	裁剪	同上
+btrfs-progs-00299	sites	裁剪	同上
+btrfs-progs-00301	sites	裁剪	同上
+btrfs-progs-00302	sites	裁剪	同上
+btrfs-progs-00305	sites	裁剪	同上
+btrfs-progs-00308	sites	裁剪	同上
+btrfs-progs-00310	sites	裁剪	同上
+btrfs-progs-00312	sites	裁剪	同上
+btrfs-progs-00314	sites	裁剪	同上
+btrfs-progs-00316	sites	裁剪	同上
+btrfs-progs-00318	sites	裁剪	同上
+btrfs-progs-00320	sites	裁剪	同上
+btrfs-progs-00322	sites	裁剪	同上
+btrfs-progs-00325	sites	裁剪	同上
+btrfs-progs-00327	sites	裁剪	同上
+btrfs-progs-00329	sites	裁剪	同上
+btrfs-progs-00333	sites	裁剪	同上
+btrfs-progs-00334	sites	裁剪	同上
+btrfs-progs-00336	sites	裁剪	同上
+btrfs-progs-00338	sites	裁剪	同上
+btrfs-progs-00342	sites	裁剪	同上
+btrfs-progs-00344	sites	裁剪	同上
+btrfs-progs-00347	sites	裁剪	同上
+btrfs-progs-00349	sites	裁剪	同上
+btrfs-progs-00351	sites	裁剪	同上
+btrfs-progs-00353	sites	裁剪	同上
+btrfs-progs-00355	sites	裁剪	同上
+btrfs-progs-00357	sites	裁剪	同上
+btrfs-progs-00358	sites	裁剪	同上
+btrfs-progs-00359	sites	裁剪	同上
+btrfs-progs-00360	sites	裁剪	同上
+btrfs-progs-00362	sites	裁剪	同上
+btrfs-progs-00364	sites	裁剪	同上
+btrfs-progs-00365	sites	裁剪	同上
+btrfs-progs-00366	sites	裁剪	同上
+btrfs-progs-00367	sites	裁剪	同上
+btrfs-progs-00368	sites	裁剪	同上
+btrfs-progs-00369	sites	裁剪	同上
+btrfs-progs-00370	sites	裁剪	同上
+btrfs-progs-00372	sites	裁剪	同上
+btrfs-progs-00374	sites	裁剪	同上
+btrfs-progs-00376	sites	裁剪	同上
+btrfs-progs-00378	sites	裁剪	同上
+btrfs-progs-00380	sites	裁剪	同上
+btrfs-progs-00382	sites	裁剪	同上
+btrfs-progs-00384	sites	裁剪	同上
+btrfs-progs-00386	sites	裁剪	同上
+btrfs-progs-00388	sites	裁剪	同上
+btrfs-progs-00391	sites	裁剪	同上
+btrfs-progs-00394	sites	裁剪	同上
+btrfs-progs-00396	sites	裁剪	同上
+btrfs-progs-00400	sites	裁剪	同上
+btrfs-progs-00403	sites	裁剪	同上
+btrfs-progs-00406	sites	裁剪	同上
+btrfs-progs-00408	sites	裁剪	同上
+btrfs-progs-00413	sites	裁剪	同上
+btrfs-progs-00414	sites	裁剪	同上
+btrfs-progs-00415	sites	裁剪	同上
+btrfs-progs-00416	sites	裁剪	同上
+btrfs-progs-00417	sites	裁剪	同上

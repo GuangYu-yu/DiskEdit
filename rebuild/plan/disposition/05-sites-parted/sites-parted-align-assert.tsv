@@ -1,27 +1,27 @@
 row_id	ledger	state	note
-parted-00221	sites	待判	
-parted-00222	sites	待判	
-parted-00223	sites	待判	
-parted-00224	sites	待判	
-parted-00225	sites	待判	
-parted-00228	sites	待判	
-parted-00229	sites	待判	
-parted-00230	sites	待判	
-parted-00231	sites	待判	
-parted-00232	sites	待判	
-parted-00233	sites	待判	
-parted-00234	sites	待判	
-parted-00235	sites	待判	
-parted-00236	sites	待判	
-parted-00237	sites	待判	
-parted-00238	sites	待判	
-parted-00239	sites	待判	
-parted-00240	sites	待判	
-parted-00241	sites	待判	
-parted-00276	sites	待判	
-parted-00277	sites	待判	
-parted-00278	sites	待判	
-parted-00281	sites	待判	
-parted-00282	sites	待判	
-parted-00283	sites	待判	
-parted-00284	sites	待判	
+parted-00221	sites	拒绝	拒绝|架构差异-多虑：约束/几何内部不变量断言（NULL、min<max、size>0），Rust 类型与 checked 运算承担；防御面计数 SA1-021；对齐行为本体见 SA1-008/SA1-014（crates/core/src/geometry）
+parted-00222	sites	拒绝	同上
+parted-00223	sites	拒绝	同上
+parted-00224	sites	拒绝	同上
+parted-00225	sites	拒绝	同上
+parted-00228	sites	拒绝	同上
+parted-00229	sites	拒绝	同上
+parted-00230	sites	拒绝	同上
+parted-00231	sites	拒绝	同上
+parted-00232	sites	拒绝	同上
+parted-00233	sites	拒绝	同上
+parted-00234	sites	拒绝	同上
+parted-00235	sites	拒绝	同上
+parted-00236	sites	拒绝	同上
+parted-00237	sites	拒绝	同上
+parted-00238	sites	拒绝	同上
+parted-00239	sites	拒绝	同上
+parted-00240	sites	拒绝	同上
+parted-00241	sites	拒绝	同上
+parted-00276	sites	拒绝	同上
+parted-00277	sites	拒绝	同上
+parted-00278	sites	拒绝	同上
+parted-00281	sites	拒绝	同上
+parted-00282	sites	拒绝	同上
+parted-00283	sites	拒绝	同上
+parted-00284	sites	拒绝	同上

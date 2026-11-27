@@ -1,40 +1,40 @@
 row_id	ledger	state	note
-e2fsprogs-imp-00002	implicit	待判	
-e2fsprogs-imp-00003	implicit	待判	
-e2fsprogs-imp-00004	implicit	待判	
-e2fsprogs-imp-00007	implicit	待判	
-e2fsprogs-imp-00008	implicit	待判	
-e2fsprogs-imp-00009	implicit	待判	
-e2fsprogs-imp-00010	implicit	待判	
-e2fsprogs-imp-00011	implicit	待判	
-e2fsprogs-imp-00012	implicit	待判	
-e2fsprogs-imp-00013	implicit	待判	
-e2fsprogs-imp-00014	implicit	待判	
-e2fsprogs-imp-00015	implicit	待判	
-e2fsprogs-imp-00016	implicit	待判	
-e2fsprogs-imp-00017	implicit	待判	
-e2fsprogs-imp-00018	implicit	待判	
-e2fsprogs-imp-00019	implicit	待判	
-e2fsprogs-imp-00020	implicit	待判	
-e2fsprogs-imp-00021	implicit	待判	
-e2fsprogs-imp-00022	implicit	待判	
-e2fsprogs-imp-00023	implicit	待判	
-e2fsprogs-imp-00024	implicit	待判	
-e2fsprogs-imp-00025	implicit	待判	
-e2fsprogs-imp-00026	implicit	待判	
-e2fsprogs-imp-00027	implicit	待判	
-e2fsprogs-imp-00028	implicit	待判	
-e2fsprogs-imp-00030	implicit	待判	
-e2fsprogs-imp-00031	implicit	待判	
-e2fsprogs-imp-00032	implicit	待判	
-e2fsprogs-imp-00033	implicit	待判	
-e2fsprogs-imp-00034	implicit	待判	
-e2fsprogs-imp-00035	implicit	待判	
-e2fsprogs-imp-00298	implicit	待判	
-e2fsprogs-imp-00304	implicit	待判	
-e2fsprogs-imp-00305	implicit	待判	
-e2fsprogs-imp-00306	implicit	待判	
-e2fsprogs-imp-00307	implicit	待判	
-e2fsprogs-imp-00308	implicit	待判	
-e2fsprogs-imp-00309	implicit	待判	
-e2fsprogs-imp-00310	implicit	待判	
+e2fsprogs-imp-00002	implicit	裁剪	tune2fs 内核支持告警分支；Tune2fs 由档案表登记（crates/core/src/fs/program.rs），内部告警不复制
+e2fsprogs-imp-00003	implicit	裁剪	tune2fs force_fsck 特性面；同上
+e2fsprogs-imp-00004	implicit	认领	mke2fs -F 覆写已有数据/挂载检查 ↔ 覆写闸+占用闸（写任何字节前拒绝）；依据 SA1-005/SA1-004；锚 src/app/decide/new.rs::TableOccupied
+e2fsprogs-imp-00007	implicit	认领	mke2fs -F 覆写已有数据/挂载检查 ↔ 覆写闸+占用闸（写任何字节前拒绝）；依据 SA1-005/SA1-004；锚 src/app/decide/new.rs::TableOccupied
+e2fsprogs-imp-00008	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00009	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00010	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00011	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00012	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00013	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00014	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00015	implicit	裁剪	mke2fs undo/journal 特性面；档案表调用面不含这些分支
+e2fsprogs-imp-00016	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00017	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00018	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00019	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00020	implicit	认领	journal 设备占用检查 ↔ 占用闸；依据 SA1-004
+e2fsprogs-imp-00021	implicit	裁剪	dumpe2fs force；只读探针恒只读（crates/core/src/fs/program.rs::Access::ReadOnly），旁路不提供
+e2fsprogs-imp-00022	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00023	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00024	implicit	裁剪	e2fsck 'Force rewrite' 交互应答；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00025	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00026	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00027	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00028	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00030	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00031	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00032	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00033	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00034	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00035	implicit	认领	同上（mke2fs force 装配行）
+e2fsprogs-imp-00298	implicit	裁剪	PR_FORCE_NO（-n 预答）分支；-y/-n 语义类由 -fp 预答+退出码承担；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00304	implicit	认领	e2fsck -f 强制检查 ↔ 档案表固定 -fp（含 -f）；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00305	implicit	裁剪	-B 备选块大小；工具参数面不复制
+e2fsprogs-imp-00306	implicit	认领	挂载/busy 检查 ↔ 占用闸拒绝；依据 SA1-004；锚 src/app/decide/refusal.rs::Occupied
+e2fsprogs-imp-00307	implicit	裁剪	'check forced' 提示面；提示由本实现报告层承担
+e2fsprogs-imp-00308	implicit	认领	interactive 判定 ↔ 本实现恒非交互 -fp；依据 SA2-001：档案表固定 e2fsck -fp 预答（src/app/execute/filesystem.rs:966），退出码 1/2=已修复、4=失败，效果由尺寸回读证实（SA2-003）
+e2fsprogs-imp-00309	implicit	裁剪	交互修复需终端；本实现非交互路径无终端要求（-fp），交互修复面裁剪
+e2fsprogs-imp-00310	implicit	认领	同上（mke2fs force 装配行）

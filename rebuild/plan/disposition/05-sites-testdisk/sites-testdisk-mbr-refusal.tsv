@@ -1,3 +1,3 @@
 row_id	ledger	state	note
-testdisk-00089	sites	待判	
-testdisk-00092	sites	待判	
+testdisk-00089	sites	裁剪	MBR 引导代码写失败返回码；引导代码写入未纳入（SA1-003/SA1-027）；写表失败语义由 SA1-011 承担
+testdisk-00092	sites	裁剪	同上

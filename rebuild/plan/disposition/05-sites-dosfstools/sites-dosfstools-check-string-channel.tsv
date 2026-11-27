@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-dosfstools-00053	sites	待判	
-dosfstools-00056	sites	待判	
-dosfstools-00057	sites	待判	
-dosfstools-00058	sites	待判	
-dosfstools-00059	sites	待判	
-dosfstools-00064	sites	待判	
-dosfstools-00065	sites	待判	
-dosfstools-00069	sites	待判	
-dosfstools-00070	sites	待判	
-dosfstools-00071	sites	待判	
-dosfstools-00074	sites	待判	
-dosfstools-00075	sites	待判	
-dosfstools-00076	sites	待判	
+dosfstools-00053	sites	裁剪	交互修复/清理提示不暴露：check 固定只读 -n（src/platform/linux/tools.rs check_arguments），修复路径不触发。依据：SA2-012、特性依据=交互修复面
+dosfstools-00056	sites	裁剪	同上
+dosfstools-00057	sites	裁剪	同上
+dosfstools-00058	sites	裁剪	同上
+dosfstools-00059	sites	裁剪	同上
+dosfstools-00064	sites	裁剪	同上
+dosfstools-00065	sites	裁剪	同上
+dosfstools-00069	sites	裁剪	同上
+dosfstools-00070	sites	裁剪	同上
+dosfstools-00071	sites	裁剪	同上
+dosfstools-00074	sites	认领	工具运行输出/警告经 diagnose/execute 透传并按退出码分类（src/app/execute/diagnose.rs）。依据：SA2-012
+dosfstools-00075	sites	裁剪	交互修复/清理提示不暴露：check 固定只读 -n（src/platform/linux/tools.rs check_arguments），修复路径不触发。依据：SA2-012、特性依据=交互修复面
+dosfstools-00076	sites	裁剪	同上

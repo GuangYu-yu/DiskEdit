@@ -1,7 +1,7 @@
 row_id	ledger	state	note
-f2fs-tools-00003	sites	待判	
-f2fs-tools-00004	sites	待判	
-f2fs-tools-00005	sites	待判	
-f2fs-tools-00006	sites	待判	
-f2fs-tools-00007	sites	待判	
-f2fs-tools-00008	sites	待判	
+f2fs-tools-00003	sites	裁剪	依赖工具子命令/usage 面（dump/defrag/sload/label 等）不暴露：固定参数调用。依据：SA2-011、特性依据=工具子命令面（mkfs.f2fs 选项面不暴露）
+f2fs-tools-00004	sites	裁剪	同上
+f2fs-tools-00005	sites	裁剪	同上
+f2fs-tools-00006	sites	裁剪	同上
+f2fs-tools-00007	sites	裁剪	同上
+f2fs-tools-00008	sites	裁剪	同上

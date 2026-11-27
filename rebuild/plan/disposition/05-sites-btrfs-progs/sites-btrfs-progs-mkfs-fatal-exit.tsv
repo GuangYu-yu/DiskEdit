@@ -1,15 +1,15 @@
 row_id	ledger	state	note
-btrfs-progs-00209	sites	待判	
-btrfs-progs-00243	sites	待判	
-btrfs-progs-00247	sites	待判	
-btrfs-progs-00249	sites	待判	
-btrfs-progs-00254	sites	待判	
-btrfs-progs-00256	sites	待判	
-btrfs-progs-00271	sites	待判	
-btrfs-progs-00275	sites	待判	
-btrfs-progs-00277	sites	待判	
-btrfs-progs-00279	sites	待判	
-btrfs-progs-00281	sites	待判	
-btrfs-progs-00283	sites	待判	
-btrfs-progs-00356	sites	待判	
-btrfs-progs-00407	sites	待判	
+btrfs-progs-00209	sites	裁剪	裁剪：mkfs.btrfs usage/OOM/内部致命出口——固定 `mkfs.btrfs -f [-L]` 调用下 usage 出口不可达，非零退出码统一按 mkfs 失败消费（src/app/execute/filesystem.rs::mkfs_invocation）
+btrfs-progs-00243	sites	裁剪	同上
+btrfs-progs-00247	sites	裁剪	同上
+btrfs-progs-00249	sites	裁剪	同上
+btrfs-progs-00254	sites	裁剪	同上
+btrfs-progs-00256	sites	裁剪	同上
+btrfs-progs-00271	sites	裁剪	同上
+btrfs-progs-00275	sites	裁剪	同上
+btrfs-progs-00277	sites	裁剪	同上
+btrfs-progs-00279	sites	裁剪	同上
+btrfs-progs-00281	sites	裁剪	同上
+btrfs-progs-00283	sites	裁剪	同上
+btrfs-progs-00356	sites	裁剪	同上
+btrfs-progs-00407	sites	裁剪	同上

@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-dosfstools-00115	sites	待判	
-dosfstools-00126	sites	待判	
-dosfstools-00130	sites	待判	
-dosfstools-00135	sites	待判	
-dosfstools-00141	sites	待判	
+dosfstools-00115	sites	认领	vfat 卷 ID 设置不暴露（attrs.rs uuid_support 对 vfat=No），hex 解析等 volid 面随 fatlabel CLI 裁剪；标签值错误经工具退出码映射。依据：SA2-011、SA2-012
+dosfstools-00126	sites	认领	同上
+dosfstools-00130	sites	认领	同上
+dosfstools-00135	sites	裁剪	码页选择面不暴露：CP850 转换为工具内部细节，固定默认。依据：SA2-011、特性依据=码页面
+dosfstools-00141	sites	拒绝	getopt 内部分支：上游实现细节。依据：SA2-012（架构差异-多虑）

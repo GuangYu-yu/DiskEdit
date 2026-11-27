@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-btrfs-progs-00154	sites	待判	
+btrfs-progs-00154	sites	裁剪	裁剪：device stats 表格打印——绑定未消费子命令（device 面不在档案表）

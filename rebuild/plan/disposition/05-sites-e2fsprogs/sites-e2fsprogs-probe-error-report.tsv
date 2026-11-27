@@ -1,19 +1,19 @@
 row_id	ledger	state	note
-e2fsprogs-00669	sites	待判	
-e2fsprogs-00671	sites	待判	
-e2fsprogs-00672	sites	待判	
-e2fsprogs-00673	sites	待判	
-e2fsprogs-00677	sites	待判	
-e2fsprogs-00679	sites	待判	
-e2fsprogs-00681	sites	待判	
-e2fsprogs-00686	sites	待判	
-e2fsprogs-00688	sites	待判	
-e2fsprogs-00691	sites	待判	
-e2fsprogs-00694	sites	待判	
-e2fsprogs-00695	sites	待判	
-e2fsprogs-00701	sites	待判	
-e2fsprogs-00704	sites	待判	
-e2fsprogs-00705	sites	待判	
-e2fsprogs-00708	sites	待判	
-e2fsprogs-00710	sites	待判	
-e2fsprogs-00713	sites	待判	
+e2fsprogs-00669	sites	裁剪	裁剪：dumpe2fs 全量输出与内部消息——本实现只消费 dumpe2fs -h 的 Block count/Block size 稳定字段（SA2-003/SA2-011，src/app/execute/filesystem.rs::ext_geometry），其余输出不接线；探针非零按已写待恢复处理（SA2-002）
+e2fsprogs-00671	sites	裁剪	同上
+e2fsprogs-00672	sites	裁剪	同上
+e2fsprogs-00673	sites	裁剪	同上
+e2fsprogs-00677	sites	裁剪	同上
+e2fsprogs-00679	sites	裁剪	同上
+e2fsprogs-00681	sites	裁剪	同上
+e2fsprogs-00686	sites	裁剪	同上
+e2fsprogs-00688	sites	裁剪	同上
+e2fsprogs-00691	sites	裁剪	同上
+e2fsprogs-00694	sites	裁剪	同上
+e2fsprogs-00695	sites	裁剪	同上
+e2fsprogs-00701	sites	裁剪	同上
+e2fsprogs-00704	sites	裁剪	同上
+e2fsprogs-00705	sites	裁剪	同上
+e2fsprogs-00708	sites	裁剪	同上
+e2fsprogs-00710	sites	裁剪	同上
+e2fsprogs-00713	sites	裁剪	同上

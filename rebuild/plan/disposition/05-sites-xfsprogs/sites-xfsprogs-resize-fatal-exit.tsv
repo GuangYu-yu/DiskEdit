@@ -1,14 +1,14 @@
 row_id	ledger	state	note
-xfsprogs-00001	sites	待判	
-xfsprogs-00003	sites	待判	
-xfsprogs-00004	sites	待判	
-xfsprogs-00005	sites	待判	
-xfsprogs-00006	sites	待判	
-xfsprogs-00011	sites	待判	
-xfsprogs-00014	sites	待判	
-xfsprogs-00015	sites	待判	
-xfsprogs-00017	sites	待判	
-xfsprogs-00019	sites	待判	
-xfsprogs-00022	sites	待判	
-xfsprogs-00043	sites	待判	
-xfsprogs-00045	sites	待判	
+xfsprogs-00001	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00003	sites	裁剪	同上
+xfsprogs-00004	sites	裁剪	同上
+xfsprogs-00005	sites	裁剪	同上
+xfsprogs-00006	sites	裁剪	同上
+xfsprogs-00011	sites	认领	认领：目标校验失败的退出码产出端——非零退出按失败/已写待恢复消费（SA2-004；src/app/execute/filesystem.rs::run_online_native）；建议拆分:sites-xfsprogs-resize-growfs-core
+xfsprogs-00014	sites	认领	认领：几何读取失败的退出码产出端——回读/读取失败不承认完成（SA2-005；src/app/execute/filesystem.rs::verify_xfs_size）
+xfsprogs-00015	sites	裁剪	裁剪：xfs_growfs 的 -D/-i/-l/-r/-m 选项段（外部日志、realtime 设备、inode pct、实验收缩、按段尺寸上限与进度打印）——本实现只发无参 grow（`xfs_growfs <mount>`）与 `-n` 回读，其余段不在消费面（src/app/execute/filesystem.rs::online_invocation/verify_online_size）
+xfsprogs-00017	sites	裁剪	同上
+xfsprogs-00019	sites	裁剪	同上
+xfsprogs-00022	sites	裁剪	同上
+xfsprogs-00043	sites	认领	认领：新旧几何 datablocks 比对——与 `-n` 回读证实同型（SA2-005；src/app/execute/filesystem.rs::verify_xfs_size）
+xfsprogs-00045	sites	认领	认领：退出码产出端 exit(error)——run_online_native 消费 0/非零/信号三态（src/app/execute/filesystem.rs::run_online_native、tests/online.rs::online_grow_succeeds_only_after_the_read_back_reaches_the_partition）

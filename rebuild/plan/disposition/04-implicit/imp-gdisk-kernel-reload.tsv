@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-gdisk-imp-00003	implicit	待判	
+gdisk-imp-00003	implicit	认领	依据 SA1-013：表写后经 RefreshKernelView 同步内核视图，失败落 5；锚 src/app/decide/step.rs::RefreshKernelView、src/platform/linux/mod.rs::refresh_partitions

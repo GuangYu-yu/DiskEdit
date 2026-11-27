@@ -1,24 +1,24 @@
 row_id	ledger	state	note
-gdisk-00030	sites	待判	
-gdisk-00032	sites	待判	
-gdisk-00034	sites	待判	
-gdisk-00035	sites	待判	
-gdisk-00037	sites	待判	
-gdisk-00038	sites	待判	
-gdisk-00039	sites	待判	
-gdisk-00040	sites	待判	
-gdisk-00041	sites	待判	
-gdisk-00042	sites	待判	
-gdisk-00043	sites	待判	
-gdisk-00044	sites	待判	
-gdisk-00045	sites	待判	
-gdisk-00046	sites	待判	
-gdisk-00047	sites	待判	
-gdisk-00048	sites	待判	
-gdisk-00050	sites	待判	
-gdisk-00053	sites	待判	
-gdisk-00054	sites	待判	
-gdisk-00056	sites	待判	
-gdisk-00058	sites	待判	
-gdisk-00073	sites	待判	
-gdisk-00074	sites	待判	
+gdisk-00030	sites	认领	cgdisk 用法错误 exit ↔ 用法错误退 2（USAGE 单源）；锚 src/app/report/exit.rs::USAGE、refusal-map R0046
+gdisk-00032	sites	认领	cgdisk 用法错误 exit ↔ 用法错误退 2（USAGE 单源）；锚 src/app/report/exit.rs::USAGE、refusal-map R0046
+gdisk-00034	sites	裁剪	cgdisk 非 GPT/损坏盘转换告警（交互转换提示）；转换语义=new 显式建表（SA1-005），交互提示面不纳入
+gdisk-00035	sites	认领	装载失败中止 ↔ 读失败拒绝不进入写路径；依据 SA1-024
+gdisk-00037	sites	认领	OpenForRead 失败分类提示（EACCES/ENOENT/目录/字符设备/FIFO/socket）↔ 打开失败按 PlatformError 上抛，同类拒绝；提示由报告层文本承担；锚 src/platform/linux/mod.rs
+gdisk-00038	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00039	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00040	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00041	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00042	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00043	sites	拒绝	理由：共享锁写打开（O_SHLOCK）不采纳——写必须独占，共享锁写会绕过占用闸；依据 SA1-004
+gdisk-00044	sites	认领	close 失败告警 ↔ sync/close 失败上抛；依据 SA1-011
+gdisk-00045	sites	认领	扇区大小探测失败回退 512 ↔ BLKSSZGET 探测；探测失败按 Unknown 拒绝不裸猜（I5）；锚 src/platform/linux/mod.rs::block_sector_size
+gdisk-00046	sites	裁剪	多平台探测警告；本实现仅 Linux 后端
+gdisk-00047	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00048	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00050	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00053	sites	认领	文件尺寸非 512 整除告警 ↔ 镜像尺寸按扇区整除校验（判定层边界校验）
+gdisk-00054	sites	裁剪	Windows 后端打开/读/写分配；Windows 后端未纳入（Linux-only）
+gdisk-00056	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00058	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）
+gdisk-00073	sites	认领	gdisk 用法错误 ↔ 用法退 2；锚 src/app/report/exit.rs::USAGE
+gdisk-00074	sites	认领	同上（打开失败分类/用法出口认领；共享锁写拒绝；平台/菜单行裁剪见各行）

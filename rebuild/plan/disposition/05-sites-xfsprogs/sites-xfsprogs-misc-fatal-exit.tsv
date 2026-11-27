@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-xfsprogs-00445	sites	待判	
-xfsprogs-00447	sites	待判	
-xfsprogs-00448	sites	待判	
-xfsprogs-00449	sites	待判	
-xfsprogs-00451	sites	待判	
-xfsprogs-00453	sites	待判	
-xfsprogs-00456	sites	待判	
-xfsprogs-00458	sites	待判	
+xfsprogs-00445	sites	裁剪	裁剪：xfs_db usage/致命出口——db 工具不在消费面（本实现不消费 xfs_db）
+xfsprogs-00447	sites	裁剪	同上
+xfsprogs-00448	sites	裁剪	同上
+xfsprogs-00449	sites	裁剪	同上
+xfsprogs-00451	sites	裁剪	同上
+xfsprogs-00453	sites	裁剪	同上
+xfsprogs-00456	sites	裁剪	同上
+xfsprogs-00458	sites	裁剪	同上

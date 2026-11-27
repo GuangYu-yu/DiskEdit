@@ -1,63 +1,63 @@
 row_id	ledger	state	note
-f2fs-tools-00067	sites	待判	
-f2fs-tools-00069	sites	待判	
-f2fs-tools-00090	sites	待判	
-f2fs-tools-00102	sites	待判	
-f2fs-tools-00114	sites	待判	
-f2fs-tools-00116	sites	待判	
-f2fs-tools-00117	sites	待判	
-f2fs-tools-00120	sites	待判	
-f2fs-tools-00121	sites	待判	
-f2fs-tools-00123	sites	待判	
-f2fs-tools-00124	sites	待判	
-f2fs-tools-00125	sites	待判	
-f2fs-tools-00126	sites	待判	
-f2fs-tools-00127	sites	待判	
-f2fs-tools-00129	sites	待判	
-f2fs-tools-00130	sites	待判	
-f2fs-tools-00131	sites	待判	
-f2fs-tools-00132	sites	待判	
-f2fs-tools-00133	sites	待判	
-f2fs-tools-00134	sites	待判	
-f2fs-tools-00135	sites	待判	
-f2fs-tools-00138	sites	待判	
-f2fs-tools-00140	sites	待判	
-f2fs-tools-00179	sites	待判	
-f2fs-tools-00180	sites	待判	
-f2fs-tools-00194	sites	待判	
-f2fs-tools-00211	sites	待判	
-f2fs-tools-00212	sites	待判	
-f2fs-tools-00213	sites	待判	
-f2fs-tools-00214	sites	待判	
-f2fs-tools-00215	sites	待判	
-f2fs-tools-00216	sites	待判	
-f2fs-tools-00217	sites	待判	
-f2fs-tools-00218	sites	待判	
-f2fs-tools-00219	sites	待判	
-f2fs-tools-00224	sites	待判	
-f2fs-tools-00225	sites	待判	
-f2fs-tools-00226	sites	待判	
-f2fs-tools-00227	sites	待判	
-f2fs-tools-00229	sites	待判	
-f2fs-tools-00237	sites	待判	
-f2fs-tools-00238	sites	待判	
-f2fs-tools-00245	sites	待判	
-f2fs-tools-00246	sites	待判	
-f2fs-tools-00247	sites	待判	
-f2fs-tools-00248	sites	待判	
-f2fs-tools-00307	sites	待判	
-f2fs-tools-00309	sites	待判	
-f2fs-tools-00310	sites	待判	
-f2fs-tools-00311	sites	待判	
-f2fs-tools-00315	sites	待判	
-f2fs-tools-00316	sites	待判	
-f2fs-tools-00322	sites	待判	
-f2fs-tools-00323	sites	待判	
-f2fs-tools-00324	sites	待判	
-f2fs-tools-00325	sites	待判	
-f2fs-tools-00326	sites	待判	
-f2fs-tools-00327	sites	待判	
-f2fs-tools-00328	sites	待判	
-f2fs-tools-00416	sites	待判	
-f2fs-tools-00419	sites	待判	
-f2fs-tools-00420	sites	待判	
+f2fs-tools-00067	sites	拒绝	C 失败 goto 清理由 Rust Result 传播取代，依赖工具内部经固定参数调用整体生效。依据：SA2-010、SA2-012（架构差异）
+f2fs-tools-00069	sites	拒绝	同上
+f2fs-tools-00090	sites	拒绝	同上
+f2fs-tools-00102	sites	拒绝	同上
+f2fs-tools-00114	sites	拒绝	同上
+f2fs-tools-00116	sites	拒绝	同上
+f2fs-tools-00117	sites	拒绝	同上
+f2fs-tools-00120	sites	拒绝	同上
+f2fs-tools-00121	sites	拒绝	同上
+f2fs-tools-00123	sites	拒绝	同上
+f2fs-tools-00124	sites	拒绝	同上
+f2fs-tools-00125	sites	拒绝	同上
+f2fs-tools-00126	sites	拒绝	同上
+f2fs-tools-00127	sites	拒绝	同上
+f2fs-tools-00129	sites	拒绝	同上
+f2fs-tools-00130	sites	拒绝	同上
+f2fs-tools-00131	sites	拒绝	同上
+f2fs-tools-00132	sites	拒绝	同上
+f2fs-tools-00133	sites	拒绝	同上
+f2fs-tools-00134	sites	拒绝	同上
+f2fs-tools-00135	sites	拒绝	同上
+f2fs-tools-00138	sites	拒绝	同上
+f2fs-tools-00140	sites	拒绝	同上
+f2fs-tools-00179	sites	拒绝	同上
+f2fs-tools-00180	sites	拒绝	同上
+f2fs-tools-00194	sites	拒绝	同上
+f2fs-tools-00211	sites	拒绝	同上
+f2fs-tools-00212	sites	拒绝	同上
+f2fs-tools-00213	sites	拒绝	同上
+f2fs-tools-00214	sites	拒绝	同上
+f2fs-tools-00215	sites	拒绝	同上
+f2fs-tools-00216	sites	拒绝	同上
+f2fs-tools-00217	sites	拒绝	同上
+f2fs-tools-00218	sites	拒绝	同上
+f2fs-tools-00219	sites	拒绝	同上
+f2fs-tools-00224	sites	拒绝	同上
+f2fs-tools-00225	sites	拒绝	同上
+f2fs-tools-00226	sites	拒绝	同上
+f2fs-tools-00227	sites	拒绝	同上
+f2fs-tools-00229	sites	拒绝	同上
+f2fs-tools-00237	sites	拒绝	同上
+f2fs-tools-00238	sites	拒绝	同上
+f2fs-tools-00245	sites	拒绝	同上
+f2fs-tools-00246	sites	拒绝	同上
+f2fs-tools-00247	sites	拒绝	同上
+f2fs-tools-00248	sites	拒绝	同上
+f2fs-tools-00307	sites	拒绝	同上
+f2fs-tools-00309	sites	拒绝	同上
+f2fs-tools-00310	sites	拒绝	同上
+f2fs-tools-00311	sites	拒绝	同上
+f2fs-tools-00315	sites	拒绝	同上
+f2fs-tools-00316	sites	拒绝	同上
+f2fs-tools-00322	sites	拒绝	同上
+f2fs-tools-00323	sites	拒绝	同上
+f2fs-tools-00324	sites	拒绝	同上
+f2fs-tools-00325	sites	拒绝	同上
+f2fs-tools-00326	sites	拒绝	同上
+f2fs-tools-00327	sites	拒绝	同上
+f2fs-tools-00328	sites	拒绝	同上
+f2fs-tools-00416	sites	拒绝	同上
+f2fs-tools-00419	sites	拒绝	同上
+f2fs-tools-00420	sites	拒绝	同上

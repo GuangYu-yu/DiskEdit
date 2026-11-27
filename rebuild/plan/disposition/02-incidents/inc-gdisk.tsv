@@ -1,41 +1,41 @@
 row_id	ledger	state	note
-gdisk-inc-00001	incidents	待判	
-gdisk-inc-00002	incidents	待判	
-gdisk-inc-00003	incidents	待判	
-gdisk-inc-00004	incidents	待判	
-gdisk-inc-00005	incidents	待判	
-gdisk-inc-00006	incidents	待判	
-gdisk-inc-00007	incidents	待判	
-gdisk-inc-00008	incidents	待判	
-gdisk-inc-00009	incidents	待判	
-gdisk-inc-00010	incidents	待判	
-gdisk-inc-00011	incidents	待判	
-gdisk-inc-00012	incidents	待判	
-gdisk-inc-00013	incidents	待判	
-gdisk-inc-00014	incidents	待判	
-gdisk-inc-00015	incidents	待判	
-gdisk-inc-00016	incidents	待判	
-gdisk-inc-00017	incidents	待判	
-gdisk-inc-00018	incidents	待判	
-gdisk-inc-00019	incidents	待判	
-gdisk-inc-00020	incidents	待判	
-gdisk-inc-00021	incidents	待判	
-gdisk-inc-00022	incidents	待判	
-gdisk-inc-00023	incidents	待判	
-gdisk-inc-00024	incidents	待判	
-gdisk-inc-00025	incidents	待判	
-gdisk-inc-00026	incidents	待判	
-gdisk-inc-00027	incidents	待判	
-gdisk-inc-00028	incidents	待判	
-gdisk-inc-00029	incidents	待判	
-gdisk-inc-00030	incidents	待判	
-gdisk-inc-00031	incidents	待判	
-gdisk-inc-00032	incidents	待判	
-gdisk-inc-00033	incidents	待判	
-gdisk-inc-00034	incidents	待判	
-gdisk-inc-00035	incidents	待判	
-gdisk-inc-00036	incidents	待判	
-gdisk-inc-00037	incidents	待判	
-gdisk-inc-00038	incidents	待判	
-gdisk-inc-00039	incidents	待判	
-gdisk-inc-00040	incidents	待判	
+gdisk-inc-00001	incidents	裁剪	popt 参数库绑定的依赖不存在；本实现 CLI 自有解析（src/app/cli/parse.rs）
+gdisk-inc-00002	incidents	差异	D14：小数尺寸换算：本实现按精确字节分数换算（9.5G=9.5GiB 再对齐，src/app/cli/parse.rs::absolute_size num/denom），不复刻 gdisk 的整数截断（9.5G→9GiB）；灾难性 9 扇区误读在本实现不存在。保留精确换算并以 --align 收口，与基线对表按字节而非展示值核对
+gdisk-inc-00003	incidents	裁剪	cgdisk 交互 TUI 属性显示面
+gdisk-inc-00004	incidents	认领	GPT-014/015：条目 size/count 形状校验拒绝越界声明（gpt/entries.rs::validate_shape），按拒绝而非崩溃；CVE-2020-0256 同型由 Rust 边界承担
+gdisk-inc-00005	incidents	认领	坏 MBR 按无效拒绝（mbr/primary.rs::parse MbrSignatureMissing/BufferTooSmall→observe 归 None）；CVE-2021-0308 同型由 Rust 边界承担，行为面=干净拒绝
+gdisk-inc-00006	incidents	拒绝	ppc64el 平台崩溃属 C 实现细节，防御由 Rust 所有权/编译器承担
+gdisk-inc-00007	incidents	裁剪	混合 MBR 创建不实现（SA3-002：只读接受、写表收敛规范 PMBR）
+gdisk-inc-00008	incidents	裁剪	同 gdisk-inc-00007
+gdisk-inc-00009	incidents	拒绝	-i 无效分区号崩溃是 C 边界修复；无效输入经退出码单源拒绝（SA1-009），崩溃形态不存在
+gdisk-inc-00010	incidents	拒绝	同 gdisk-inc-00009（-t 0 号崩溃）
+gdisk-inc-00011	incidents	拒绝	32 位平台截断属 C 32 位缺陷；全实现 u64 LBA（GPT-001）
+gdisk-inc-00012	incidents	认领	SA1-027：PMBR EndCHS 写规范占位 FF FF FF（create.rs::protective_mbr_image 394-403），不做几何换算（SA1-028）
+gdisk-inc-00013	incidents	裁剪	Windows 版 GUID 生成绑定 Windows 宿主；非 Linux 后端一律拒绝（D10）
+gdisk-inc-00014	incidents	裁剪	同 gdisk-inc-00007
+gdisk-inc-00015	incidents	裁剪	同 gdisk-inc-00007
+gdisk-inc-00016	incidents	认领	相对/0 号语义由本实现 CLI 承接：resize 的 +N/-N/N%/grow（SizeSpec Grow/Absolute/Delta/Percent）、add 取首个空槽（edit.rs）；sgdisk 旗标形态不照搬（命令面差异由 G5 登记）
+gdisk-inc-00017	incidents	拒绝	-A show 无效参数崩溃是 C 边界修复；无效参数按 UsageError 拒绝（SA1-009）
+gdisk-inc-00018	incidents	裁剪	同 gdisk-inc-00007
+gdisk-inc-00019	incidents	裁剪	man 页笔误条目非行为；本实现文档独立
+gdisk-inc-00020	incidents	裁剪	SA1-028：CHS 重算专家选项不实现
+gdisk-inc-00021	incidents	拒绝	0 尺寸镜像的自由空间显示属交互细节；0 长度目标按无效拒绝（I11 写入不得越过目标长度）
+gdisk-inc-00022	incidents	拒绝	无效盘崩溃是 C 内存缺陷，防御由 Rust 承担（parse 带界）
+gdisk-inc-00023	incidents	拒绝	verify 消息分区号显示细节；check 输出以基线等价为准（G7 both_binaries_agree_on_info_json_fields）
+gdisk-inc-00024	incidents	裁剪	SA1-020：菜单式备份文件恢复不实现；崩溃恢复由记录原像+重启续扫承接（I1-I12/B6）
+gdisk-inc-00025	incidents	认领	目标打开失败即拒绝、绝不创建空目标（I3/I11 写通道带界；目标必须已存在才可写）
+gdisk-inc-00026	incidents	认领	SA1-027：不做几何换算、写规范占位（同 gdisk-inc-00012）
+gdisk-inc-00027	incidents	拒绝	>128 条目时的 C malloc 缺陷；Rust Vec+GPT-015 形状校验承担
+gdisk-inc-00028	incidents	认领	类型码按数据写入（TypeSelector Guid/0xNN）；set 语义由 tests/case_runner.rs::add_delete_and_set_rewrite_both_copies 覆盖
+gdisk-inc-00029	incidents	拒绝	大端平台数据损坏属 C 缺陷；字段字节序显式小端读写+Rust 承担
+gdisk-inc-00030	incidents	裁剪	FreeBSD 平台面（D10 非 Linux 后端拒绝）
+gdisk-inc-00031	incidents	裁剪	-l 备份文件交互告警面（SA1-020 备份文件恢复不实现）
+gdisk-inc-00032	incidents	拒绝	32 位文件尺寸 C 缺陷；u64 承担（GPT-001）
+gdisk-inc-00033	incidents	裁剪	zap（销毁 GPT/仅 MBR）专家选项不实现；覆盖面由 SA1-005 显式 --overwrite-data 承接
+gdisk-inc-00034	incidents	裁剪	同 gdisk-inc-00033
+gdisk-inc-00035	incidents	裁剪	同 gdisk-inc-00033（APM/BSD 盘标告警另涉 SA1-016 老盘标）
+gdisk-inc-00036	incidents	裁剪	同 gdisk-inc-00033；写后内核视图同步已由 SA1-013 承接
+gdisk-inc-00037	incidents	拒绝	排序崩溃是 C 内存缺陷；条目定位规则由 edit.rs 锚定，Rust 承担
+gdisk-inc-00038	incidents	认领	PMBR 0xEE 记录按保护记录处理不当作普通分区（observe/table.rs:269-272 is_protective→归 GPT 面；GPT-008/010；SA3-002）
+gdisk-inc-00039	incidents	裁剪	同 gdisk-inc-00033
+gdisk-inc-00040	incidents	裁剪	Apple 类型 GUID 展示名映射不在本实现面；类型以 GUID 数据输出（TypeSelector），建议拆分:inc-gdisk-type-names

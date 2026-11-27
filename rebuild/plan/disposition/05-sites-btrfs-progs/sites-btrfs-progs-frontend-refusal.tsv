@@ -1,85 +1,85 @@
 row_id	ledger	state	note
-btrfs-progs-00001	sites	待判	
-btrfs-progs-00010	sites	待判	
-btrfs-progs-00013	sites	待判	
-btrfs-progs-00015	sites	待判	
-btrfs-progs-00017	sites	待判	
-btrfs-progs-00019	sites	待判	
-btrfs-progs-00020	sites	待判	
-btrfs-progs-00023	sites	待判	
-btrfs-progs-00025	sites	待判	
-btrfs-progs-00026	sites	待判	
-btrfs-progs-00027	sites	待判	
-btrfs-progs-00028	sites	待判	
-btrfs-progs-00030	sites	待判	
-btrfs-progs-00031	sites	待判	
-btrfs-progs-00032	sites	待判	
-btrfs-progs-00033	sites	待判	
-btrfs-progs-00035	sites	待判	
-btrfs-progs-00038	sites	待判	
-btrfs-progs-00040	sites	待判	
-btrfs-progs-00042	sites	待判	
-btrfs-progs-00044	sites	待判	
-btrfs-progs-00046	sites	待判	
-btrfs-progs-00048	sites	待判	
-btrfs-progs-00049	sites	待判	
-btrfs-progs-00050	sites	待判	
-btrfs-progs-00051	sites	待判	
-btrfs-progs-00052	sites	待判	
-btrfs-progs-00053	sites	待判	
-btrfs-progs-00054	sites	待判	
-btrfs-progs-00055	sites	待判	
-btrfs-progs-00056	sites	待判	
-btrfs-progs-00057	sites	待判	
-btrfs-progs-00058	sites	待判	
-btrfs-progs-00060	sites	待判	
-btrfs-progs-00062	sites	待判	
-btrfs-progs-00064	sites	待判	
-btrfs-progs-00066	sites	待判	
-btrfs-progs-00068	sites	待判	
-btrfs-progs-00070	sites	待判	
-btrfs-progs-00071	sites	待判	
-btrfs-progs-00072	sites	待判	
-btrfs-progs-00074	sites	待判	
-btrfs-progs-00076	sites	待判	
-btrfs-progs-00077	sites	待判	
-btrfs-progs-00078	sites	待判	
-btrfs-progs-00080	sites	待判	
-btrfs-progs-00082	sites	待判	
-btrfs-progs-00089	sites	待判	
-btrfs-progs-00090	sites	待判	
-btrfs-progs-00091	sites	待判	
-btrfs-progs-00094	sites	待判	
-btrfs-progs-00097	sites	待判	
-btrfs-progs-00102	sites	待判	
-btrfs-progs-00106	sites	待判	
-btrfs-progs-00112	sites	待判	
-btrfs-progs-00113	sites	待判	
-btrfs-progs-00114	sites	待判	
-btrfs-progs-00115	sites	待判	
-btrfs-progs-00116	sites	待判	
-btrfs-progs-00117	sites	待判	
-btrfs-progs-00118	sites	待判	
-btrfs-progs-00119	sites	待判	
-btrfs-progs-00120	sites	待判	
-btrfs-progs-00121	sites	待判	
-btrfs-progs-00122	sites	待判	
-btrfs-progs-00124	sites	待判	
-btrfs-progs-00126	sites	待判	
-btrfs-progs-00127	sites	待判	
-btrfs-progs-00128	sites	待判	
-btrfs-progs-00129	sites	待判	
-btrfs-progs-00130	sites	待判	
-btrfs-progs-00131	sites	待判	
-btrfs-progs-00132	sites	待判	
-btrfs-progs-00135	sites	待判	
-btrfs-progs-00137	sites	待判	
-btrfs-progs-00139	sites	待判	
-btrfs-progs-00141	sites	待判	
-btrfs-progs-00143	sites	待判	
-btrfs-progs-00144	sites	待判	
-btrfs-progs-00146	sites	待判	
-btrfs-progs-00148	sites	待判	
-btrfs-progs-00149	sites	待判	
-btrfs-progs-00151	sites	待判	
-btrfs-progs-00155	sites	待判	
+btrfs-progs-00001	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00010	sites	裁剪	同上
+btrfs-progs-00013	sites	裁剪	同上
+btrfs-progs-00015	sites	裁剪	同上
+btrfs-progs-00017	sites	裁剪	同上
+btrfs-progs-00019	sites	裁剪	同上
+btrfs-progs-00020	sites	裁剪	同上
+btrfs-progs-00023	sites	裁剪	同上
+btrfs-progs-00025	sites	裁剪	同上
+btrfs-progs-00026	sites	裁剪	同上
+btrfs-progs-00027	sites	裁剪	同上
+btrfs-progs-00028	sites	裁剪	同上
+btrfs-progs-00030	sites	裁剪	同上
+btrfs-progs-00031	sites	裁剪	同上
+btrfs-progs-00032	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
+btrfs-progs-00033	sites	认领	同上
+btrfs-progs-00035	sites	认领	同上
+btrfs-progs-00038	sites	裁剪	裁剪：devid 前缀/按增量扩缩的 resize 形态——本实现只发 `max` 与 `<N>k`（单设备目标），多设备在判定层按占用拒绝（B17 多设备证据），devid/增量面超出消费范围
+btrfs-progs-00040	sites	裁剪	同上
+btrfs-progs-00042	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
+btrfs-progs-00044	sites	认领	同上
+btrfs-progs-00046	sites	裁剪	裁剪：devid 前缀/按增量扩缩的 resize 形态——本实现只发 `max` 与 `<N>k`（单设备目标），多设备在判定层按占用拒绝（B17 多设备证据），devid/增量面超出消费范围
+btrfs-progs-00048	sites	认领	认领：resize 参数校验/错误路径（check_resize_args/cmd_filesystem_resize）——SA2-006（superblock 回读）、SA2-007（收缩失败不动分区表）、SA2-008（不合法在写前拒绝）、SA2-016（挂载后按带单位大小 resize）；src/app/execute/filesystem.rs::online_invocation/grow_plan/shrink/verify_btrfs_size，tests/online.rs::an_online_btrfs_grow_is_verified_from_the_superblock / a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition / online_btrfs_shrink_without_the_tool_is_refused_before_any_write；建议拆分:sites-btrfs-progs-frontend-resize
+btrfs-progs-00049	sites	认领	同上
+btrfs-progs-00050	sites	认领	同上
+btrfs-progs-00051	sites	认领	同上
+btrfs-progs-00052	sites	认领	同上
+btrfs-progs-00053	sites	认领	同上
+btrfs-progs-00054	sites	认领	同上
+btrfs-progs-00055	sites	裁剪	裁剪：df/show/defrag/mkswapfile/usage/property/device 级子命令的拒绝面——绑定未消费子命令（device/balance/子卷/raid 级超出本实现范围，档案表只登记 resize/check/attrs/mkfs）
+btrfs-progs-00056	sites	裁剪	同上
+btrfs-progs-00057	sites	裁剪	同上
+btrfs-progs-00058	sites	裁剪	同上
+btrfs-progs-00060	sites	裁剪	同上
+btrfs-progs-00062	sites	裁剪	同上
+btrfs-progs-00064	sites	裁剪	同上
+btrfs-progs-00066	sites	裁剪	同上
+btrfs-progs-00068	sites	裁剪	同上
+btrfs-progs-00070	sites	裁剪	同上
+btrfs-progs-00071	sites	裁剪	同上
+btrfs-progs-00072	sites	裁剪	同上
+btrfs-progs-00074	sites	裁剪	同上
+btrfs-progs-00076	sites	裁剪	同上
+btrfs-progs-00077	sites	裁剪	同上
+btrfs-progs-00078	sites	裁剪	同上
+btrfs-progs-00080	sites	裁剪	同上
+btrfs-progs-00082	sites	裁剪	同上
+btrfs-progs-00089	sites	裁剪	同上
+btrfs-progs-00090	sites	裁剪	同上
+btrfs-progs-00091	sites	裁剪	同上
+btrfs-progs-00094	sites	裁剪	同上
+btrfs-progs-00097	sites	裁剪	同上
+btrfs-progs-00102	sites	裁剪	同上
+btrfs-progs-00106	sites	裁剪	同上
+btrfs-progs-00112	sites	裁剪	同上
+btrfs-progs-00113	sites	裁剪	同上
+btrfs-progs-00114	sites	裁剪	同上
+btrfs-progs-00115	sites	裁剪	同上
+btrfs-progs-00116	sites	裁剪	同上
+btrfs-progs-00117	sites	裁剪	同上
+btrfs-progs-00118	sites	裁剪	同上
+btrfs-progs-00119	sites	裁剪	同上
+btrfs-progs-00120	sites	裁剪	同上
+btrfs-progs-00121	sites	裁剪	同上
+btrfs-progs-00122	sites	裁剪	同上
+btrfs-progs-00124	sites	裁剪	同上
+btrfs-progs-00126	sites	裁剪	同上
+btrfs-progs-00127	sites	裁剪	同上
+btrfs-progs-00128	sites	裁剪	同上
+btrfs-progs-00129	sites	裁剪	同上
+btrfs-progs-00130	sites	裁剪	同上
+btrfs-progs-00131	sites	裁剪	同上
+btrfs-progs-00132	sites	裁剪	同上
+btrfs-progs-00135	sites	裁剪	同上
+btrfs-progs-00137	sites	裁剪	同上
+btrfs-progs-00139	sites	裁剪	同上
+btrfs-progs-00141	sites	裁剪	同上
+btrfs-progs-00143	sites	裁剪	同上
+btrfs-progs-00144	sites	裁剪	同上
+btrfs-progs-00146	sites	裁剪	同上
+btrfs-progs-00148	sites	裁剪	同上
+btrfs-progs-00149	sites	裁剪	同上
+btrfs-progs-00151	sites	裁剪	同上
+btrfs-progs-00155	sites	裁剪	同上

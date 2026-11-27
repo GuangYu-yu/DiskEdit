@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-lvm2-00199	sites	待判	
-lvm2-00200	sites	待判	
-lvm2-00201	sites	待判	
+lvm2-00199	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
+lvm2-00200	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住
+lvm2-00201	sites	裁剪	裁剪：其余 lvm 子命令面（pvchange/vgchange/报告面/通用 lvm CLI）不在登记范围——档案表只登记 grow-lv 链（SA2-017）；内部错误通道随消费工具自带，非零退出由 refusal-map R0386 兜住

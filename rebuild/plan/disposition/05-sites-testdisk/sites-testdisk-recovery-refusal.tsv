@@ -1,16 +1,16 @@
 row_id	ledger	state	note
-testdisk-00002	sites	待判	
-testdisk-00003	sites	待判	
-testdisk-00004	sites	待判	
-testdisk-00005	sites	待判	
-testdisk-00006	sites	待判	
-testdisk-00007	sites	待判	
-testdisk-00010	sites	待判	
-testdisk-00011	sites	待判	
-testdisk-00012	sites	待判	
-testdisk-00013	sites	待判	
-testdisk-00014	sites	待判	
-testdisk-00018	sites	待判	
-testdisk-00023	sites	待判	
-testdisk-00076	sites	待判	
-testdisk-00077	sites	待判	
+testdisk-00002	sites	认领	只读打开告警 ↔ 只读命令只读打开、判定层不产生写计划；依据 SA1-002
+testdisk-00003	sites	认领	GPT 签名坏 ↔ parse 签名校验+按损坏走主备回退；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
+testdisk-00004	sites	认领	GPT 签名坏 ↔ parse 签名校验+按损坏走主备回退；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
+testdisk-00005	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00006	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00007	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00010	sites	认领	条目数 0/>4096 拒绝 ↔ 条目数异常按损坏处理（默认几何 128）；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs
+testdisk-00011	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00012	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00013	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00014	sites	认领	同上（GPT 头/表字段校验：签名/尺寸/CRC/LBA/条目，见首行）
+testdisk-00018	sites	裁剪	RAID 超级块内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00023	sites	认领	条目不合法拒绝且不猜 ↔ 条目级不合法按损坏处理；依据 SA3-004：任一侧可读即按其上界修复重写另一侧，不合并条目、不猜 GUID；锚 tests/gpt_repair.rs::a_grown_container_is_repaired_in_the_same_table_write；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action
+testdisk-00076	sites	裁剪	无盘标（partnone）NTFS boot 校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00077	sites	裁剪	RAID/ReFS 内容校验；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs

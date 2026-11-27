@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-e2fsprogs-00027	sites	待判	
-e2fsprogs-00097	sites	待判	
-e2fsprogs-00098	sites	待判	
+e2fsprogs-00027	sites	裁剪	裁剪：resize2fs 自身拒绝（inodes 上限、resize inode 损坏即退）——随外部工具自带，非零退出码落 SA2-002 已写待恢复；本实现不实现 resize2fs（SA2-001/002/003）
+e2fsprogs-00097	sites	裁剪	同上
+e2fsprogs-00098	sites	裁剪	同上

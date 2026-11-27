@@ -1,6 +1,6 @@
 row_id	ledger	state	note
-gdisk-00001	sites	待判	
-gdisk-00067	sites	待判	
-gdisk-00069	sites	待判	
-gdisk-00071	sites	待判	
-gdisk-00189	sites	待判	
+gdisk-00001	sites	认领	属性未知运算符拒绝 ↔ set 属性解析拒绝；锚 crates/core/src/table/edit.rs::attribute_bit
+gdisk-00067	sites	裁剪	fixparts 找不到有效 MBR/无法判定；fixparts 未纳入
+gdisk-00069	sites	认领	属性未知运算符拒绝 ↔ set 属性解析拒绝；锚 crates/core/src/table/edit.rs::attribute_bit
+gdisk-00071	sites	裁剪	fixparts 未纳入命令面
+gdisk-00189	sites	认领	扇区大小非法 bug 提示 ↔ 扇区大小经 BLKSSZGET 探测，非法即 Unknown 拒绝；锚 src/platform/linux/mod.rs::block_sector_size

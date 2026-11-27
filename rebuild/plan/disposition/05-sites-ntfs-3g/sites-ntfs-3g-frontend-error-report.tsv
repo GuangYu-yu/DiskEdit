@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-ntfs-3g-00145	sites	待判	
-ntfs-3g-00146	sites	待判	
-ntfs-3g-00186	sites	待判	
-ntfs-3g-00219	sites	待判	
-ntfs-3g-00220	sites	待判	
-ntfs-3g-00221	sites	待判	
-ntfs-3g-00224	sites	待判	
+ntfs-3g-00145	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00146	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00186	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00219	sites	裁剪	裁剪：ntfscluster 不消费——聚类定位面不在档案表登记范围（SA2-012）
+ntfs-3g-00220	sites	裁剪	裁剪：ntfscluster 不消费——聚类定位面不在档案表登记范围（SA2-012）
+ntfs-3g-00221	sites	裁剪	裁剪：ntfscluster 不消费——聚类定位面不在档案表登记范围（SA2-012）
+ntfs-3g-00224	sites	裁剪	裁剪：ntfscluster 不消费——聚类定位面不在档案表登记范围（SA2-012）

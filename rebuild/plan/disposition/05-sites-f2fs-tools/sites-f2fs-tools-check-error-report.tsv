@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-f2fs-tools-00222	sites	待判	
-f2fs-tools-00223	sites	待判	
-f2fs-tools-00405	sites	待判	
+f2fs-tools-00222	sites	拒绝	调试打印内部件。依据：SA1-022 同口径（架构差异-多虑）
+f2fs-tools-00223	sites	拒绝	同上
+f2fs-tools-00405	sites	裁剪	依赖工具子命令/usage 面（dump/defrag/sload/label 等）不暴露：固定参数调用。依据：SA2-011、特性依据=工具子命令面

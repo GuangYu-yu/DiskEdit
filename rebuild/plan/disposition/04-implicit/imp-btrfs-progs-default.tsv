@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-btrfs-progs-imp-00003	implicit	待判	
+btrfs-progs-imp-00003	implicit	裁剪	usage 统计 MIN_UNALOCATED_THRESH 16MiB 内部阈值；btrfs 事实源=superblock total_bytes/sectorsize 回读；依据 SA2-006

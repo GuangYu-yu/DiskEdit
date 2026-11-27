@@ -1,25 +1,25 @@
 row_id	ledger	state	note
-gdisk-imp-00001	implicit	待判	
-gdisk-imp-00006	implicit	待判	
-gdisk-imp-00007	implicit	待判	
-gdisk-imp-00008	implicit	待判	
-gdisk-imp-00009	implicit	待判	
-gdisk-imp-00010	implicit	待判	
-gdisk-imp-00011	implicit	待判	
-gdisk-imp-00012	implicit	待判	
-gdisk-imp-00013	implicit	待判	
-gdisk-imp-00015	implicit	待判	
-gdisk-imp-00016	implicit	待判	
-gdisk-imp-00017	implicit	待判	
-gdisk-imp-00018	implicit	待判	
-gdisk-imp-00019	implicit	待判	
-gdisk-imp-00020	implicit	待判	
-gdisk-imp-00021	implicit	待判	
-gdisk-imp-00022	implicit	待判	
-gdisk-imp-00023	implicit	待判	
-gdisk-imp-00024	implicit	待判	
-gdisk-imp-00025	implicit	待判	
-gdisk-imp-00026	implicit	待判	
-gdisk-imp-00027	implicit	待判	
-gdisk-imp-00028	implicit	待判	
-gdisk-imp-00029	implicit	待判	
+gdisk-imp-00001	implicit	裁剪	cgdisk getopt 选项上限；菜单面不纳入
+gdisk-imp-00006	implicit	裁剪	sgdisk getopt 选项上限；解析内部
+gdisk-imp-00007	implicit	裁剪	头文件卫哨宏，无行为
+gdisk-imp-00008	implicit	认领	0xAA55 ↔ MBR 签名校验；锚 crates/core/src/table/mbr/primary.rs
+gdisk-imp-00009	implicit	认领	MBR 128 上限 ↔ 四主槽+扩展链承载（不硬编码上限）；锚 crates/core/src/table/mbr/extended.rs
+gdisk-imp-00010	implicit	裁剪	BSD 盘标；依据 SA1-016：mac/sun/amiga/bsd/pc98/humax/xbox 等老盘标不识别，统一按未知拒绝
+gdisk-imp-00011	implicit	认领	DEFAULT_ALIGNMENT 2048=1MiB 默认对齐；依据 SA1-008
+gdisk-imp-00012	implicit	裁剪	MAX_ALIGNMENT 65536（专家菜单可调上限）；对齐策略固定（SA1-008/SA1-014），不提供菜单调参
+gdisk-imp-00013	implicit	认领	MIN_AF_ALIGNMENT 8=4KiB ↔ 最小对齐=物理扇区；依据 SA1-008
+gdisk-imp-00015	implicit	裁剪	MBR_SIZED_*（GPT→混合 MBR 尺寸分级）；依据 SA3-002：混合 MBR 只读接受原样，写表收敛为单一 0xEE 保护 MBR，不构建混合 MBR；锚 tests/case_runner.rs::a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write
+gdisk-imp-00016	implicit	裁剪	见各行（gdisk 平台默认类型/专家对齐/混合 MBR 分级为裁剪，几何与签名常数为认领）
+gdisk-imp-00017	implicit	裁剪	同上（平台特定默认类型/卫哨宏）
+gdisk-imp-00018	implicit	裁剪	头文件卫哨宏
+gdisk-imp-00019	implicit	裁剪	同上（平台特定默认类型/卫哨宏）
+gdisk-imp-00020	implicit	认领	CHS 几何上限 ↔ CHS 占位；依据 SA1-027/SA1-028：CHS 一律写占位（PMBR 00 02 00 / FF FF FF，条目 FE FF FF），不实现 BIOS 几何换算；锚 crates/core/src/table/edit.rs、create.rs
+gdisk-imp-00021	implicit	裁剪	同上（平台特定默认类型/卫哨宏）
+gdisk-imp-00022	implicit	裁剪	同上（平台特定默认类型/卫哨宏）
+gdisk-imp-00023	implicit	裁剪	Solaris 平台默认类型；本实现统一 Linux 类型集（锚 crates/core/src/table/edit.rs）
+gdisk-imp-00024	implicit	裁剪	macOS 平台默认类型；同上
+gdisk-imp-00025	implicit	裁剪	Windows 平台默认类型；同上
+gdisk-imp-00026	implicit	裁剪	FreeBSD 平台默认类型；同上
+gdisk-imp-00027	implicit	认领	0x8300 ↔ LINUX_MBR_TYPE 0x83；锚 crates/core/src/table/edit.rs
+gdisk-imp-00028	implicit	裁剪	同上（平台特定默认类型/卫哨宏）
+gdisk-imp-00029	implicit	认领	512 回退 ↔ 扇区大小经 BLKSSZGET 探测（src/platform/linux/mod.rs::block_sector_size），探测不到的事实按 Unknown 拒绝不裸猜（I5）；记录原像上下文固定 512（src/app/decide/recover.rs）

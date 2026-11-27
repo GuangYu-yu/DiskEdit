@@ -1,63 +1,63 @@
 row_id	ledger	state	note
-libfdisk-00001	sites	待判	
-libfdisk-00002	sites	待判	
-libfdisk-00003	sites	待判	
-libfdisk-00011	sites	待判	
-libfdisk-00012	sites	待判	
-libfdisk-00013	sites	待判	
-libfdisk-00066	sites	待判	
-libfdisk-00101	sites	待判	
-libfdisk-00103	sites	待判	
-libfdisk-00114	sites	待判	
-libfdisk-00134	sites	待判	
-libfdisk-00193	sites	待判	
-libfdisk-00606	sites	待判	
-libfdisk-00611	sites	待判	
-libfdisk-00614	sites	待判	
-libfdisk-00651	sites	待判	
-libfdisk-00656	sites	待判	
-libfdisk-00657	sites	待判	
-libfdisk-00658	sites	待判	
-libfdisk-00683	sites	待判	
-libfdisk-00684	sites	待判	
-libfdisk-00691	sites	待判	
-libfdisk-00709	sites	待判	
-libfdisk-00710	sites	待判	
-libfdisk-00711	sites	待判	
-libfdisk-00712	sites	待判	
-libfdisk-00713	sites	待判	
-libfdisk-00730	sites	待判	
-libfdisk-00732	sites	待判	
-libfdisk-00733	sites	待判	
-libfdisk-00734	sites	待判	
-libfdisk-00735	sites	待判	
-libfdisk-00736	sites	待判	
-libfdisk-00795	sites	待判	
-libfdisk-00796	sites	待判	
-libfdisk-00797	sites	待判	
-libfdisk-00821	sites	待判	
-libfdisk-00822	sites	待判	
-libfdisk-00904	sites	待判	
-libfdisk-00905	sites	待判	
-libfdisk-00908	sites	待判	
-libfdisk-00915	sites	待判	
-libfdisk-00930	sites	待判	
-libfdisk-00931	sites	待判	
-libfdisk-00932	sites	待判	
-libfdisk-00934	sites	待判	
-libfdisk-00952	sites	待判	
-libfdisk-00953	sites	待判	
-libfdisk-00954	sites	待判	
-libfdisk-00960	sites	待判	
-libfdisk-00964	sites	待判	
-libfdisk-00972	sites	待判	
-libfdisk-00973	sites	待判	
-libfdisk-00990	sites	待判	
-libfdisk-00996	sites	待判	
-libfdisk-01022	sites	待判	
-libfdisk-01023	sites	待判	
-libfdisk-01024	sites	待判	
-libfdisk-01025	sites	待判	
-libfdisk-01026	sites	待判	
-libfdisk-01028	sites	待判	
-libfdisk-01029	sites	待判	
+libfdisk-00001	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（ask 回调消息管道）
+libfdisk-00002	sites	裁剪	同上
+libfdisk-00003	sites	裁剪	同上
+libfdisk-00011	sites	裁剪	同上
+libfdisk-00012	sites	裁剪	同上
+libfdisk-00013	sites	裁剪	同上
+libfdisk-00066	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（交互选号/选类型）
+libfdisk-00101	sites	拒绝	错误打印管道（fprintf/die/vfprintf）为 C 报告机制：本实现错误面单源映射退出码。依据：SA1-009（src/app/report/exit.rs）
+libfdisk-00103	sites	拒绝	同上
+libfdisk-00114	sites	裁剪	老盘标（bsd/sun/sgi/amiga/mac/dvh）不识别，统一按未知拒绝。依据：SA1-016
+libfdisk-00134	sites	裁剪	同上
+libfdisk-00193	sites	裁剪	CHS 定案：不实现 BIOS 几何换算，CHS 一律写占位（PMBR 00 02 00/FF FF FF、条目 FE FF FF）。依据：SA1-027、SA1-028
+libfdisk-00606	sites	认领	脚本/JSON 面定案：JSON 只作输出，不提供脚本导入/还原；copy 派生新确定性 PARTUUID。依据：SA1-007、SA1-010
+libfdisk-00611	sites	认领	同上
+libfdisk-00614	sites	认领	同上
+libfdisk-00651	sites	拒绝	错误打印管道（fprintf/die/vfprintf）为 C 报告机制：本实现错误面单源映射退出码。依据：SA1-009（src/app/report/exit.rs）
+libfdisk-00656	sites	拒绝	同上
+libfdisk-00657	sites	拒绝	同上
+libfdisk-00658	sites	拒绝	同上
+libfdisk-00683	sites	拒绝	同上
+libfdisk-00684	sites	拒绝	同上
+libfdisk-00691	sites	拒绝	同上
+libfdisk-00709	sites	拒绝	同上
+libfdisk-00710	sites	拒绝	同上
+libfdisk-00711	sites	拒绝	同上
+libfdisk-00712	sites	拒绝	同上
+libfdisk-00713	sites	拒绝	同上
+libfdisk-00730	sites	拒绝	同上
+libfdisk-00732	sites	拒绝	同上
+libfdisk-00733	sites	拒绝	同上
+libfdisk-00734	sites	拒绝	同上
+libfdisk-00735	sites	拒绝	同上
+libfdisk-00736	sites	拒绝	同上
+libfdisk-00795	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（ask 回调消息管道）
+libfdisk-00796	sites	裁剪	同上
+libfdisk-00797	sites	裁剪	同上
+libfdisk-00821	sites	认领	move 数据搬移已实现：逐块登记原像可回滚、fsync 失败上抛、续跑前缀摘要核对。依据：SA1-011、SA1-012（tests/fault_injection.rs）
+libfdisk-00822	sites	认领	同上
+libfdisk-00904	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
+libfdisk-00905	sites	认领	同上
+libfdisk-00908	sites	认领	同上
+libfdisk-00915	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00930	sites	认领	用法/未知选项拒绝已有：UsageError 退 2 单源（src/app/cli/parse.rs、report/exit.rs）。依据：SA1-009、R0089 族
+libfdisk-00931	sites	认领	同上
+libfdisk-00932	sites	认领	同上
+libfdisk-00934	sites	认领	同上
+libfdisk-00952	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（ask 回调消息管道）
+libfdisk-00953	sites	裁剪	同上
+libfdisk-00954	sites	裁剪	同上
+libfdisk-00960	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（交互选号/选类型）
+libfdisk-00964	sites	差异	D18：fdisk/cfdisk 列式人读表格（scols）未复刻，结构化输出为 info JSON。如需人读列式显示可在 report 层加渲染，字段以 info JSON 为准
+libfdisk-00972	sites	认领	签名语义定案：不提供签名擦除选项，new 遇已有数据须显式 --overwrite-data 否则拒绝且目标字节不变。依据：SA1-005、SA1-006
+libfdisk-00973	sites	认领	同上
+libfdisk-00990	sites	认领	用法/未知选项拒绝已有：UsageError 退 2 单源（src/app/cli/parse.rs、report/exit.rs）。依据：SA1-009、R0089 族
+libfdisk-00996	sites	认领	同上
+libfdisk-01022	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（ask 回调消息管道）
+libfdisk-01023	sites	裁剪	同上
+libfdisk-01024	sites	裁剪	同上
+libfdisk-01025	sites	裁剪	同上
+libfdisk-01026	sites	裁剪	同上
+libfdisk-01028	sites	裁剪	同上
+libfdisk-01029	sites	裁剪	同上

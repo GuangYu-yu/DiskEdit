@@ -1,29 +1,29 @@
 row_id	ledger	state	note
-ntfs-3g-00133	sites	待判	
-ntfs-3g-00134	sites	待判	
-ntfs-3g-00136	sites	待判	
-ntfs-3g-00138	sites	待判	
-ntfs-3g-00140	sites	待判	
-ntfs-3g-00142	sites	待判	
-ntfs-3g-00153	sites	待判	
-ntfs-3g-00155	sites	待判	
-ntfs-3g-00157	sites	待判	
-ntfs-3g-00159	sites	待判	
-ntfs-3g-00161	sites	待判	
-ntfs-3g-00163	sites	待判	
-ntfs-3g-00165	sites	待判	
-ntfs-3g-00171	sites	待判	
-ntfs-3g-00173	sites	待判	
-ntfs-3g-00175	sites	待判	
-ntfs-3g-00176	sites	待判	
-ntfs-3g-00178	sites	待判	
-ntfs-3g-00185	sites	待判	
-ntfs-3g-00187	sites	待判	
-ntfs-3g-00188	sites	待判	
-ntfs-3g-00189	sites	待判	
-ntfs-3g-00191	sites	待判	
-ntfs-3g-00192	sites	待判	
-ntfs-3g-00195	sites	待判	
-ntfs-3g-00196	sites	待判	
-ntfs-3g-00212	sites	待判	
-ntfs-3g-00214	sites	待判	
+ntfs-3g-00133	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00134	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00136	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00138	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00140	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00142	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00153	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00155	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00157	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00159	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00161	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00163	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00165	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00171	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00173	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00175	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00176	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00178	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00185	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00187	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00188	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00189	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00191	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00192	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00195	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00196	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00212	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围
+ntfs-3g-00214	sites	裁剪	裁剪：ntfsfix 修复面——本实现只消费 ntfsfix -n 只读检查（SA2-012 检查面，src/platform/linux/tools.rs::check_arguments），修复路径不在登记范围

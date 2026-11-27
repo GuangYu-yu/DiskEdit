@@ -1,30 +1,30 @@
 row_id	ledger	state	note
-parted-01817	sites	待判	
-parted-01822	sites	待判	
-parted-01823	sites	待判	
-parted-01824	sites	待判	
-parted-01825	sites	待判	
-parted-01826	sites	待判	
-parted-01827	sites	待判	
-parted-01828	sites	待判	
-parted-01829	sites	待判	
-parted-01830	sites	待判	
-parted-01837	sites	待判	
-parted-01838	sites	待判	
-parted-01839	sites	待判	
-parted-01851	sites	待判	
-parted-01852	sites	待判	
-parted-01874	sites	待判	
-parted-01893	sites	待判	
-parted-01922	sites	待判	
-parted-01923	sites	待判	
-parted-01969	sites	待判	
-parted-01982	sites	待判	
-parted-01984	sites	待判	
-parted-02000	sites	待判	
-parted-02001	sites	待判	
-parted-02002	sites	待判	
-parted-02003	sites	待判	
-parted-02004	sites	待判	
-parted-02008	sites	待判	
-parted-02015	sites	待判	
+parted-01817	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01822	sites	拒绝	同上
+parted-01823	sites	拒绝	同上
+parted-01824	sites	拒绝	同上
+parted-01825	sites	拒绝	同上
+parted-01826	sites	拒绝	同上
+parted-01827	sites	拒绝	同上
+parted-01828	sites	拒绝	同上
+parted-01829	sites	拒绝	同上
+parted-01830	sites	拒绝	同上
+parted-01837	sites	拒绝	同上
+parted-01838	sites	拒绝	同上
+parted-01839	sites	拒绝	同上
+parted-01851	sites	拒绝	同上
+parted-01852	sites	拒绝	同上
+parted-01874	sites	认领	认领|type-id/type-uuid 按标签互斥分派已有：GPT type 非 GUID→R0114/R0171；MBR 上 GUID→R0176
+parted-01893	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01922	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01923	sites	拒绝	同上
+parted-01969	sites	拒绝	同上
+parted-01982	sites	拒绝	同上
+parted-01984	sites	拒绝	同上
+parted-02000	sites	拒绝	同上
+parted-02001	sites	拒绝	同上
+parted-02002	sites	拒绝	同上
+parted-02003	sites	拒绝	同上
+parted-02004	sites	拒绝	同上
+parted-02008	sites	拒绝	同上
+parted-02015	sites	拒绝	同上

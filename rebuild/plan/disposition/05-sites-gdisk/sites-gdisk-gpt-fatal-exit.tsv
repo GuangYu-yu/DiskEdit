@@ -1,10 +1,10 @@
 row_id	ledger	state	note
-gdisk-00076	sites	待判	
-gdisk-00077	sites	待判	
-gdisk-00079	sites	待判	
-gdisk-00083	sites	待判	
-gdisk-00111	sites	待判	
-gdisk-00127	sites	待判	
-gdisk-00141	sites	待判	
-gdisk-00143	sites	待判	
-gdisk-00180	sites	待判	
+gdisk-00076	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00077	sites	拒绝	理由：备份文件装载失败 exit(2)；备份文件特性不提供（SA1-020），exit 风格由退出码单源承担（SA1-009）
+gdisk-00079	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00083	sites	拒绝	同上
+gdisk-00111	sites	拒绝	同上
+gdisk-00127	sites	拒绝	同上
+gdisk-00141	sites	认领	分区号越界 exit ↔ 越界拒绝（Refusal/退出码单源）；锚 crates/core/src/table/edit.rs（槽位范围）
+gdisk-00143	sites	拒绝	同上
+gdisk-00180	sites	裁剪	GetSectorNum exit(5)（交互取数失败）；交互输入面不纳入（非交互 CLI）

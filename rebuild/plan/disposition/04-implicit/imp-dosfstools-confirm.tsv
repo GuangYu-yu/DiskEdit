@@ -1,12 +1,12 @@
 row_id	ledger	state	note
-dosfstools-imp-00002	implicit	待判	
-dosfstools-imp-00003	implicit	待判	
-dosfstools-imp-00004	implicit	待判	
-dosfstools-imp-00005	implicit	待判	
-dosfstools-imp-00006	implicit	待判	
-dosfstools-imp-00007	implicit	待判	
-dosfstools-imp-00008	implicit	待判	
-dosfstools-imp-00009	implicit	待判	
-dosfstools-imp-00010	implicit	待判	
-dosfstools-imp-00011	implicit	待判	
-dosfstools-imp-00012	implicit	待判	
+dosfstools-imp-00002	implicit	裁剪	common.c 交互问答（get_choice）与 fsck.fat -n/-r 交互修复模式；检查经档案表以固定只读参数调用（SA2-012），交互修复面不纳入；依据交互面裁剪：本实现为非交互 CLI，确认语义由判定层闸门+显式 --yes 单点承担；锚 src/app/cli/parse.rs::--yes
+dosfstools-imp-00003	implicit	裁剪	同上
+dosfstools-imp-00004	implicit	裁剪	同上
+dosfstools-imp-00005	implicit	裁剪	同上
+dosfstools-imp-00006	implicit	裁剪	同上
+dosfstools-imp-00007	implicit	裁剪	同上
+dosfstools-imp-00008	implicit	裁剪	同上
+dosfstools-imp-00009	implicit	裁剪	同上
+dosfstools-imp-00010	implicit	裁剪	同上
+dosfstools-imp-00011	implicit	裁剪	同上
+dosfstools-imp-00012	implicit	裁剪	同上

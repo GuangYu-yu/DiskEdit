@@ -1,13 +1,13 @@
 row_id	ledger	state	note
-dosfstools-imp-00001	implicit	待判	
-dosfstools-imp-00013	implicit	待判	
-dosfstools-imp-00014	implicit	待判	
-dosfstools-imp-00015	implicit	待判	
-dosfstools-imp-00016	implicit	待判	
-dosfstools-imp-00017	implicit	待判	
-dosfstools-imp-00018	implicit	待判	
-dosfstools-imp-00019	implicit	待判	
-dosfstools-imp-00020	implicit	待判	
-dosfstools-imp-00021	implicit	待判	
-dosfstools-imp-00022	implicit	待判	
-dosfstools-imp-00023	implicit	待判	
+dosfstools-imp-00001	implicit	裁剪	FAT 布局内部常数（簇数边界 4084/65524/65525/268435446、GEMDOS 限制、扇区宏、bad 标记）；本实现不内嵌 FAT 布局；依据 SA2 系（依赖工具面）：参考工具内部常数/分支不复制进本实现，能力与次序只在档案表登记；锚 crates/core/src/fs/catalog.rs、program.rs（SA2-012、SA2-014）
+dosfstools-imp-00013	implicit	裁剪	同上
+dosfstools-imp-00014	implicit	裁剪	同上
+dosfstools-imp-00015	implicit	裁剪	同上
+dosfstools-imp-00016	implicit	裁剪	同上
+dosfstools-imp-00017	implicit	裁剪	同上
+dosfstools-imp-00018	implicit	裁剪	同上
+dosfstools-imp-00019	implicit	裁剪	同上
+dosfstools-imp-00020	implicit	裁剪	同上
+dosfstools-imp-00021	implicit	裁剪	同上
+dosfstools-imp-00022	implicit	裁剪	同上
+dosfstools-imp-00023	implicit	裁剪	同上

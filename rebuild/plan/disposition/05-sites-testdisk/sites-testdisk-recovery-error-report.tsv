@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-testdisk-00008	sites	待判	
-testdisk-00009	sites	待判	
-testdisk-00015	sites	待判	
-testdisk-00017	sites	待判	
-testdisk-00019	sites	待判	
-testdisk-00020	sites	待判	
-testdisk-00021	sites	待判	
-testdisk-00022	sites	待判	
+testdisk-00008	sites	认领	rev 1.0/reserved 字段检查 ↔ 头字段校验在 parse 层；宽松'警告继续'收敛为严格校验（按损坏走 SA3-003 矩阵）
+testdisk-00009	sites	认领	rev 1.0/reserved 字段检查 ↔ 头字段校验在 parse 层；宽松'警告继续'收敛为严格校验（按损坏走 SA3-003 矩阵）
+testdisk-00015	sites	认领	Trying alternate GPT ↔ 主备回退；依据 SA3-003：坏一侧取可读副本并按其上界修复，第二断点按冲突拒绝且不写；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup、crates/core/src/policy/gpt.rs::repair_action；锚 crates/core/src/table/gpt/parse.rs::classify_falls_back_to_backup
+testdisk-00017	sites	裁剪	内容标记检查（FAT/NTFS/ext2/RAID）；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00019	sites	裁剪	LVM 内容检查；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00020	sites	裁剪	HFS 内容检查；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00021	sites	裁剪	APFS 内容检查；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs
+testdisk-00022	sites	裁剪	BFS 内容检查；依据 SA1-017：文件系统识别只按档案表+只读探针，内容级校验不纳入；锚 crates/core/src/fs/catalog.rs

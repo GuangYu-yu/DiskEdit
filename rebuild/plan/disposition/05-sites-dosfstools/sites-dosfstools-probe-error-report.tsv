@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-dosfstools-00363	sites	待判	
+dosfstools-00363	sites	裁剪	fatlabel --info 显示面不暴露（打开设备失败仅在未暴露模式下触发）。依据：SA2-011、特性依据=工具显示面

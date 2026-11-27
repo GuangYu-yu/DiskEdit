@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-gdisk-00036	sites	待判	
-gdisk-00052	sites	待判	
-gdisk-00055	sites	待判	
+gdisk-00036	sites	认领	读打开失败（含 EACCES root 提示）↔ 打开失败拒绝+提示由报告层承担；依据 SA1-005
+gdisk-00052	sites	认领	DiskSize 各法皆败回退常规文件 ↔ 镜像按文件元数据尺寸、块设备按 ioctl；判不了按 Unknown 拒绝不猜（I5）
+gdisk-00055	sites	裁剪	Windows Seek 失败；Windows 后端未纳入

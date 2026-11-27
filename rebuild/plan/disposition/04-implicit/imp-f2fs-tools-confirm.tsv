@@ -1,36 +1,36 @@
 row_id	ledger	state	note
-f2fs-tools-imp-00003	implicit	待判	
-f2fs-tools-imp-00004	implicit	待判	
-f2fs-tools-imp-00005	implicit	待判	
-f2fs-tools-imp-00006	implicit	待判	
-f2fs-tools-imp-00007	implicit	待判	
-f2fs-tools-imp-00008	implicit	待判	
-f2fs-tools-imp-00011	implicit	待判	
-f2fs-tools-imp-00012	implicit	待判	
-f2fs-tools-imp-00013	implicit	待判	
-f2fs-tools-imp-00014	implicit	待判	
-f2fs-tools-imp-00015	implicit	待判	
-f2fs-tools-imp-00016	implicit	待判	
-f2fs-tools-imp-00017	implicit	待判	
-f2fs-tools-imp-00018	implicit	待判	
-f2fs-tools-imp-00019	implicit	待判	
-f2fs-tools-imp-00020	implicit	待判	
-f2fs-tools-imp-00021	implicit	待判	
-f2fs-tools-imp-00022	implicit	待判	
-f2fs-tools-imp-00023	implicit	待判	
-f2fs-tools-imp-00024	implicit	待判	
-f2fs-tools-imp-00025	implicit	待判	
-f2fs-tools-imp-00026	implicit	待判	
-f2fs-tools-imp-00027	implicit	待判	
-f2fs-tools-imp-00028	implicit	待判	
-f2fs-tools-imp-00029	implicit	待判	
-f2fs-tools-imp-00030	implicit	待判	
-f2fs-tools-imp-00031	implicit	待判	
-f2fs-tools-imp-00032	implicit	待判	
-f2fs-tools-imp-00033	implicit	待判	
-f2fs-tools-imp-00034	implicit	待判	
-f2fs-tools-imp-00035	implicit	待判	
-f2fs-tools-imp-00036	implicit	待判	
-f2fs-tools-imp-00037	implicit	待判	
-f2fs-tools-imp-00040	implicit	待判	
-f2fs-tools-imp-00042	implicit	待判	
+f2fs-tools-imp-00003	implicit	认领	mkfs.f2fs -f 覆写闸 ↔ 覆写闸（SA1-005）+mkfs 覆盖面（SA2-012）
+f2fs-tools-imp-00004	implicit	认领	同上
+f2fs-tools-imp-00005	implicit	认领	同上
+f2fs-tools-imp-00006	implicit	认领	同上
+f2fs-tools-imp-00007	implicit	认领	同上
+f2fs-tools-imp-00008	implicit	认领	同上
+f2fs-tools-imp-00011	implicit	裁剪	dump.f2fs 调试工具面（force MSG 输出）；未纳入
+f2fs-tools-imp-00012	implicit	认领	同上
+f2fs-tools-imp-00013	implicit	认领	同上
+f2fs-tools-imp-00014	implicit	认领	同上
+f2fs-tools-imp-00015	implicit	认领	同上
+f2fs-tools-imp-00016	implicit	认领	同上
+f2fs-tools-imp-00017	implicit	认领	同上
+f2fs-tools-imp-00018	implicit	认领	同上
+f2fs-tools-imp-00019	implicit	认领	同上
+f2fs-tools-imp-00020	implicit	认领	同上
+f2fs-tools-imp-00021	implicit	认领	同上
+f2fs-tools-imp-00022	implicit	认领	同上
+f2fs-tools-imp-00023	implicit	认领	fsck.f2fs force 修复 ↔ 档案表固定步序 fsck→resize（SA2-010）；check 无只读旗标按不支持拒绝（SA2-013）
+f2fs-tools-imp-00024	implicit	认领	同上
+f2fs-tools-imp-00025	implicit	认领	同上
+f2fs-tools-imp-00026	implicit	认领	同上
+f2fs-tools-imp-00027	implicit	认领	同上
+f2fs-tools-imp-00028	implicit	认领	同上（main force 装配）；SA2-010/SA2-013
+f2fs-tools-imp-00029	implicit	认领	同上
+f2fs-tools-imp-00030	implicit	认领	同上
+f2fs-tools-imp-00031	implicit	认领	同上
+f2fs-tools-imp-00032	implicit	认领	同上
+f2fs-tools-imp-00033	implicit	认领	同上
+f2fs-tools-imp-00034	implicit	认领	同上
+f2fs-tools-imp-00035	implicit	裁剪	checkpoint force_stop 内部状态分支；工具内部
+f2fs-tools-imp-00036	implicit	认领	同上
+f2fs-tools-imp-00037	implicit	认领	resize.f2fs force ↔ 档案表 resize 步固定调用；依据 SA2-010
+f2fs-tools-imp-00040	implicit	认领	只读/强制判定 ↔ 只读命令恒只读、写需显式确认；依据 SA1-002/SA1-005
+f2fs-tools-imp-00042	implicit	认领	写打开前只读/强制判定 ↔ 只读命令不进入写路径（SA1-002）；依据 SA1-005

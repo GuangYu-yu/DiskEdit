@@ -1,69 +1,69 @@
 row_id	ledger	state	note
-btrfs-progs-00002	sites	待判	
-btrfs-progs-00003	sites	待判	
-btrfs-progs-00004	sites	待判	
-btrfs-progs-00005	sites	待判	
-btrfs-progs-00006	sites	待判	
-btrfs-progs-00007	sites	待判	
-btrfs-progs-00008	sites	待判	
-btrfs-progs-00011	sites	待判	
-btrfs-progs-00012	sites	待判	
-btrfs-progs-00014	sites	待判	
-btrfs-progs-00016	sites	待判	
-btrfs-progs-00018	sites	待判	
-btrfs-progs-00022	sites	待判	
-btrfs-progs-00024	sites	待判	
-btrfs-progs-00034	sites	待判	
-btrfs-progs-00036	sites	待判	
-btrfs-progs-00037	sites	待判	
-btrfs-progs-00039	sites	待判	
-btrfs-progs-00041	sites	待判	
-btrfs-progs-00043	sites	待判	
-btrfs-progs-00045	sites	待判	
-btrfs-progs-00047	sites	待判	
-btrfs-progs-00059	sites	待判	
-btrfs-progs-00061	sites	待判	
-btrfs-progs-00063	sites	待判	
-btrfs-progs-00065	sites	待判	
-btrfs-progs-00067	sites	待判	
-btrfs-progs-00069	sites	待判	
-btrfs-progs-00073	sites	待判	
-btrfs-progs-00075	sites	待判	
-btrfs-progs-00079	sites	待判	
-btrfs-progs-00081	sites	待判	
-btrfs-progs-00083	sites	待判	
-btrfs-progs-00084	sites	待判	
-btrfs-progs-00085	sites	待判	
-btrfs-progs-00086	sites	待判	
-btrfs-progs-00087	sites	待判	
-btrfs-progs-00088	sites	待判	
-btrfs-progs-00092	sites	待判	
-btrfs-progs-00093	sites	待判	
-btrfs-progs-00095	sites	待判	
-btrfs-progs-00096	sites	待判	
-btrfs-progs-00098	sites	待判	
-btrfs-progs-00099	sites	待判	
-btrfs-progs-00100	sites	待判	
-btrfs-progs-00101	sites	待判	
-btrfs-progs-00103	sites	待判	
-btrfs-progs-00104	sites	待判	
-btrfs-progs-00105	sites	待判	
-btrfs-progs-00107	sites	待判	
-btrfs-progs-00108	sites	待判	
-btrfs-progs-00109	sites	待判	
-btrfs-progs-00110	sites	待判	
-btrfs-progs-00111	sites	待判	
-btrfs-progs-00123	sites	待判	
-btrfs-progs-00125	sites	待判	
-btrfs-progs-00136	sites	待判	
-btrfs-progs-00138	sites	待判	
-btrfs-progs-00140	sites	待判	
-btrfs-progs-00142	sites	待判	
-btrfs-progs-00145	sites	待判	
-btrfs-progs-00147	sites	待判	
-btrfs-progs-00150	sites	待判	
-btrfs-progs-00152	sites	待判	
-btrfs-progs-00153	sites	待判	
-btrfs-progs-00156	sites	待判	
-btrfs-progs-00157	sites	待判	
-btrfs-progs-00158	sites	待判	
+btrfs-progs-00002	sites	裁剪	裁剪：`btrfs filesystem df/show/sync/scan`、defrag、mkswapfile、filesystem usage、property、device 级子命令的失败清理跳转——绑定未消费子命令（档案表只登记 resize/check/attrs/mkfs，crates/core/src/fs/catalog.rs）
+btrfs-progs-00003	sites	裁剪	同上
+btrfs-progs-00004	sites	裁剪	同上
+btrfs-progs-00005	sites	裁剪	同上
+btrfs-progs-00006	sites	裁剪	同上
+btrfs-progs-00007	sites	裁剪	同上
+btrfs-progs-00008	sites	裁剪	同上
+btrfs-progs-00011	sites	裁剪	同上
+btrfs-progs-00012	sites	裁剪	同上
+btrfs-progs-00014	sites	裁剪	同上
+btrfs-progs-00016	sites	裁剪	同上
+btrfs-progs-00018	sites	裁剪	同上
+btrfs-progs-00022	sites	裁剪	同上
+btrfs-progs-00024	sites	裁剪	同上
+btrfs-progs-00034	sites	拒绝	拒绝：resize 参数校验的 goto out 清理跳转——C 控制流载体，校验语义已在同函数 refusal 行按 SA2-006/007/008/016 认领；Rust 侧错误类型化传播，逐点复刻属多虑（架构差异-多虑）
+btrfs-progs-00036	sites	拒绝	同上
+btrfs-progs-00037	sites	拒绝	同上
+btrfs-progs-00039	sites	拒绝	同上
+btrfs-progs-00041	sites	拒绝	同上
+btrfs-progs-00043	sites	拒绝	同上
+btrfs-progs-00045	sites	拒绝	同上
+btrfs-progs-00047	sites	拒绝	同上
+btrfs-progs-00059	sites	裁剪	裁剪：`btrfs filesystem df/show/sync/scan`、defrag、mkswapfile、filesystem usage、property、device 级子命令的失败清理跳转——绑定未消费子命令（档案表只登记 resize/check/attrs/mkfs，crates/core/src/fs/catalog.rs）
+btrfs-progs-00061	sites	裁剪	同上
+btrfs-progs-00063	sites	裁剪	同上
+btrfs-progs-00065	sites	裁剪	同上
+btrfs-progs-00067	sites	裁剪	同上
+btrfs-progs-00069	sites	裁剪	同上
+btrfs-progs-00073	sites	裁剪	同上
+btrfs-progs-00075	sites	裁剪	同上
+btrfs-progs-00079	sites	裁剪	同上
+btrfs-progs-00081	sites	裁剪	同上
+btrfs-progs-00083	sites	裁剪	同上
+btrfs-progs-00084	sites	裁剪	同上
+btrfs-progs-00085	sites	裁剪	同上
+btrfs-progs-00086	sites	裁剪	同上
+btrfs-progs-00087	sites	裁剪	同上
+btrfs-progs-00088	sites	裁剪	同上
+btrfs-progs-00092	sites	裁剪	同上
+btrfs-progs-00093	sites	裁剪	同上
+btrfs-progs-00095	sites	裁剪	同上
+btrfs-progs-00096	sites	裁剪	同上
+btrfs-progs-00098	sites	裁剪	同上
+btrfs-progs-00099	sites	裁剪	同上
+btrfs-progs-00100	sites	裁剪	同上
+btrfs-progs-00101	sites	裁剪	同上
+btrfs-progs-00103	sites	裁剪	同上
+btrfs-progs-00104	sites	裁剪	同上
+btrfs-progs-00105	sites	裁剪	同上
+btrfs-progs-00107	sites	裁剪	同上
+btrfs-progs-00108	sites	裁剪	同上
+btrfs-progs-00109	sites	裁剪	同上
+btrfs-progs-00110	sites	裁剪	同上
+btrfs-progs-00111	sites	裁剪	同上
+btrfs-progs-00123	sites	裁剪	同上
+btrfs-progs-00125	sites	裁剪	同上
+btrfs-progs-00136	sites	裁剪	同上
+btrfs-progs-00138	sites	裁剪	同上
+btrfs-progs-00140	sites	裁剪	同上
+btrfs-progs-00142	sites	裁剪	同上
+btrfs-progs-00145	sites	裁剪	同上
+btrfs-progs-00147	sites	裁剪	同上
+btrfs-progs-00150	sites	裁剪	同上
+btrfs-progs-00152	sites	裁剪	同上
+btrfs-progs-00153	sites	裁剪	同上
+btrfs-progs-00156	sites	裁剪	同上
+btrfs-progs-00157	sites	裁剪	同上
+btrfs-progs-00158	sites	裁剪	同上

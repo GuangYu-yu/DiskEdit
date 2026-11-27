@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-testdisk-00027	sites	待判	
-testdisk-00058	sites	待判	
-testdisk-00072	sites	待判	
-testdisk-00081	sites	待判	
-testdisk-00085	sites	待判	
-testdisk-00093	sites	待判	
-testdisk-00094	sites	待判	
-testdisk-00099	sites	待判	
+testdisk-00027	sites	裁剪	交互菜单入口断言（add_partition_*_cli/chgtype assert current_cmd；humax/i386/mac/sun/xbox 行另属老盘标）；本实现无交互菜单，编辑经 add/delete/set 命令+判定层；依据 SA1-016/交互面裁剪
+testdisk-00058	sites	裁剪	同上
+testdisk-00072	sites	裁剪	同上
+testdisk-00081	sites	裁剪	同上
+testdisk-00085	sites	裁剪	同上
+testdisk-00093	sites	裁剪	同上
+testdisk-00094	sites	裁剪	同上
+testdisk-00099	sites	裁剪	同上

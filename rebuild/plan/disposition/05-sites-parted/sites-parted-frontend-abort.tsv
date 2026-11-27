@@ -1,8 +1,8 @@
 row_id	ledger	state	note
-parted-00288	sites	待判	
-parted-01981	sites	待判	
-parted-01985	sites	待判	
-parted-01987	sites	待判	
-parted-01993	sites	待判	
-parted-01995	sites	待判	
-parted-01998	sites	待判	
+parted-00288	sites	拒绝	拒绝|架构差异-多虑：信号崩溃诊断（abort/信号处理器安装）；Rust panic 机制承担；SA1-021
+parted-01981	sites	拒绝	同上
+parted-01985	sites	拒绝	同上
+parted-01987	sites	拒绝	同上
+parted-01993	sites	拒绝	同上
+parted-01995	sites	拒绝	同上
+parted-01998	sites	拒绝	同上

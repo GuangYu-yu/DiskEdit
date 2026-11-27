@@ -1,9 +1,9 @@
 row_id	ledger	state	note
-gdisk-00029	sites	待判	
-gdisk-00031	sites	待判	
-gdisk-00033	sites	待判	
-gdisk-00049	sites	待判	
-gdisk-00051	sites	待判	
-gdisk-00057	sites	待判	
-gdisk-00059	sites	待判	
-gdisk-00072	sites	待判	
+gdisk-00029	sites	认领	main 入参 exit(1)/用法 exit ↔ 用法错误退 2 单源（exit.rs::USAGE；R0046）——exit 风格收敛为报告层出口
+gdisk-00031	sites	认领	main 入参 exit(1)/用法 exit ↔ 用法错误退 2 单源（exit.rs::USAGE；R0046）——exit 风格收敛为报告层出口
+gdisk-00033	sites	拒绝	同上（Read/Write 分配失败 exit；架构差异-多虑；windows 行另属平台未纳入）
+gdisk-00049	sites	拒绝	理由：内存分配失败由语言运行时 abort 承担，逐点 exit 检查属多余；依据 架构差异-多虑——防御预算在唯一写点+回读（src/app/execute/write.rs::WriteChannel）；SA1-009 退出码单源
+gdisk-00051	sites	拒绝	同上（Read/Write 分配失败 exit；架构差异-多虑；windows 行另属平台未纳入）
+gdisk-00057	sites	拒绝	同上（Read/Write 分配失败 exit；架构差异-多虑；windows 行另属平台未纳入）
+gdisk-00059	sites	拒绝	同上（Read/Write 分配失败 exit；架构差异-多虑；windows 行另属平台未纳入）
+gdisk-00072	sites	拒绝	同上（Read/Write 分配失败 exit；架构差异-多虑；windows 行另属平台未纳入）

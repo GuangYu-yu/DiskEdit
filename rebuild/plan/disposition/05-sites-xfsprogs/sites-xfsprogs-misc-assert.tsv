@@ -1,2 +1,2 @@
 row_id	ledger	state	note
-xfsprogs-00427	sites	待判	
+xfsprogs-00427	sites	拒绝	拒绝：xfs_db 内部 ASSERT——db 工具不在消费面（本实现不消费 xfs_db），断言逐点复刻属多虑（架构差异-多虑）

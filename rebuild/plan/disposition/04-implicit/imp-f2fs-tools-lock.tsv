@@ -1,4 +1,4 @@
 row_id	ledger	state	note
-f2fs-tools-imp-00041	implicit	待判	
-f2fs-tools-imp-00043	implicit	待判	
-f2fs-tools-imp-00044	implicit	待判	
+f2fs-tools-imp-00041	implicit	认领	依据 SA1-004/B5/B9：独占语义由目标锁+占用闸承担，锁不可得即 Occupied 拒绝，不降级共享打开；锚 src/app/decide/refusal.rs::Occupied、src/platform/linux/mod.rs（记录文件 O_CREAT|O_EXCL）
+f2fs-tools-imp-00043	implicit	认领	同上
+f2fs-tools-imp-00044	implicit	认领	同上

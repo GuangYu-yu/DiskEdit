@@ -1,30 +1,30 @@
 row_id	ledger	state	note
-libfdisk-00207	sites	待判	
-libfdisk-00213	sites	待判	
-libfdisk-00214	sites	待判	
-libfdisk-00215	sites	待判	
-libfdisk-00226	sites	待判	
-libfdisk-00228	sites	待判	
-libfdisk-00229	sites	待判	
-libfdisk-00236	sites	待判	
-libfdisk-00244	sites	待判	
-libfdisk-00254	sites	待判	
-libfdisk-00271	sites	待判	
-libfdisk-00272	sites	待判	
-libfdisk-00273	sites	待判	
-libfdisk-00274	sites	待判	
-libfdisk-00275	sites	待判	
-libfdisk-00276	sites	待判	
-libfdisk-00277	sites	待判	
-libfdisk-00278	sites	待判	
-libfdisk-00286	sites	待判	
-libfdisk-00287	sites	待判	
-libfdisk-00293	sites	待判	
-libfdisk-00295	sites	待判	
-libfdisk-00297	sites	待判	
-libfdisk-00301	sites	待判	
-libfdisk-00332	sites	待判	
-libfdisk-00333	sites	待判	
-libfdisk-00336	sites	待判	
-libfdisk-00346	sites	待判	
-libfdisk-00356	sites	待判	
+libfdisk-00207	sites	认领	槽位分配已有：TableFull（primary 1..4）。依据：SA1-027
+libfdisk-00213	sites	裁剪	DOS-compatible/柱面单位等老模式提示：交互面与 CHS 面不实现。依据：SA1-028、特性依据=交互提示
+libfdisk-00214	sites	裁剪	同上
+libfdisk-00215	sites	裁剪	同上
+libfdisk-00226	sites	差异	D17：读侧宽容差异：参考对 EBR 链尾损坏/多余数据警告并跳过，本实现整体读失败拒绝（更保守不猜）。保持拒绝语义并登记差异
+libfdisk-00228	sites	差异	同上（D17）
+libfdisk-00229	sites	差异	同上（D17）
+libfdisk-00236	sites	拒绝	手工写 PARTUUID/盘 GUID 不提供：身份不手工改写，去重走 copy 派生或基线工具。依据：SA1-007、SA3-001（MBR 盘 ID 设置不在 set 面）
+libfdisk-00244	sites	差异	D17：读侧宽容差异：参考对 EBR 链尾损坏/多余数据警告并跳过，本实现整体读失败拒绝（更保守不猜）。保持拒绝语义并登记差异
+libfdisk-00254	sites	认领	槽位上限/占用已有：TableFull/SlotOccupied（primary 1..4）。依据：SA1-027
+libfdisk-00271	sites	裁剪	CHS 定案：不实现 BIOS 几何换算，CHS 一律写占位（PMBR 00 02 00/FF FF FF、条目 FE FF FF）。依据：SA1-027、SA1-028
+libfdisk-00272	sites	裁剪	同上
+libfdisk-00273	sites	裁剪	同上
+libfdisk-00274	sites	裁剪	同上
+libfdisk-00275	sites	裁剪	同上
+libfdisk-00276	sites	裁剪	同上
+libfdisk-00277	sites	裁剪	同上
+libfdisk-00278	sites	裁剪	同上
+libfdisk-00286	sites	认领	MBR 校验已有：重叠/空槽/起点校验在判定层（crates/core/src/table/edit.rs Overlaps/PartitionEmpty/OutsideUsable）。依据：SA1-027
+libfdisk-00287	sites	认领	同上
+libfdisk-00293	sites	认领	槽位上限/占用已有：TableFull/SlotOccupied（primary 1..4）。依据：SA1-027
+libfdisk-00295	sites	认领	扩展容器不编辑：ContainerTypeByte 一律拒绝（crates/core/src/table/edit.rs MBR_CONTAINER_TYPES）。依据：SA1-027 同口径
+libfdisk-00297	sites	认领	同上
+libfdisk-00301	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面
+libfdisk-00332	sites	认领	扩展容器不编辑：ContainerTypeByte 一律拒绝（crates/core/src/table/edit.rs MBR_CONTAINER_TYPES）。依据：SA1-027 同口径
+libfdisk-00333	sites	认领	type 0x00 拒绝已有：ZeroTypeByte（比参考警告更严格）。依据：SA1-027
+libfdisk-00336	sites	裁剪	fdisk/cfdisk 交互菜单/提示/prompt 类：交互面未实现（非交互单命令 CLI，src/app/cli/parse.rs）。依据：SA1-010、特性依据=交互面（print_chain_of_logicals 调试输出）
+libfdisk-00346	sites	认领	起点重定位校验已有：resize 拒绝越界/重叠（resize_mbr OutsideUsable/Overlaps）。依据：SA1-014、SA1-027
+libfdisk-00356	sites	认领	待实现：set flag boot 前应拒绝扩展容器记录（参考对 extended 提示 is an extended partition）；现 set_mbr_boot 只查 require_live_mbr 未查 MBR_CONTAINER_TYPES。根因：缺校验(签名/边界/容量)。建议硬约束：edit.rs set_mbr_boot 前置 check_mbr_type_byte 并补 tests/case_runner.rs 单测

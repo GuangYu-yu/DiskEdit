@@ -1,84 +1,84 @@
 row_id	ledger	state	note
-parted-01832	sites	待判	
-parted-01833	sites	待判	
-parted-01834	sites	待判	
-parted-01835	sites	待判	
-parted-01836	sites	待判	
-parted-01840	sites	待判	
-parted-01841	sites	待判	
-parted-01843	sites	待判	
-parted-01845	sites	待判	
-parted-01847	sites	待判	
-parted-01849	sites	待判	
-parted-01850	sites	待判	
-parted-01853	sites	待判	
-parted-01854	sites	待判	
-parted-01856	sites	待判	
-parted-01860	sites	待判	
-parted-01861	sites	待判	
-parted-01862	sites	待判	
-parted-01863	sites	待判	
-parted-01864	sites	待判	
-parted-01867	sites	待判	
-parted-01869	sites	待判	
-parted-01870	sites	待判	
-parted-01871	sites	待判	
-parted-01872	sites	待判	
-parted-01873	sites	待判	
-parted-01877	sites	待判	
-parted-01879	sites	待判	
-parted-01881	sites	待判	
-parted-01884	sites	待判	
-parted-01885	sites	待判	
-parted-01887	sites	待判	
-parted-01890	sites	待判	
-parted-01891	sites	待判	
-parted-01892	sites	待判	
-parted-01896	sites	待判	
-parted-01897	sites	待判	
-parted-01898	sites	待判	
-parted-01900	sites	待判	
-parted-01902	sites	待判	
-parted-01903	sites	待判	
-parted-01905	sites	待判	
-parted-01906	sites	待判	
-parted-01908	sites	待判	
-parted-01909	sites	待判	
-parted-01911	sites	待判	
-parted-01912	sites	待判	
-parted-01915	sites	待判	
-parted-01916	sites	待判	
-parted-01918	sites	待判	
-parted-01919	sites	待判	
-parted-01920	sites	待判	
-parted-01921	sites	待判	
-parted-01924	sites	待判	
-parted-01926	sites	待判	
-parted-01928	sites	待判	
-parted-01931	sites	待判	
-parted-01933	sites	待判	
-parted-01935	sites	待判	
-parted-01936	sites	待判	
-parted-01937	sites	待判	
-parted-01938	sites	待判	
-parted-01940	sites	待判	
-parted-01942	sites	待判	
-parted-01944	sites	待判	
-parted-01945	sites	待判	
-parted-01946	sites	待判	
-parted-01952	sites	待判	
-parted-01953	sites	待判	
-parted-01954	sites	待判	
-parted-01955	sites	待判	
-parted-01956	sites	待判	
-parted-01959	sites	待判	
-parted-01960	sites	待判	
-parted-01963	sites	待判	
-parted-01964	sites	待判	
-parted-01965	sites	待判	
-parted-01966	sites	待判	
-parted-02006	sites	待判	
-parted-02007	sites	待判	
-parted-02021	sites	待判	
-parted-02024	sites	待判	
-parted-02025	sites	待判	
+parted-01832	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01833	sites	裁剪	裁剪|交互确认（毁盘告示）；非交互等价=--overwrite-data 拒绝（SA1-005）
+parted-01834	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01835	sites	认领	认领|表写单事务提交已有：src/app/execute/table.rs（SA1-001 重定位与规范化并入同一表写）
+parted-01836	sites	认领	认领|镜像目标不做内核同步、真实设备走 BLKPG：SA1-013（src/platform/linux）
+parted-01840	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01841	sites	认领	认领|扩展分区读侧已有：crates/core/src/table/mbr/extended.rs；写侧逻辑分区按越界拒绝（crates/core/src/table/edit.rs）
+parted-01843	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01845	sites	拒绝	同上
+parted-01847	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01849	sites	裁剪	裁剪|交互 IEC 端点微调；非交互按 --align 下取整（SA1-014）
+parted-01850	sites	裁剪	裁剪|交互边界吸附 snap_to_boundaries；非交互显式 --start/--end（R0173/R0174）
+parted-01853	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01854	sites	认领	认领|place 范围校验已有：R0182/R0173
+parted-01856	sites	认领	认领|失败不谎报完成、登记原像可回滚已有：src/app/execute/transaction.rs（SA1-011/SA1-012 同源纪律）
+parted-01860	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01861	sites	拒绝	同上
+parted-01862	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）（LBA 旗标为 CHS 时代产物）
+parted-01863	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01864	sites	认领	认领|R0165（MBR 上 --name → GptRequired）
+parted-01867	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01869	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01870	sites	认领	认领|set name 校验已有：R0127/R0128（name 为空/未知属性→TableEdit）
+parted-01871	sites	认领	同上
+parted-01872	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01873	sites	认领	认领|R0114/R0176（type 按标签分派）
+parted-01877	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01879	sites	拒绝	同上
+parted-01881	sites	认领	认领|R0115（MBR type 非 0xNN → TableEdit）
+parted-01884	sites	认领	认领|R0115
+parted-01885	sites	认领	同上
+parted-01887	sites	认领	认领|R0114
+parted-01890	sites	认领	同上
+parted-01891	sites	认领	同上
+parted-01892	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01896	sites	认领	认领|占用闸已有：SA1-004（写命令先过占用闸）
+parted-01897	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01898	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01900	sites	裁剪	同上
+parted-01902	sites	拒绝	拒绝|交互 resize 的 fuzz 范围计算；非交互显式 --start/--end（R0173）+SA1-014 下取整
+parted-01903	sites	拒绝	同上
+parted-01905	sites	裁剪	裁剪|BIOS CHS 几何按 SA1-028 定案：不读几何、不写真实 CHS，MBR 一律 LBA 占位（SA1-027）
+parted-01906	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01908	sites	拒绝	拒绝|交互 busy 分区 End 值回推细节；本实现在线收缩仅 btrfs 且按固定次序（SA1-004/SA1-013）
+parted-01909	sites	拒绝	同上
+parted-01911	sites	裁剪	裁剪|交互 IEC 端点微调；非交互按 --align 下取整（SA1-014）
+parted-01912	sites	认领	认领|拒绝不安全收缩已有：SA1-014（tests/case_runner.rs::resize_rewrites_the_table_and_refuses_unsafe_shrinks）
+parted-01915	sites	认领	认领|表写已有：src/app/execute/table.rs（在线缩小次序=缩 fs→表→BLKPG，SA1-004）
+parted-01916	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01918	sites	认领	认领|占用闸已有：SA1-004
+parted-01919	sites	认领	认领|delete/表写已有：crates/core/src/table/edit.rs + src/app/execute/table.rs
+parted-01920	sites	认领	同上
+parted-01921	sites	认领	认领|镜像目标不做内核同步、真实设备走 BLKPG：SA1-013（src/platform/linux）
+parted-01924	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01926	sites	裁剪	同上
+parted-01928	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01931	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01933	sites	裁剪	同上
+parted-01935	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01936	sites	认领	认领|flag 写与表写已有：R0119/R0120+SA1-015；src/app/execute/table.rs
+parted-01937	sites	认领	认领|镜像目标不做内核同步、真实设备走 BLKPG：SA1-013（src/platform/linux）
+parted-01938	sites	裁剪	裁剪|交互 prompt 面（command_line_get_*）：本实现参数化 CLI 恒非交互，非交互等价拒绝见 refusal-map 对应 R 行
+parted-01940	sites	裁剪	同上
+parted-01942	sites	裁剪	同上
+parted-01944	sites	拒绝	拒绝|架构差异-多虑：前端 UI/strlist/jsonwrt 内部不变量断言；Rust 类型承担；SA1-021
+parted-01945	sites	认领	认领|flag 写与表写已有：R0119/R0120+SA1-015；src/app/execute/table.rs
+parted-01946	sites	认领	认领|镜像目标不做内核同步、真实设备走 BLKPG：SA1-013（src/platform/linux）
+parted-01952	sites	拒绝	拒绝|架构差异-多虑：前端启动脚手架（消息/命令表/getuid 告警/timer）；Rust main 承担
+parted-01953	sites	裁剪	裁剪|交互/脚本双模式分支：本实现恒非交互
+parted-01954	sites	拒绝	拒绝|架构差异-多虑：前端启动脚手架（消息/命令表/getuid 告警/timer）；Rust main 承担
+parted-01955	sites	拒绝	同上
+parted-01956	sites	拒绝	同上
+parted-01959	sites	拒绝	拒绝|架构差异-多虑：gettext/iconv i18n 面；Rust 无 i18n 面板，恒非交互
+parted-01960	sites	拒绝	同上
+parted-01963	sites	拒绝	同上
+parted-01964	sites	拒绝	同上
+parted-01965	sites	拒绝	同上
+parted-01966	sites	拒绝	同上
+parted-02006	sites	拒绝	拒绝|架构差异-多虑：int 溢出防护断言；Rust 类型与 checked 运算承担（R0089/R0091）
+parted-02007	sites	拒绝	同上
+parted-02021	sites	裁剪	裁剪|non_interactive 模式检查；本实现恒非交互
+parted-02024	sites	裁剪	同上
+parted-02025	sites	裁剪	同上
