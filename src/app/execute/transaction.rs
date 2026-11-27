@@ -87,6 +87,13 @@ impl<'a> RecordSession<'a> {
         {
             let decoded =
                 record::decode(&bytes).map_err(|error| ExecError::Record(error.to_string()))?;
+            // 记录目录按身份派生，但记录内容仍要自证归属：末帧未终结只说明"没做完"，
+            // 不说明它是本目标的记录。指向别的载体时拒绝，不能把它当作本目标的原像。
+            if !decoded.body.target.matches(identity) {
+                return Err(ExecError::Record(
+                    "the record targets a different device".to_owned(),
+                ));
+            }
             let last_pending = decoded
                 .frames
                 .last()

@@ -803,3 +803,57 @@ fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
         "前缀不符时不得写目标"
     );
 }
+
+// covers: F8
+#[test]
+fn a_pending_record_for_another_target_is_not_adopted() {
+    // 记录目录按身份派生，但记录本身的 `body.target` 仍可能指向别的载体（例如
+    // 从另一台机器恢复目录、或记录被替换）。主写路径不得只看"末帧未终结"就接管：
+    // 目标指纹不符时必须拒绝，并且不得改动目标字节或删除这条记录。
+    let bytes = initial_bytes();
+    let plan = table_only_plan(&bytes);
+    let memory = Memory::new(bytes.clone(), Faults::default());
+    let record = diskedit_core::record::encode(
+        &diskedit_core::record::RecordBody {
+            target: Fingerprint::strong([0x99; 32]),
+            geometry_generation: 0,
+            plan_digest: plan.request_digest(),
+        },
+        &[diskedit_core::record::Frame {
+            seq: 0,
+            kind: FrameKind::Intent,
+            completed: false,
+            irreversible: false,
+            intent: b"write-table".to_vec(),
+            regions: Vec::new(),
+        }],
+    )
+    .expect("记录可编码");
+    let path = PathBuf::from("/state")
+        .join("images")
+        .join(hex16(IDENTITY))
+        .join(RECORD_FILE);
+    memory
+        .files
+        .lock()
+        .unwrap()
+        .insert(path.clone(), record.clone());
+    let outcome = table::run(&memory, Path::new("memory"), &plan);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert_eq!(exit_of(&outcome), REFUSED);
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        bytes.as_slice(),
+        "不得把别的载体的记录当作本目标的原像"
+    );
+    assert_eq!(
+        memory.files.lock().unwrap().get(&path),
+        Some(&record),
+        "拒绝后记录应原样保留"
+    );
+}
