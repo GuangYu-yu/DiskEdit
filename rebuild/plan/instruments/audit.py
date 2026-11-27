@@ -25,6 +25,7 @@ fail/error/err/out/done/cleanup 开头）。结果写 `plan/baseline/defense-cen
 from __future__ import annotations
 
 import argparse
+import csv
 import pathlib
 import re
 import sys
@@ -251,6 +252,99 @@ def check(args: argparse.Namespace) -> int:
     return 0
 
 
+DISPOSITION_STATES = {"认领", "拒绝", "差异", "裁剪", "待判"}
+
+
+def reference_ids(ref_dir: pathlib.Path) -> dict[str, str]:
+    """返回 reference 账本全部行 id -> 所属表。"""
+    result: dict[str, str] = {}
+    tables = [
+        ("sites", ref_dir / "sites"),
+        ("docs", ref_dir / "docs.tsv"),
+        ("incidents", ref_dir / "incidents.tsv"),
+        ("implicit", ref_dir / "implicit.tsv"),
+        ("specs", ref_dir / "specs.tsv"),
+    ]
+    for ledger, path in tables:
+        if path.is_dir():
+            for member in sorted(path.glob("*.tsv")):
+                with member.open(newline="", encoding="utf-8") as f:
+                    for row in csv.DictReader(f, delimiter="\t"):
+                        result[row["site_id"]] = ledger
+        else:
+            with path.open(newline="", encoding="utf-8") as f:
+                key = {
+                    "docs": "doc_id",
+                    "incidents": "incident_id",
+                    "implicit": "implicit_id",
+                    "specs": "spec_id",
+                }[ledger]
+                for row in csv.DictReader(f, delimiter="\t"):
+                    result[row[key]] = ledger
+    return result
+
+
+def check_disposition(args: argparse.Namespace) -> int:
+    """处置门：批次覆盖不重不漏，状态合法，裁剪/差异链证据。"""
+    errors: list[str] = []
+    known = reference_ids(args.ref)
+    if not known:
+        errors.append(f"{args.ref}: 未读到任何 reference 行")
+    queue_path = args.disp / "queue.tsv"
+    seen: dict[str, str] = {}
+    batch_count = 0
+    judged = 0
+    with queue_path.open(newline="", encoding="utf-8") as f:
+        for line_number, row in enumerate(csv.DictReader(f, delimiter="\t"), start=2):
+            batch_count += 1
+            batch_path = args.disp / f"{row['batch']}.tsv"
+            md_path = args.disp / f"{row['evidence_md']}"
+            if not batch_path.exists():
+                errors.append(f"queue.tsv:{line_number}: 批次文件缺失 {batch_path}")
+                continue
+            if not md_path.exists():
+                errors.append(f"queue.tsv:{line_number}: 依据文件缺失 {md_path}")
+            declared = int(row["rows"])
+            with batch_path.open(newline="", encoding="utf-8") as bf:
+                members = list(csv.DictReader(bf, delimiter="\t"))
+            if len(members) != declared:
+                errors.append(f"{batch_path}: 声明 {declared} 行，实际 {len(members)}")
+            for member in members:
+                rid = member["row_id"]
+                if rid not in known:
+                    errors.append(f"{batch_path}: {rid} 不在 reference 账本中")
+                elif known[rid] != member["ledger"]:
+                    errors.append(f"{batch_path}: {rid} 表属不一致 {member['ledger']}≠{known[rid]}")
+                elif rid in seen:
+                    errors.append(f"{batch_path}: {rid} 与 {seen[rid]} 重复登记")
+                else:
+                    seen[rid] = str(batch_path)
+                if member["state"] not in DISPOSITION_STATES:
+                    errors.append(f"{batch_path}: {rid} 非法状态 {member['state']!r}")
+                elif member["state"] != "待判":
+                    judged += 1
+                    if member["state"] == "裁剪" and md_path.exists():
+                        text = md_path.read_text(encoding="utf-8")
+                        if "撤回条件" not in text or "（裁剪/差异必填）" in text:
+                            errors.append(f"{md_path}: 裁剪批次须含撤回条件且不得为模板占位")
+                    if member["state"] == "差异":
+                        if not re.search(r"D\d+", member["note"]):
+                            errors.append(f"{batch_path}: {rid} 差异须在 note 链 D 编号")
+    missing = set(known) - set(seen)
+    for rid in sorted(missing)[:20]:
+        errors.append(f"未处置: {rid}")
+    if missing:
+        errors.append(f"共 {len(missing)} 行未入任何批次")
+    if errors:
+        for error in errors:
+            print(f"audit: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"disposition: {batch_count} 批覆盖 {len(seen)} 行不重不漏，已判 {judged}，待判 {len(seen) - judged}"
+    )
+    return 0
+
+
 def selftest() -> int:
     good = {
         "class_id": "SA1-001",
@@ -337,6 +431,9 @@ def main() -> int:
     count.add_argument("--tool", required=True)
     count.add_argument("--version", required=True)
     count.add_argument("--out", type=pathlib.Path, required=True)
+    disp = sub.add_parser("check-disposition")
+    disp.add_argument("--ref", type=pathlib.Path, required=True)
+    disp.add_argument("--disp", type=pathlib.Path, required=True)
     args = parser.parse_args()
     if args.command == "selftest":
         return selftest()
@@ -358,6 +455,8 @@ def main() -> int:
         )
         print(f"census: {args.tool} {args.version} files={files} total={total}")
         return 0
+    if args.command == "check-disposition":
+        return check_disposition(args)
     return check(args)
 
 
