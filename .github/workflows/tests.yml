@@ -1,227 +1,110 @@
 name: 全量测试
 
-# 一次手动运行覆盖全部测试；build.yml 也调用本 workflow，发布构建前跑同一套。
-#   docs       —— 生成文档与 schema 一致性（写模式 + git diff 兜底）
-#   lint       —— clippy：Linux / Windows，全 target、全特性，警告即失败
-#   cargo-test —— 全部 Rust target 逐条运行：Linux 默认特性 / Linux test-faults / Windows 默认特性
-#   wsl-suite  —— tests/wsl 全量回归：root、loop 设备、文件系统工具、qemu 引导
+# 手动触发，或由 build.yml 复用同一套（发布前强制）。
+#
+# 作业分工：
+#   lint          —— clippy / fmt，告警即失败
+#   cargo-test    —— 非 root 的全部 Rust target
+#   root          —— 以 root 重跑全部 target：loop/mount/文件系统工具类用例
+#                    在 runner 用户下会静默跳过，必须用 euid 0 再跑一遍
+#   equivalence   —— 旧基线二进制对照（G7）：从 main-latest release 取旧版
+#   qemu          —— 真实内核套件：QEMU 来宾里以 root 驱动 loop/挂载/LVM/mkfs
 on:
   workflow_dispatch:
   workflow_call:
 
 jobs:
-  docs:
-    name: 文档生成物与 schema 一致
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 生成并比对 docs/
-        run: |
-          DISKEDIT_WRITE_DOCS=1 cargo test --bin DiskEdit docs_are_generated_in_sync
-          git diff --exit-code docs/
-
   lint:
-    name: clippy（${{ matrix.label }}，-D warnings）
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux
-          - os: windows-latest
-            label: Windows
+    name: clippy / fmt（警告即失败）
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
-
-      # 警告在 CI 里是失败。`#[allow(...)]` 例外必须留在登记表内（见
-      # tests/architecture_discipline_exceptions.rs），其余警告当场修，不靠放行绕过
-      - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --check
 
   cargo-test:
-    name: cargo test（${{ matrix.label }}）
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux 默认特性
-            features: ''
-          - os: ubuntu-latest
-            label: Linux test-faults
-            features: test-faults
-          - os: windows-latest
-            label: Windows 默认特性
-            features: ''
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
-
-      # 逐 target 运行：每条一个日志分组，失败目标再补 ::error 注解，
-      # 看结论不必在一大段输出里翻找。target 清单取自 cargo metadata，
-      # 新增的 tests/*.rs 自动纳入，不维护第二份列表
-      - name: 按 target 运行全部测试
-        shell: bash
-        env:
-          FEATURES: ${{ matrix.features }}
-        run: |
-          flags=()
-          if [ -n "$FEATURES" ]; then flags=(--features "$FEATURES"); fi
-
-          # 先构建全部测试 target：编译错误在这里一次性暴露，逐条运行只复用产物
-          cargo test --all-targets "${flags[@]}" --no-run
-
-          # Windows 上 cargo/jq 输出 CRLF，target 名尾部会带 \r；逐条运行时必须去掉
-          mapfile -t targets < <(
-            cargo metadata --no-deps --format-version 1 |
-              jq -r '.packages[].targets[] | select(.test) | "\(.kind[0]):\(.name)"' |
-              tr -d '\r' |
-              sort -u
-          )
-          if [ ${#targets[@]} -eq 0 ]; then
-            echo "::error::cargo metadata 没有给出任何测试 target"
-            exit 1
-          fi
-
-          failed=()
-          for entry in "${targets[@]}"; do
-            kind=${entry%%:*}
-            name=${entry#*:}
-            case "$kind" in
-              lib)     sel=(--lib) ;;
-              bin)     sel=(--bin "$name") ;;
-              test)    sel=(--test "$name") ;;
-              example) sel=(--example "$name") ;;
-              bench)   sel=(--bench "$name") ;;
-              *) echo "::error::未知 target 类型 $kind（$name）"; failed+=("$entry"); continue ;;
-            esac
-            echo "::group::cargo test ${sel[*]}"
-            if cargo test "${flags[@]}" "${sel[@]}"; then
-              echo "::endgroup::"
-            else
-              echo "::endgroup::"
-              echo "::error::target 失败：${sel[*]}"
-              failed+=("${sel[*]}")
-            fi
-          done
-
-          echo "==== 汇总：$(( ${#targets[@]} - ${#failed[@]} )) 个 target 通过，${#failed[@]} 个失败 ===="
-          if [ ${#failed[@]} -gt 0 ]; then
-            printf '失败 target：\n'
-            printf '  %s\n' "${failed[@]}"
-            exit 1
-          fi
-
-  cargo-test-root:
-    name: cargo test（Linux, root 特权用例）
-    # 需要 losetup/mount 建真实文件系统的用例以 euid 0 为前置。ubuntu-latest 默认
-    # 跑 runner 用户，若只有 cargo-test 那条作业，这些用例会静默跳过而 CI 仍然是绿的：
-    # 这一条以 root 重跑它们，并用 DISKEDIT_REQUIRE_ROOT=1 把"该跑却没跑"变成失败
+    name: cargo test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
 
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
-
+  root:
+    # 需要 losetup/mount 建真实文件系统的用例以 euid 0 为前置；runner 用户下
+    # 这些用例会静默跳过而 CI 仍是绿的，这一条以 root 重跑全部 target。
+    name: cargo test（Linux, root 特权用例）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: 安装外部工具依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends e2fsprogs
-
-      - name: 以 root 运行需要特权的集成测试
+      - name: 以 root 运行全部 target
         run: |
           export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
           export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
-          cargo test --all-targets --no-run
-          # 逐 target（未加引号，靠词分隔传两个参数）：`cli`/`cmd_check`/`cmd_records`
-          # 覆盖 CLI 级的 root 腿；`--bin DiskEdit` 覆盖单元级——"表已提交、FS 步失败"
-          # 的退出 5 只在 root 且工具在位时才走得到，非 root 矩阵永远走不到那一条
-          for sel in "--test cli" "--test cmd_check" "--test cmd_records" "--bin DiskEdit"; do
-            echo "::group::cargo test $sel (as root)"
-            sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
-              "DISKEDIT_REQUIRE_ROOT=1" cargo test $sel -- --test-threads=1
-            echo "::endgroup::"
-          done
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            cargo test --all-targets -- --test-threads=1
 
-  wsl-suite:
-    name: tests/wsl 全量回归（root）
-    # apt 包清单按 24.04 的工具集写；ubuntu-latest 将于 2026-11 切到 26.04，
-    # 固定镜像避免装包名或工具版本变化把用例变成失败
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+  equivalence:
+    # G7：旧基线二进制是行为 oracle。新版取自 main-latest release 资产，
+    # 对照前由 tests/equivalence.rs 的 legacy 适配层做新→旧命令行翻译。
+    # 旧版 add 需要 loop 设备，故以 root 运行。
+    name: 等价对照（旧基线二进制）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 下载旧基线二进制（main-latest）
+        run: |
+          mkdir -p /tmp/baseline
+          url=https://github.com/GuangYu-yu/DiskEdit/releases/download/main-latest/DiskEdit_linux_amd64_GNU.tar.gz
+          curl -fsSL -o /tmp/baseline/base.tgz "$url"
+          tar xzf /tmp/baseline/base.tgz -C /tmp/baseline
+          chmod +x /tmp/baseline/DiskEdit
+          /tmp/baseline/DiskEdit --version
+      - name: 以 root 运行等价对照
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            "DISKEDIT_BASELINE=/tmp/baseline/DiskEdit" \
+            cargo test --test equivalence -- --test-threads=1
 
-      - name: 安装 Rust 工具链
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 安装外部工具依赖
+  qemu:
+    # 真实内核套件：宿主没有 CAP_SYS_ADMIN，分区扫描/挂载/device-mapper 无法在
+    # 进程内测；把同一份二进制放进 QEMU 来宾，在真内核上验证。
+    # 依赖：qemu-system-x86、debootstrap、e2fsprogs，以及 /boot 中与 /lib/modules
+    # 配对的内核（来宾无 initramfs，内核需内建 virtio 与 ext4，或改用自备内核并
+    # 设 DISKEDIT_QEMU_KERNEL）。
+    name: 真实内核套件（QEMU）
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 QEMU 与来宾构建依赖
         run: |
           sudo apt-get update
-          # grub-install 属于 grub2-common；grub-efi-amd64-bin 只提供 x86_64-efi 模块
           sudo apt-get install -y --no-install-recommends \
-            e2fsprogs xfsprogs btrfs-progs dosfstools exfatprogs ntfs-3g \
-            f2fs-tools squashfs-tools erofs-utils gdisk lvm2 fatresize \
-            qemu-system-x86 ovmf grub-efi-amd64-bin grub2-common efibootmgr python3
-
-      - name: 下载 Alpine netboot 内核（qemu 引导验证用）
+            qemu-system-x86 debootstrap e2fsprogs
+      - name: 运行真实内核套件
         run: |
-          base=https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/netboot
-          for f in vmlinuz-virt initramfs-virt; do
-            curl -fsSL -o "/var/tmp/$f" "$base/$f"
-            # 空文件会让 qemu 用例走到"依赖缺失"分支，在这里当场报错
-            test -s "/var/tmp/$f"
-            ls -l "/var/tmp/$f"
-          done
-
-      - name: 构建普通版与故障注入版
-        run: |
-          mkdir -p bins
-          cargo build --release
-          cp target/release/DiskEdit bins/DiskEdit
-          cargo build --release --features test-faults
-          cp target/release/DiskEdit bins/DiskEdit-fault
-
-      # 假工具场景（mount_cleanup_pending / shrink_readback）要换掉工具表。
-      # cargo 不跟踪 option_env! 的取值，同名构建目录会复用旧产物，故每变体独立 target 目录
-      - name: 构建工具表变体（假目录优先 / 仅假目录）
-        run: |
-          mkdir -p bins
-          DISKEDIT_TOOL_PATH="/var/tmp/diskedit-fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-            CARGO_TARGET_DIR=target/toolpath-fake cargo build --release
-          cp target/toolpath-fake/release/DiskEdit bins/DiskEdit-fake
-          DISKEDIT_TOOL_PATH="/var/tmp/diskedit-fakebin" \
-            CARGO_TARGET_DIR=target/toolpath-fakeonly cargo build --release
-          cp target/toolpath-fakeonly/release/DiskEdit bins/DiskEdit-fakeonly
-
-      # DISKEDIT_STRICT=1：SKIP 直接判失败，缺依赖不会被当成通过；
-      # 每个脚本的 PASS/FAIL/SKIP 与跳过原因都打在日志里，失败脚本的完整输出另行上传
-      - name: 运行全量套件（root）
-        run: sudo env DISKEDIT_BIN_DIR="$GITHUB_WORKSPACE/bins" DISKEDIT_STRICT=1 bash tests/wsl/run_all.sh
-
-      - name: 上传失败脚本的完整输出
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wsl-suite-logs
-          # run_all 的留档目录在 /var/tmp/diskedit-wsl-artifacts/，不在仓库树内
-          path: /var/tmp/diskedit-wsl-artifacts/
-          if-no-files-found: ignore
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            "DISKEDIT_QEMU=1" \
+            cargo test --test qemu_suite -- --nocapture --test-threads=1

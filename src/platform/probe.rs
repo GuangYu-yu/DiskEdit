@@ -1,154 +1,211 @@
-//! 宿主平台实现：识别与打开委托给已打开的目标层，身份取自句柄与 sysfs，
-//! 不从命令行路径二次取事实。
+//! 盘上内容识别：按字节区间比对签名。
+//!
+//! 输入是已打开的句柄、区间起点与长度；输出只有内容类别。具体偏移与魔术字只
+//! 在这里出现，上层拿到的是 `ContentKind`。读失败与"没有已知签名"严格区分：
+//! 后者是 [`ContentKind::Unknown`]，前者是 `Err`。
 
-use super::*;
-use crate::dev::FileSource;
+use diskedit_core::fs::{ContentKind, FsKind};
 
-pub(crate) struct HostPlatform;
+use super::{PlatformError, PlatformResult, TargetHandle};
 
-impl sealed::Sealed for HostPlatform {}
+const SQUASHFS_MAGIC: &[u8; 4] = b"hsqs";
+const EROFS_MAGIC: [u8; 4] = [0xE2, 0xE1, 0xF5, 0xE0];
+const LUKS_MAGIC: &[u8; 6] = b"LUKS\xba\xbe";
+const BITLOCKER_MAGIC: &[u8; 8] = b"-FVE-FS-";
+const BCACHEFS_MAGIC_OFFSET: u64 = 4096 + 24;
+const BCACHEFS_MAGIC: [u8; 16] = [
+    0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9, 0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
+];
+const JFS_SB_OFFSET: u64 = 32768;
+const JFS_MAGIC: &[u8; 4] = b"JFS1";
+const UDF_VRS_OFFSET: u64 = 32768;
+const UDF_VRS_MAGIC: &[u8; 5] = b"BEA01";
+const REISERFS_MAGIC_OFFSET: u64 = 65536 + 52;
+const REISERFS_MAGICS: [&[u8]; 3] = [b"ReIsErFs", b"ReIsEr2Fs", b"ReIsEr3Fs"];
+const EXT_MAGIC: u16 = 0xEF53;
+const SWAP_MAGIC: &[u8; 10] = b"SWAPSPACE2";
+/// 本机 swapon 能处理的页大小。
+const SWAPON_PAGES: [u64; 4] = [4096, 8192, 16384, 65536];
+/// 能认出 swap 元数据的页大小（libblkid 口径，含 32K）。
+const BLKID_PAGES: [u64; 5] = [4096, 8192, 16384, 32768, 65536];
 
-impl Platform for HostPlatform {
-    fn identify(&self, spec: &TargetSpec) -> Result<TargetProbe, PlatformError> {
-        let src = open_read_only(spec)?;
-        probe_of(&src)
+/// 识别一段区间的内容类别。
+pub fn identify(
+    handle: &dyn TargetHandle,
+    base: u64,
+    len_bytes: u64,
+) -> PlatformResult<ContentKind> {
+    let reader = Reader {
+        handle,
+        base,
+        len: len_bytes,
+    };
+    let hit = |offset: u64, len: usize| reader.read(offset, len);
+
+    if hit(0, 4)?.as_deref() == Some(SQUASHFS_MAGIC) {
+        return Ok(ContentKind::Filesystem(FsKind::Squashfs));
     }
-}
-
-/// 只读打开：块设备不能被 `--sector-size` 覆盖成非内核值；镜像按声明值打开
-fn open_read_only(spec: &TargetSpec) -> Result<FileSource, PlatformError> {
-    #[cfg(target_os = "linux")]
+    if hit(1024, 4)?.as_deref() == Some(&EROFS_MAGIC) {
+        return Ok(ContentKind::Filesystem(FsKind::Erofs));
+    }
+    if let Some(bytes) = hit(0x438, 2)?
+        && u16::from_le_bytes([bytes[0], bytes[1]]) == EXT_MAGIC
     {
-        use std::os::unix::fs::FileTypeExt;
-        // audit-allow: S2-15
-        if let Ok(meta) = std::fs::metadata(spec.path())
-            && meta.file_type().is_block_device()
+        return Ok(ContentKind::Filesystem(FsKind::Ext));
+    }
+    if hit(0, 4)?.as_deref() == Some(b"XFSB") {
+        return Ok(ContentKind::Filesystem(FsKind::Xfs));
+    }
+    if let Some(bytes) = hit(0x10040, 8)?
+        && bytes == 0x4D5F_5366_5248_425Fu64.to_le_bytes()
+    {
+        return Ok(ContentKind::Filesystem(FsKind::Btrfs));
+    }
+    for offset in [0x400u64, 0x1400] {
+        if let Some(bytes) = hit(offset, 4)?
+            && u32::from_le_bytes(bytes.as_slice().try_into().expect("四字节")) == 0xF2F5_2010
         {
-            if spec.sector_override().is_some() {
-                return Err(PlatformError::Unsupported(
-                    "a block device's sector size is reported by the kernel; --sector-size cannot override it"
-                        .to_string(),
-                ));
-            }
-            return FileSource::open_read_only(spec.path()).map_err(PlatformError::Io);
+            return Ok(ContentKind::Filesystem(FsKind::F2fs));
         }
     }
-    FileSource::open_read_only_image(spec.path(), spec.sector_override().map(|s| s.get()))
-        .map_err(PlatformError::Io)
-}
-
-/// 只读命令的打开失败，按成因分开由调用方落码
-pub(crate) enum ReadOnlyOpen {
-    /// 打开失败：目标不存在、无权限、块设备拓扑读不出
-    Io(std::io::Error),
-    /// `--sector-size` 落在块设备上：请求与目标形态不符
-    SectorOverrideOnBlock(String),
-    /// 扇区大小不在允许集合，几何无法构造。
-    /// `open_read_only` 把这类失败统一报成 `InvalidInput`，本处据此归类——`open`/`stat`
-    /// 产生的其他 `InvalidInput` 也会落进来
-    SectorSizeNotConstructible,
-}
-
-/// 只读命令的数据句柄：只打开目标，不走平台端口的身份探测。
-///
-/// 身份是写命令的门槛（拿不到身份时按退出码 6 拒绝）；只读命令在身份不可得时
-/// 照常工作。
-pub(crate) fn open_read_only_source(spec: &TargetSpec) -> Result<FileSource, ReadOnlyOpen> {
-    match open_read_only(spec) {
-        Ok(src) => Ok(src),
-        Err(PlatformError::Unsupported(reason)) => Err(ReadOnlyOpen::SectorOverrideOnBlock(reason)),
-        Err(PlatformError::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput => {
-            Err(ReadOnlyOpen::SectorSizeNotConstructible)
+    if hit(3, 8)?.as_deref() == Some(b"EXFAT   ") {
+        return Ok(ContentKind::Filesystem(FsKind::Exfat));
+    }
+    if hit(0x52, 8)?.as_deref() == Some(b"FAT32   ") {
+        return Ok(ContentKind::Filesystem(FsKind::Vfat));
+    }
+    if let Some(bytes) = hit(0x36, 8)?
+        && (bytes.as_slice() == b"FAT12   " || bytes.as_slice() == b"FAT16   ")
+    {
+        return Ok(ContentKind::Filesystem(FsKind::Vfat));
+    }
+    if hit(3, 8)?.as_deref() == Some(b"NTFS    ") {
+        return Ok(ContentKind::Filesystem(FsKind::Ntfs));
+    }
+    for signature in [b"H+", b"HX"] {
+        if hit(0x400, 2)?.as_deref() == Some(signature) {
+            return Ok(ContentKind::Filesystem(FsKind::HfsPlus));
         }
-        Err(PlatformError::Io(e)) => Err(ReadOnlyOpen::Io(e)),
-        // `open_read_only` 只产生 `Io` 与 `Unsupported`；此分支仅为穷尽
-        Err(PlatformError::Unidentifiable(reason)) => Err(ReadOnlyOpen::Io(std::io::Error::other(reason))),
+    }
+    if hit(0x20, 4)?.as_deref() == Some(b"NXSB") {
+        return Ok(ContentKind::Filesystem(FsKind::Apfs));
+    }
+    for offset in [0u64, 512, 1024, 1536] {
+        if let Some(bytes) = hit(offset, 32)?
+            && &bytes[0..8] == b"LABELONE"
+            && &bytes[24..32] == b"LVM2 001"
+        {
+            return Ok(ContentKind::Lvm2Pv);
+        }
+    }
+    if hit(0, 6)?.as_deref() == Some(LUKS_MAGIC) {
+        return Ok(ContentKind::Luks);
+    }
+    if hit(3, 8)?.as_deref() == Some(BITLOCKER_MAGIC) {
+        return Ok(ContentKind::BitLocker);
+    }
+    if hit(BCACHEFS_MAGIC_OFFSET, 16)?.as_deref() == Some(&BCACHEFS_MAGIC) {
+        return Ok(ContentKind::Filesystem(FsKind::Bcachefs));
+    }
+    if hit(JFS_SB_OFFSET, 4)?.as_deref() == Some(JFS_MAGIC) {
+        return Ok(ContentKind::Filesystem(FsKind::Jfs));
+    }
+    if hit(UDF_VRS_OFFSET, 5)?.as_deref() == Some(UDF_VRS_MAGIC) {
+        return Ok(ContentKind::Filesystem(FsKind::Udf));
+    }
+    if let Some(bytes) = hit(REISERFS_MAGIC_OFFSET, 10)?
+        && REISERFS_MAGICS.iter().any(|magic| bytes.starts_with(magic))
+    {
+        return Ok(ContentKind::Filesystem(FsKind::Reiserfs));
+    }
+    if swap_hit(&reader)? {
+        return Ok(ContentKind::Swap);
+    }
+    Ok(ContentKind::Unknown)
+}
+
+/// 一段区间上的按偏移读取器；越界不是读故障。
+struct Reader<'a> {
+    handle: &'a dyn TargetHandle,
+    base: u64,
+    len: u64,
+}
+
+impl Reader<'_> {
+    fn read(&self, offset: u64, len: usize) -> PlatformResult<Option<Vec<u8>>> {
+        let Some(end) = offset.checked_add(len as u64) else {
+            return Ok(None);
+        };
+        if end > self.len {
+            return Ok(None);
+        }
+        let Some(position) = self.base.checked_add(offset) else {
+            return Ok(None);
+        };
+        let mut buffer = vec![0u8; len];
+        read_exact_at(self.handle, position, &mut buffer)?;
+        Ok(Some(buffer))
     }
 }
 
-pub(crate) fn probe_of(src: &FileSource) -> Result<TargetProbe, PlatformError> {
-    SectorSize::try_new(src.sector_size).map_err(|_| {
-        PlatformError::Unidentifiable(format!(
-            "reported sector size {} is not a supported value",
-            src.sector_size
-        ))
-    })?;
-    if let Some(declared) = src.identity.declared() {
-        let id = TargetId::from_material(IdentityMaterial::declared(declared.as_str().to_string()));
-        return Ok(TargetProbe::new(id, src.size));
+fn read_exact_at(handle: &dyn TargetHandle, offset: u64, buffer: &mut [u8]) -> PlatformResult<()> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        let at = offset
+            .checked_add(filled as u64)
+            .ok_or_else(|| PlatformError::parse("probe offset overflow"))?;
+        let read = handle.read_at(at, &mut buffer[filled..])?;
+        if read == 0 {
+            return Err(PlatformError::io(
+                handle.path(),
+                std::io::Error::from(std::io::ErrorKind::UnexpectedEof),
+            ));
+        }
+        filled += read;
     }
-    if src.is_block {
-        let (major, minor, device_id) = src.block_identity.as_ref().ok_or_else(|| {
-            PlatformError::Unidentifiable(
-                "the block device identity was not sampled when the target was opened".to_string(),
-            )
-        })?;
-        let id = TargetId::from_material(IdentityMaterial::block(*major, *minor, device_id.as_deref()));
-        return Ok(TargetProbe::new(id, src.size));
-    }
-    image_probe(src)
+    Ok(())
 }
 
-/// 镜像：文件 ID 必需（复制/移动得到新 ID ⇒ 新目标）；卷序列号只作画像，不参与比较
-fn image_probe(src: &FileSource) -> Result<TargetProbe, PlatformError> {
-    let fp = src.fingerprint;
-    let file_id = fp.has_inode_evidence().then(|| {
-        let mut id = [0u8; 16];
-        id[..8].copy_from_slice(&fp.dev.to_be_bytes());
-        id[8..].copy_from_slice(&fp.ino.to_be_bytes());
-        id
-    });
-    // Unix 的 `dev` 是文件所在设备的设备号，不是卷序列号；Windows 的 `dev` 才是卷序列号
-    #[cfg(windows)]
-    let volume_serial = Some(fp.dev as u32);
-    #[cfg(not(windows))]
-    let volume_serial = None;
-    let id = TargetId::from_material(IdentityMaterial::image(volume_serial, file_id)?);
-    Ok(TargetProbe::new(id, src.size))
+/// swap 签名命中且头内自洽。
+fn swap_hit(reader: &Reader<'_>) -> PlatformResult<bool> {
+    let mut pages: Vec<u64> = Vec::with_capacity(SWAPON_PAGES.len() + 1);
+    let host = host_page();
+    if SWAPON_PAGES.contains(&host) {
+        pages.push(host);
+    }
+    pages.extend(SWAPON_PAGES.iter().copied().filter(|page| *page != host));
+    pages.extend(
+        BLKID_PAGES
+            .iter()
+            .copied()
+            .filter(|page| !SWAPON_PAGES.contains(page)),
+    );
+    for page in pages {
+        if reader.len < page {
+            continue;
+        }
+        let Some(magic) = reader.read(page - 10, 10)? else {
+            continue;
+        };
+        if magic.as_slice() != SWAP_MAGIC {
+            continue;
+        }
+        if !SWAPON_PAGES.contains(&page) {
+            // 只有 libblkid 认得的页大小不能被本机 swapon 激活，不计入 swap。
+            continue;
+        }
+        let Some(info) = reader.read(1024, 8)? else {
+            continue;
+        };
+        let version = u32::from_le_bytes(info[0..4].try_into().expect("四字节"));
+        let last_page = u32::from_le_bytes(info[4..8].try_into().expect("四字节"));
+        return Ok(version == 1 && u64::from(last_page) < reader.len / page);
+    }
+    Ok(false)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_image(tag: &str) -> (crate::testdir::TestDir, std::path::PathBuf) {
-        let dir = crate::testdir::test_dir(tag);
-        let img = dir.join("disk.img");
-        std::fs::write(&img, vec![0u8; 1024 * 1024]).unwrap();
-        (dir, img)
-    }
-
-    /// 复制出的文件是新目标：路径可以同名，但文件 ID 不同
-    #[test]
-    fn a_copied_file_is_not_the_same_target() {
-        let (dir, img) = temp_image("copy");
-        let copy = dir.join("copy.img");
-        std::fs::copy(&img, &copy).unwrap();
-        let host = HostPlatform;
-        let a = host.identify(&TargetSpec::new(&img, None)).unwrap();
-        let b = host.identify(&TargetSpec::new(&copy, None)).unwrap();
-        assert_ne!(a.id(), b.id());
-    }
-
-    /// 文件 ID 为全零说明平台没有给出身份证据：拒绝识别，路径不能顶上
-    #[test]
-    fn missing_file_id_is_refused_by_the_port() {
-        let material = IdentityMaterial::image(None, None);
-        assert!(matches!(material, Err(PlatformError::Unidentifiable(_))));
-    }
-
-    /// 真实块设备：身份取 sysfs 整盘设备号与设备 ID，扇区大小取内核报告值。
-    /// 默认忽略：没有块设备的机器上不能凭空造出一个，节点也必须由运行者显式给出，
-    /// 免得测试自己挑盘。运行方式：DISKEDIT_BLOCK_DEVICE=/dev/sdX cargo test -- --ignored
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "needs a real block device named by DISKEDIT_BLOCK_DEVICE"]
-    fn identifies_a_real_block_device() {
-        let path = std::env::var("DISKEDIT_BLOCK_DEVICE")
-            .expect("set DISKEDIT_BLOCK_DEVICE to a block device node");
-        let host = HostPlatform;
-        let spec = TargetSpec::new(path, None);
-        let probe = host.identify(&spec).expect("a real block device is identifiable");
-        assert!(probe.total_bytes() > 0);
-    }
+fn host_page() -> u64 {
+    // SAFETY: sysconf 只读进程/系统常量，无失败写回。
+    let value = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if value > 0 { value as u64 } else { 4096 }
 }

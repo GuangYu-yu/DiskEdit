@@ -1,0 +1,16 @@
+[package]
+name = "diskedit-core"
+version = "0.1.0"
+edition = "2024"
+description = "Pure computational core of DiskEdit: regions, geometry, partition tables, filesystem profiles, evidence and persistent records"
+license = "MIT"
+
+[lib]
+name = "diskedit_core"
+path = "src/lib.rs"
+
+[dependencies]
+crc = "3"
+
+[lints]
+workspace = true

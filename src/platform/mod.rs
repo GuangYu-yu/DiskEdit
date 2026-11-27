@@ -1,632 +1,679 @@
-//! 平台端口：目标探测与身份、打开、扇区来源、恢复文件访问、目录持久化。
+//! 宿主端口：上层只通过本模块的中立接口触碰操作系统。
 //!
-//! 本层只回答"平台事实"，不认识 Plan、Request、恢复动作，也不做安全策略。
-//! 身份由平台探测产生：路径只出现在 [`TargetSpec`] 的输入文本里，不参与
-//! [`TargetId`] 的恒等比较。
-//!
-//! 端口以 sealed trait 表达：外部 crate 无法为自己的类型实现 [`Platform`] /
-//! [`EvidenceStore`]；实现只在本 crate 的平台后端模块内。
-//!
-//! 探测（`probe::probe_of` / `probe::HostPlatform::identify`）与只读打开
-//! （`probe::open_read_only_source`）已在命令层使用；证据目录端口只有 Linux 后端
-//! 具备原语。
+//! 平台选择与具体系统调用只出现在本层；`app` 与纯核不引用任何平台名。
+//! 端口只暴露事实与动作：句柄、扇区大小、身份、占用、外部程序与记录根目录。
 
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+//! 目录约定：`mod.rs` 只放中立端口与平台选择；每个平台一个子树，系统调用、
+//! 虚拟文件系统路径与具体可执行名只出现在对应子树内。新增宿主只加子树并把
+//! 它接进 [`host`]，不改上层。
 
-use std::path::{Component, Path, PathBuf};
+pub mod probe;
 
-use crate::domain::SectorSize;
-
-pub(crate) mod capabilities;
-pub(crate) mod probe;
 #[cfg(target_os = "linux")]
-pub(crate) mod evidence_store;
-#[cfg(test)]
-pub(crate) mod fake;
+pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
-pub(crate) use capabilities::{CapabilityId, CapabilitySnapshot, CapabilityState};
+use std::fmt;
+use std::path::{Path, PathBuf};
 
-mod sealed {
-    /// 端口的私有 supertrait：外部 crate 无法命名它，因而无法实现该端口
-    pub(crate) trait Sealed {}
+use diskedit_core::fingerprint::Fingerprint;
+use diskedit_core::fs::{FsKind, Program};
+
+#[cfg(target_os = "linux")]
+pub use linux::LinuxPlatform;
+#[cfg(target_os = "macos")]
+pub use macos::MacOsPlatform;
+#[cfg(target_os = "windows")]
+pub use windows::WindowsPlatform;
+
+/// 当前宿主的端口实现。平台选择只在这里发生。
+#[cfg(target_os = "linux")]
+pub fn host() -> LinuxPlatform {
+    LinuxPlatform
 }
 
-/// 用户输入的目标描述：路径文本 + 可选的扇区大小覆盖。
-/// 它还不是任何具体设备，不能被当作身份
-pub(crate) struct TargetSpec {
-    path: PathBuf,
-    sector_override: Option<SectorSize>,
+#[cfg(target_os = "macos")]
+pub fn host() -> MacOsPlatform {
+    MacOsPlatform
 }
 
-impl TargetSpec {
-    pub(crate) fn new(path: impl Into<PathBuf>, sector_override: Option<SectorSize>) -> Self {
-        Self { path: path.into(), sector_override }
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub(crate) fn sector_override(&self) -> Option<SectorSize> {
-        self.sector_override
-    }
+#[cfg(target_os = "windows")]
+pub fn host() -> WindowsPlatform {
+    WindowsPlatform
 }
 
-/// 稳定身份的构成材料。路径不在其中：同一文件改名后仍是同一目标，
-/// 不同文件即使路径相同（替换、重新创建）也不是
-#[derive(Clone, Debug)]
-pub(crate) enum IdentityMaterial {
-    /// 块设备：整盘设备号 + 平台给出的稳定设备 ID（序列号 / WWN / DM uuid 等）。
-    /// 设备号由内核分配，重启或热插拔后可被复用：双方都有 `device_id` 时只比它，
-    /// 设备号不参与；双方都没有稳定 ID 时才退回设备号（这样的材料不可跨恢复现场，
-    /// 由 [`crate::recovery::SceneProof::Unavailable`] 拦住）；一方有一方没有即不同目标
-    Block { major: u32, minor: u32, device_id: Option<String> },
-    /// 镜像：不透明文件 ID（Unix 的 (st_dev, st_ino)、Windows 的卷序列号 + 文件索引）。
-    /// 复制或移动会得到新的文件 ID ⇒ 新目标；卷序列号是可被工具重写的画像字段，
-    /// 不参与恒等比较
-    Image { volume_serial: Option<u32>, file_id: [u8; 16] },
-    /// 目标自己给不出身份时由用户用 `--identity` 声明的名字。名字不是设备事实：
-    /// 它只保证"同一次续跑用的是同一个名字"，因此只用于身份不可得的块设备
-    Declared { identity: String },
+/// 没有专属子树的其他宿主。
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub fn host() -> UnsupportedPlatform {
+    UnsupportedPlatform
 }
 
-/// 设备身份值的命名空间。身份是（命名空间, 值）：值自带前缀时前缀就是命名空间，
-/// 属性名只是它的读取位置，同名同值经 `wwid` 与 `device/wwid` 读到仍是同一身份。
-/// 值没有前缀时命名空间只能由属性名给出——裸值本身不自述身份
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Namespace {
-    /// `naa.`：SCSI VPD 页 0x83 的 NAA 设计符
-    Naa,
-    /// `eui.`：EUI-64 设计符
-    Eui,
-    /// `t10.`：T10 vendor-ID 设计符
-    T10,
-    /// `uuid.`：UUID 设计符
-    Uuid,
-    /// `mpath-`：DM multipath 的 `dm/uuid`
-    Mpath,
-    /// 裸值，来自 serial 属性
-    Serial,
-    /// 裸值，来自 wwid 属性
-    Wwid,
-    /// 裸值，属性名未给出命名空间
-    BareValue,
-}
+/// 尚未接入的宿主：每个端口都显式返回 [`PlatformError::NotSupported`]，
+/// 不返回空事实、不假装成功。接入某个能力时在对应平台子树里实现它。
+pub struct UnsupportedPlatform;
 
-/// multipath-tools 写进 `dm/uuid` 的前缀：`libmultipath/devmapper.h` 的 `UUID_PREFIX`，
-/// 创建映射时按 `UUID_PREFIX "%s"` + `mpp->wwid` 写入。该工具自身按这 6 个字节**区分
-/// 大小写**比较；本仓库对它的判定同样区分大小写——`mpath-` 归并是放宽（会压掉
-/// Ambiguous），未知大小写形态按"不是 mpath"处理。识别与命名空间分类共用这一处
-pub(crate) const MPATH_UUID_PREFIX: &str = "mpath-";
+/// 为尚未接入的宿主生成显式"不支持"实现。
+macro_rules! unsupported_platform {
+    ($ty:ty, $os:literal) => {
+        impl $crate::platform::Platform for $ty {
+            fn open_target(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的打开端口尚未接入"
+                )))
+            }
 
-impl Namespace {
-    /// 值自带前缀即按值定命名空间；否则按属性名。前缀比较不区分大小写（`mpath-` 除外，
-    /// 见 [`MPATH_UUID_PREFIX`]），值本身原样参与比较（大小写归一需要设备侧约定，
-    /// 本层不做假设）
-    fn of(attr: &str, value: &str) -> Self {
-        if value.starts_with(MPATH_UUID_PREFIX) {
-            return Namespace::Mpath;
-        }
-        for (prefix, ns) in [
-            ("naa.", Namespace::Naa),
-            ("eui.", Namespace::Eui),
-            ("t10.", Namespace::T10),
-            ("uuid.", Namespace::Uuid),
-        ] {
-            if value.len() >= prefix.len() && value.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()) {
-                return ns;
+            fn open_target_read_only(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的打开端口尚未接入"
+                )))
+            }
+
+            fn path_kind(&self, _path: &std::path::Path) -> $crate::platform::TargetKind {
+                $crate::platform::TargetKind::Other
+            }
+
+            fn is_partition_node(&self, _path: &std::path::Path) -> bool {
+                false
+            }
+
+            fn identity(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<diskedit_core::fingerprint::Fingerprint> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的身份端口尚未接入"
+                )))
+            }
+
+            fn occupancy(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<$crate::platform::Occupancy> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的占用端口尚未接入"
+                )))
+            }
+
+            fn state_root(&self) -> Option<std::path::PathBuf> {
+                None
+            }
+
+            fn is_directory(&self, _path: &std::path::Path) -> bool {
+                false
+            }
+
+            fn list_files(
+                &self,
+                _root: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Vec<std::path::PathBuf>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn read_file(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Option<Vec<u8>>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的文件端口尚未接入"
+                )))
+            }
+
+            fn run(
+                &self,
+                _program: diskedit_core::fs::Program,
+                _args: &[String],
+            ) -> $crate::platform::PlatformResult<$crate::platform::ToolRun> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有外部工具端口"
+                )))
+            }
+
+            fn tool_available(&self, _program: diskedit_core::fs::Program) -> bool {
+                false
+            }
+
+            fn tool_name(&self, _program: diskedit_core::fs::Program) -> &'static str {
+                "unavailable"
+            }
+
+            fn bind_loop(
+                &self,
+                _path: &std::path::Path,
+                _offset: u64,
+                _len: u64,
+            ) -> $crate::platform::PlatformResult<$crate::platform::LoopBinding> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 没有 loop 设备"
+                )))
+            }
+
+            fn partition_device(
+                &self,
+                _disk: &std::path::Path,
+                _number: u32,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的分区设备端口尚未接入"
+                )))
+            }
+
+            fn entropy(&self, _len: usize) -> $crate::platform::PlatformResult<Vec<u8>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的随机源尚未接入"
+                )))
+            }
+
+            fn create_directory_all(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn remove_directory(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录端口尚未接入"
+                )))
+            }
+
+            fn temporary_directory(
+                &self,
+                _tag: &str,
+            ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的临时目录端口尚未接入"
+                )))
+            }
+
+            fn write_state_file(
+                &self,
+                _path: &std::path::Path,
+                _bytes: &[u8],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn append_state_file(
+                &self,
+                _path: &std::path::Path,
+                _bytes: &[u8],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn remove_state_file(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态文件端口尚未接入"
+                )))
+            }
+
+            fn sync_directory(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的目录持久化端口尚未接入"
+                )))
+            }
+
+            fn lock_state(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::StateLock>> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的状态锁尚未接入"
+                )))
             }
         }
-        let attr_tail = attr.rsplit('/').next().unwrap_or(attr);
-        if attr_tail.eq_ignore_ascii_case("serial") {
-            Namespace::Serial
-        } else if attr_tail.eq_ignore_ascii_case("wwid") {
-            Namespace::Wwid
-        } else {
-            Namespace::BareValue
-        }
-    }
-}
-
-/// 一条设备身份声明：`属性名=值` 原串拆出的（命名空间, 值）。
-/// 值复制出来：判定要在记录载荷与 `/sys/block` 枚举结果之间做，后者的原串活不过这次比较
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Claim {
-    ns: Namespace,
-    value: String,
-}
-
-impl Claim {
-    fn namespace_label(&self) -> &'static str {
-        match self.ns {
-            Namespace::Naa => "naa-designator",
-            Namespace::Eui => "eui-64",
-            Namespace::T10 => "t10-designator",
-            Namespace::Uuid => "uuid",
-            Namespace::Mpath => "multipath-wwid",
-            Namespace::Serial => "serial",
-            Namespace::Wwid => "wwid",
-            Namespace::BareValue => "value",
-        }
-    }
-}
-
-/// 拒绝信息里的写法：命名空间在前，值原样
-impl std::fmt::Display for Claim {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.namespace_label(), self.value)
-    }
-}
-
-/// 全零设计符：`0x` 前缀与 `naa.` / `eui.` / `uuid.` 命名空间前缀、UUID 的分隔连字符
-/// 都不改变"值是全零"。`t10.` 是 ASCII 供应商串，不按十六进制处理
-pub(crate) fn is_zero_designator(value: &str) -> bool {
-    let mut v = value;
-    if let Some(rest) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
-        v = rest;
-    }
-    for prefix in ["naa.", "eui.", "uuid."] {
-        if v.len() > prefix.len() && v.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()) {
-            v = &v[prefix.len()..];
-            break;
-        }
-    }
-    !v.is_empty() && v.bytes().all(|b| b == b'0' || b == b'-')
-}
-
-/// 只有设计符前缀、没有载荷（`t10.`、`naa.`）：与全零同义，设备没有给出身份
-pub(crate) fn is_bare_designator(value: &str) -> bool {
-    ["t10.", "naa.", "eui.", "uuid."].iter().any(|prefix| value.eq_ignore_ascii_case(prefix))
-}
-
-/// 把 `属性名=值` 原串拆成一条声明。空白、空串、全零设计符（见 [`is_zero_designator`]）
-/// 都表示"设备没有给出身份"，不构成声明。没有 `=` 的原串按裸值处理，属性名为空。
-///
-/// `t10.` 设计符是定长 ASCII 字段，尾部以空格填满；比较前去掉这些填充空格，去掉后
-/// 没有内容即"没有给出身份"
-pub(crate) fn claim_of(raw: &str) -> Option<Claim> {
-    let (attr, value) = match raw.split_once('=') {
-        Some((attr, value)) => (attr.trim(), value.trim()),
-        None => ("", raw.trim()),
     };
-    let value = value.trim_end_matches(' ');
-    if value.is_empty() || is_zero_designator(value) || is_bare_designator(value) {
-        return None;
-    }
-    Some(Claim { ns: Namespace::of(attr, value), value: value.to_string() })
-}
-
-impl PartialEq for IdentityMaterial {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::Block { major: amaj, minor: amin, device_id: aid },
-                Self::Block { major: bmaj, minor: bmin, device_id: bid },
-            ) => match (aid.as_deref().and_then(claim_of), bid.as_deref().and_then(claim_of)) {
-                (Some(a), Some(b)) => a == b,
-                (None, None) => (amaj, amin) == (bmaj, bmin),
-                _ => false,
-            },
-            (Self::Image { file_id: a, .. }, Self::Image { file_id: b, .. }) => a == b,
-            (Self::Declared { identity: a }, Self::Declared { identity: b }) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for IdentityMaterial {}
-
-/// 设备 ID 字符串是否构成事实：解析不出声明的原串（空白、空串、全零）不算，
-/// 原串去空白后保留——记录里存的是 `属性名=值` 的原样文本
-fn device_id_is_fact(raw: &str) -> Option<String> {
-    claim_of(raw).map(|_| raw.trim().to_string())
-}
-
-impl IdentityMaterial {
-    /// 块设备材料：`raw_device_id` 是平台读到的 `属性名=值` 原串（可为 None）。
-    /// 没有事实性设备 ID 时保留设备号
-    pub(crate) fn block(major: u32, minor: u32, raw_device_id: Option<&str>) -> Self {
-        Self::Block {
-            major,
-            minor,
-            device_id: raw_device_id.and_then(device_id_is_fact),
-        }
-    }
-
-    /// 声明材料：用户给出的名字原样参与比较。不合并任何设备侧读数——这个名字
-    /// 存在的全部理由就是目标读不出可核对的设备声明
-    pub(crate) fn declared(identity: String) -> Self {
-        Self::Declared { identity }
-    }
-
-    /// 镜像材料：文件 ID 缺项时拒绝识别——卷序列号不参与比较，单独它不足以构成身份
-    pub(crate) fn image(
-        volume_serial: Option<u32>,
-        file_id: Option<[u8; 16]>,
-    ) -> Result<Self, PlatformError> {
-        match file_id {
-            Some(file_id) => Ok(Self::Image { volume_serial, file_id }),
-            None => Err(PlatformError::Unidentifiable(
-                "the platform returned no stable file ID for this image — a path is not an identity"
-                    .to_string(),
-            )),
-        }
-    }
-}
-
-/// 目标身份。唯一构造点是平台探测（[`Platform::identify`]），字段私有；
-/// `Eq` 只比较身份材料
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TargetId(IdentityMaterial);
-
-impl TargetId {
-    /// 平台后端产出身份的唯一入口
-    pub(crate) fn from_material(material: IdentityMaterial) -> Self {
-        Self(material)
-    }
-
-    pub(crate) fn material(&self) -> &IdentityMaterial {
-        &self.0
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TargetProbe {
-    id: TargetId,
-    total_bytes: u64,
-}
-
-impl TargetProbe {
-    /// 平台后端产出探测结果的唯一入口
-    pub(crate) fn new(id: TargetId, total_bytes: u64) -> Self {
-        Self { id, total_bytes }
-    }
-
-    pub(crate) fn id(&self) -> &TargetId {
-        &self.id
-    }
-
-    pub(crate) fn total_bytes(&self) -> u64 {
-        self.total_bytes
-    }
-}
-
-/// 平台端口。实现只在本 crate 的平台后端模块内（sealed）
-pub(crate) trait Platform: sealed::Sealed {
-    /// 探测身份与几何；不打开写路径
-    fn identify(&self, spec: &TargetSpec) -> Result<TargetProbe, PlatformError>;
-}
-
-/// 恢复目录的锚点。Linux 上是已打开的目录 FD：父目录链从它开始逐级解析；
-/// 其他平台没有等价原语，类型不可构造，依赖它的写操作只能拒绝
-#[cfg(target_os = "linux")]
-pub(crate) struct DirFd(std::os::fd::OwnedFd);
-
-#[cfg(target_os = "linux")]
-impl DirFd {
-    pub(crate) fn as_raw(&self) -> std::os::fd::RawFd {
-        use std::os::fd::AsRawFd;
-        self.0.as_raw_fd()
-    }
-
-    /// 锚点的独立句柄：解析父目录链时每一级都要有自己的所有权
-    pub(crate) fn try_clone(&self) -> std::io::Result<std::os::fd::OwnedFd> {
-        use std::os::fd::{FromRawFd, OwnedFd};
-        // SAFETY: `self.0` 在整个调用期间持有打开的描述符，`as_raw()` 取到的 fd 因此有效；
-        // `F_DUPFD_CLOEXEC` 只读描述符编号并分配一个新 fd，不读写调用方内存
-        let raw = unsafe { libc::fcntl(self.as_raw(), libc::F_DUPFD_CLOEXEC, 0) };
-        if raw < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `raw` 是上面刚由 `fcntl` 返回的非负 fd，此前没有别的所有者，交给
-        // `OwnedFd` 独占
-        Ok(unsafe { OwnedFd::from_raw_fd(raw) })
-    }
-
-    /// 打开一个已存在的目录作为可信锚点：按路径直接 open，锚点本身不逐级校验分量
-    pub(crate) fn open_anchor(path: &Path) -> std::io::Result<Self> {
-        use std::os::fd::{FromRawFd, OwnedFd};
-        use std::os::unix::ffi::OsStrExt;
-        let name = std::ffi::CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "the anchor path contains NUL"))?;
-        // SAFETY: `name.as_ptr()` 指向的 `CString` 在整个调用期间存活、以 NUL 结尾；
-        // 标志是 O_RDONLY | O_DIRECTORY | O_CLOEXEC，不含 O_CREAT / O_TMPFILE，因此
-        // `open` 的可变参数（mode）不会被读取
-        let raw = unsafe {
-            libc::open(
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-            )
-        };
-        if raw < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `raw` 是上面刚由 `open` 返回的非负 fd，此前没有别的所有者，交给
-        // `OwnedFd` 独占
-        Ok(Self(unsafe { OwnedFd::from_raw_fd(raw) }))
-    }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) enum DirFd {}
+pub(crate) use unsupported_platform;
 
-/// 相对锚点的证据路径：拒绝绝对路径、父目录分量与空路径。
-/// 调用方不能自行拼接绝对路径
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RelativePath(PathBuf);
+unsupported_platform!(UnsupportedPlatform, "当前宿主");
 
-impl RelativePath {
-    pub(crate) fn try_new(path: impl Into<PathBuf>) -> Result<Self, PathError> {
-        let path = path.into();
-        if path.as_os_str().is_empty() {
-            return Err(PathError::Empty);
+/// 端口操作失败。
+#[derive(Debug)]
+pub enum PlatformError {
+    /// 目标或系统调用返回的 I/O 错误。
+    Io { path: String, message: String },
+    /// 本平台不提供该能力。
+    NotSupported(String),
+    /// 无法解释系统返回的数据。
+    Parse(String),
+    /// 当前对象不适用该操作。
+    NotApplicable(String),
+}
+
+impl PlatformError {
+    /// 以路径与底层错误构造 I/O 失败。
+    pub fn io(path: &Path, error: std::io::Error) -> Self {
+        Self::Io {
+            path: path.display().to_string(),
+            message: error.to_string(),
         }
-        if path.is_absolute() || path.has_root() {
-            return Err(PathError::Absolute);
-        }
-        for c in path.components() {
-            match c {
-                Component::Normal(_) => {}
-                Component::CurDir => {}
-                _ => return Err(PathError::EscapesAnchor),
+    }
+
+    /// 本平台不提供该能力。
+    pub fn not_supported(why: impl Into<String>) -> Self {
+        Self::NotSupported(why.into())
+    }
+
+    /// 无法解释系统返回的数据。
+    pub fn parse(why: impl Into<String>) -> Self {
+        Self::Parse(why.into())
+    }
+
+    /// 当前对象不适用该操作。
+    pub fn not_applicable(why: impl Into<String>) -> Self {
+        Self::NotApplicable(why.into())
+    }
+}
+
+impl fmt::Display for PlatformError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, message } => write!(f, "{path}: {message}"),
+            Self::NotSupported(why) | Self::Parse(why) | Self::NotApplicable(why) => {
+                f.write_str(why)
             }
         }
-        Ok(Self(path))
-    }
-
-    pub(crate) fn as_path(&self) -> &Path {
-        &self.0
     }
 }
 
-/// 已按锚点解析、仍由后端持有的证据文件。Linux 上同时持有父目录 FD、文件名与
-/// 只读 FD；删除与改名都复用这两个句柄，不按路径二次解析
-pub(crate) struct EvidenceFile {
-    relative: RelativePath,
-    #[cfg(target_os = "linux")]
-    state: evidence_store::OpenedFile,
-}
+impl std::error::Error for PlatformError {}
 
-impl EvidenceFile {
-    /// 后端在某级解析通过后构造
-    #[cfg(target_os = "linux")]
-    pub(crate) fn from_linux(relative: RelativePath, state: evidence_store::OpenedFile) -> Self {
-        Self { relative, state }
-    }
+/// 端口调用的结果。
+pub type PlatformResult<T> = Result<T, PlatformError>;
 
-    pub(crate) fn relative(&self) -> &RelativePath {
-        &self.relative
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn state(&self) -> &evidence_store::OpenedFile {
-        &self.state
-    }
-}
-
-/// 目录项持久化结论：调用返回成功时目录项的创建/删除/改名已随目录 `fsync` 落盘
+/// 目标在宿主上的存在形态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DirDurability {
-    Persisted,
-    /// 目录项已改变、目录 `fsync` 失败：名字空间里的变化可能随掉电回退
-    Unconfirmed,
+pub enum TargetKind {
+    /// 普通文件（含镜像）。
+    File,
+    /// 块设备（整盘或单个分区）。
+    BlockDevice,
+    /// 其他对象：目录、管道、字符设备等。
+    Other,
 }
 
-/// 证据路径解析失败：每一类都对应一次显式拒绝
+impl TargetKind {
+    pub const fn is_block_device(self) -> bool {
+        matches!(self, Self::BlockDevice)
+    }
+}
+
+/// 目标在宿主上的占用结论。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Occupancy {
+    /// 没有任何占用者或占用来源。
+    Idle,
+    /// 已被占用，附带来源说明。
+    Used { evidence: String },
+    /// 无法判定，附带原因。
+    Unknown { why: String },
+}
+
+/// 报表里报出的设备与目标设备的关系。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceMatch {
+    Same,
+    Different,
+    /// 无法证明相同：调用方据此拒绝，而不是当作"不同"。
+    Unknown(String),
+}
+
+/// 外部程序的一次运行结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolRun {
+    /// 进程退出码；被信号终止时为 `None`。
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// 临时绑定到目标的块设备视图；销毁时解除绑定。
 #[derive(Debug)]
-pub(crate) enum PathError {
-    Empty,
-    Absolute,
-    EscapesAnchor,
-    Symlink,
-    NotFound,
-    /// 请求的最终分量是目录
-    IsDirectory,
-    /// 中间分量不是目录
-    NotDirectory,
-    /// 最终分量不是普通文件
-    NotAFile,
-    Inaccessible(String),
+pub struct LoopBinding {
+    device: PathBuf,
 }
 
-#[derive(Debug)]
-pub(crate) enum EvidenceIo {
-    Io(std::io::Error),
-    /// 改名/创建已发生、目录 `fsync` 失败：目录项已指向新记录，掉电后是否保留未确认
-    RenamedNotDurable(std::io::Error),
-    Unsupported(String),
+impl LoopBinding {
+    pub fn device(&self) -> &Path {
+        &self.device
+    }
+
+    pub(crate) fn new(device: PathBuf) -> Self {
+        Self { device }
+    }
 }
 
-/// 删除的落点：`unlink` 是否发生与目录项是否持久化分开陈述。
-/// 下游按变体分流，不从 I/O 错误反推"记录还在"
-#[derive(Debug)]
-pub(crate) enum RemoveOutcome {
-    /// 名字空间已移除，目录 `fsync` 成功
-    RemovedAndDurable,
-    /// 名字空间已移除，目录 `fsync` 失败：掉电后可能重新出现
-    RemovedDurabilityUnconfirmed,
-    /// `unlink` 未发生：记录仍在落点上
-    NotRemoved(EvidenceIo),
+/// 运行时把目标交给虚拟机载体的入口。
+///
+/// 只有 Linux 提供实现；其余宿主没有载体时返回 `None`，上层照常走本机路径。
+#[cfg(target_os = "linux")]
+pub fn worker_entry(args: &[std::ffi::OsString]) -> Option<u8> {
+    linux::carrier::worker::invoked(args).then(linux::carrier::worker::run)
 }
 
-/// 恢复记录存储端口：整份原子替换 + 目录持久化。
-/// 实现只在本 crate 的平台后端模块内（sealed）
-pub(crate) trait EvidenceStore: sealed::Sealed {
-    /// 从锚点逐级 `O_NOFOLLOW` 解析相对路径
-    fn open_at(&self, anchor: &DirFd, relative: &RelativePath) -> Result<EvidenceFile, PathError>;
+#[cfg(not(target_os = "linux"))]
+pub fn worker_entry(_args: &[std::ffi::OsString]) -> Option<u8> {
+    None
+}
 
-    /// 读取已解析文件的全部字节
-    fn read(&self, file: &EvidenceFile) -> Result<Vec<u8>, EvidenceIo>;
+/// 一个挂载点反查出的挂载事实。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MountFacts {
+    /// 路径是挂载点，挂载源是某块整盘上的分区。
+    Mounted {
+        mount_point: PathBuf,
+        device: PathBuf,
+        disk: PathBuf,
+        partition: u32,
+    },
+    /// 路径不是任何挂载点。
+    NotMounted,
+    /// 挂载源不是分区：整盘、或非块设备的挂载源。
+    NotPartition { device: PathBuf },
+    /// 同一路径有多条挂载记录，无法确定是哪一条。
+    Ambiguous,
+    /// 挂载源无法映射到单个整盘。
+    Unmapped { why: String },
+}
 
-    /// 临时文件写完整份内容 → 改名 → 目录 fsync；`temp` 必须与 `file` 同目录
-    fn replace_atomic(
+/// 一个分区在挂载命名空间里的使用情况。
+///
+/// 占用判定必须取全部可读命名空间：别的命名空间里的挂载同样在用这块分区，只看本
+/// 命名空间会把那种占用读成"未挂载"，随后在仍被挂载的盘上写表。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PartitionMount {
+    /// 本进程所在的命名空间里挂着，给出唯一挂载点。
+    Here { mount_point: PathBuf },
+    /// 只在另一个挂载命名空间里挂着；本命名空间既不能用也不能卸。
+    Elsewhere {
+        mount_point: PathBuf,
+        /// 读到记录时所在的进程；取不到命名空间身份时为 `None`。
+        pid: Option<u32>,
+    },
+    /// 任何可读命名空间里都没有挂载。
+    NotMounted,
+    /// 本命名空间里同一分区有多条挂载记录，无法确定生效层。
+    Ambiguous,
+}
+
+/// 交给载体的在线扩容请求。载体在来宾里把文件系统撑满所在分区。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnlineRequest {
+    pub mount_point: PathBuf,
+    pub device: PathBuf,
+    pub disk: PathBuf,
+    pub partition: u32,
+    pub filesystem: FsKind,
+    /// 分区容量；文件系统应长到这个字节数。
+    pub bytes: u64,
+    pub sector_size: u64,
+}
+
+/// 载体报回的在线扩容结果：工具报告的文件系统几何。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OnlineReport {
+    /// 块数；载体没能读出时为 `None`。
+    pub blocks: Option<u64>,
+    /// 块大小；载体没能读出时为 `None`。
+    pub block_size: Option<u64>,
+}
+
+/// 交给载体的一段绝对偏移写入。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CarrierWrite {
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// 交给载体的整盘离线写入：来宾把各段按绝对偏移写进同一块盘。
+///
+/// 用于宿主缺块层能力、本机无法安全写表的块设备目标；记录、锁、摘要与退出码都
+/// 留在宿主，来宾只落字节并重读分区表。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiskWriteRequest {
+    pub disk: PathBuf,
+    pub sector_size: u64,
+    pub writes: Vec<CarrierWrite>,
+}
+
+/// 虚拟机载体端口：把宿主做不了的在线操作交给来宾。
+pub trait Carrier: Send + Sync {
+    /// 在来宾里把 `request.device` 上的文件系统撑满分区。
+    fn online_grow(&self, request: &OnlineRequest) -> PlatformResult<OnlineReport>;
+
+    /// 在来宾里按绝对偏移写整盘；默认按"不支持"返回。
+    fn write_disk(&self, _request: &DiskWriteRequest) -> PlatformResult<()> {
+        Err(PlatformError::not_supported(
+            "this carrier cannot write a whole disk",
+        ))
+    }
+}
+
+/// 目标的打开方式由具体平台决定，上层只拿到这个按偏移读写的句柄。
+pub trait TargetHandle {
+    /// 打开时使用的路径。
+    fn path(&self) -> &Path;
+
+    /// 打开时读到的字节长度。
+    fn len(&self) -> u64;
+
+    /// 目标的宿主形态。
+    fn kind(&self) -> TargetKind;
+
+    /// 块设备的逻辑扇区字节数；普通文件没有这一事实。
+    fn sector_size(&self) -> Option<u64>;
+
+    /// 目标是否为空。
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// 按偏移读取，返回实际读到的字节数。
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize>;
+
+    /// 按偏移写入，返回实际写入的字节数。
+    fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize>;
+
+    /// 提交目标缓存。
+    fn barrier(&mut self) -> PlatformResult<()>;
+
+    /// 让内核重读分区表与块设备尺寸；普通文件无事可做。
+    fn refresh_partitions(&mut self) -> PlatformResult<()>;
+}
+
+/// 记录目录上的独占锁；销毁时释放。
+pub trait StateLock {}
+
+/// 宿主端口。
+pub trait Platform: Send + Sync {
+    /// 以读写方式打开目标。
+    fn open_target(&self, path: &Path) -> PlatformResult<Box<dyn TargetHandle>>;
+
+    /// 以只读方式打开目标。
+    fn open_target_read_only(&self, path: &Path) -> PlatformResult<Box<dyn TargetHandle>>;
+
+    /// 目标的宿主形态；只读元数据，不打开文件。
+    fn path_kind(&self, path: &Path) -> TargetKind;
+
+    /// 本宿主能否对目标所在的块设备执行分区表与视图操作（BLKPG/BLKRRPART、挂载）。
+    ///
+    /// 普通文件经 loop 得到分区视图，不受该能力限制；缺能力的宿主不能假装能做，
+    /// 没有可用载体时上层据此按"不支持"拒绝，而不是照常执行再得到内核 `EPERM`。
+    fn filesystem_ready(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
+
+    /// 把一个挂载点反查成挂载事实；本平台不做反查时按"不支持"返回。
+    fn mount_facts(&self, path: &Path) -> PlatformResult<MountFacts> {
+        let _ = path;
+        Err(PlatformError::not_supported(
+            "this host does not resolve mount points",
+        ))
+    }
+
+    /// 整盘上第 N 个分区当前的挂载情况，取全部可读挂载命名空间。
+    ///
+    /// 不能返回空事实猜测"未挂载"：读不出来就是 `Err`，由调用方按未知处理。
+    fn partition_mount(&self, _disk: &Path, _partition: u32) -> PlatformResult<PartitionMount> {
+        Err(PlatformError::not_supported(
+            "this host does not resolve partition mounts",
+        ))
+    }
+
+    /// 整盘上第 N 个分区是否是活动 swap 区域。
+    fn swap_active(&self, _disk: &Path, _partition: u32) -> PlatformResult<bool> {
+        Err(PlatformError::not_supported(
+            "this host does not report active swap",
+        ))
+    }
+
+    /// 让内核把已存在分区的几何改成给定的起点与长度（`BLKPG_RESIZE_PARTITION`）。
+    ///
+    /// 用于已挂载分区：整盘重读（`BLKRRPART`）在分区被占用时返回 `EBUSY`，只能按
+    /// 分区增量调整。缺能力时返回 `NotSupported`，调用方据此落"表已写、视图未同步"。
+    fn resize_partition_live(
         &self,
-        anchor: &DirFd,
-        file: &EvidenceFile,
-        temp: &RelativePath,
-        bytes: &[u8],
-    ) -> Result<DirDurability, EvidenceIo>;
-
-    /// 删除已持有的证据文件并再次目录 fsync。两个凭据都由恢复引擎签发，
-    /// 本原语不接受缺任一凭据的调用。返回三态：删除是否发生与目录项是否持久化
-    /// 分开陈述，下游不从 [`EvidenceIo`] 反推"记录还在"
-    fn remove(
-        &self,
-        anchor: &DirFd,
-        file: EvidenceFile,
-        committed: &crate::recovery::CommittedRecord,
-        permit: &crate::recovery::CleanupPermit,
-    ) -> RemoveOutcome;
-}
-
-/// 平台探测/打开失败。分类在这里不压成 io：成因决定上层是拒绝还是能力不支持
-#[derive(Debug)]
-pub(crate) enum PlatformError {
-    Io(std::io::Error),
-    /// 目标拿不到稳定身份证据：路径相同不构成同一目标
-    Unidentifiable(String),
-    /// 平台没有该能力
-    Unsupported(String),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 身份只由材料决定：同一材料相等，设备 ID 不同即不同目标；
-    /// 类型里没有路径字段，改名不会改变恒等比较
-    #[test]
-    fn target_id_compares_identity_material_only() {
-        let a = TargetId::from_material(IdentityMaterial::block(8, 16, Some("device/serial=S1")));
-        let b = TargetId::from_material(IdentityMaterial::block(8, 16, Some("device/serial=S1")));
-        assert_eq!(a, b);
-        let other = TargetId::from_material(IdentityMaterial::block(8, 16, Some("device/serial=S2")));
-        assert_ne!(a, other);
+        _disk: &Path,
+        _partition: u32,
+        _start_bytes: u64,
+        _len_bytes: u64,
+    ) -> PlatformResult<()> {
+        Err(PlatformError::not_supported(
+            "this host cannot resize a partition in the kernel view",
+        ))
     }
 
-    /// serial 为空 / 空白 / 全零，wwn 又不存在时，设备号之外没有身份材料：
-    /// 这样的材料与不带设备 ID 的材料相等；设备自己声明的任一稳定 ID 则不同。
-    /// 命名空间前缀与 UUID 连字符不改变全零的判定
-    #[test]
-    fn a_falsy_device_id_is_no_identity_evidence() {
-        for raw in [
-            None,
-            Some(""),
-            Some("   "),
-            Some("device/serial=0000000000000000"),
-            Some("wwid=0x0000000000000000"),
-            Some("wwid=naa.0000000000000000"),
-            Some("dm/uuid=uuid.00000000-0000-0000-0000-000000000000"),
-        ] {
-            assert_eq!(
-                IdentityMaterial::block(8, 16, raw),
-                IdentityMaterial::block(8, 16, None),
-                "raw={raw:?}"
-            );
-        }
-        assert_ne!(
-            IdentityMaterial::block(8, 16, Some("device/serial=S1")),
-            IdentityMaterial::block(8, 16, None)
-        );
-        assert_ne!(
-            IdentityMaterial::block(8, 16, Some("wwid=0x5000c500a1b2c3d4")),
-            IdentityMaterial::block(8, 16, None)
-        );
-        assert_ne!(
-            IdentityMaterial::block(
-                8,
-                16,
-                Some("dm/uuid=uuid.12345678-1234-1234-1234-123456789abc")
-            ),
-            IdentityMaterial::block(8, 16, None)
-        );
+    /// 当前配置的虚拟机载体；未配置或本平台不提供时为 `None`。
+    fn carrier(&self) -> PlatformResult<Option<Box<dyn Carrier>>> {
+        Ok(None)
     }
 
-    /// 稳定设备 ID 是块设备唯一的跨现场身份：设备号变了（重启/热插拔后重新分配）
-    /// 仍是同一目标；双方都没有稳定 ID 时才退回设备号比较；一方有一方没有即不同目标
-    #[test]
-    fn a_stable_device_id_outranks_the_kernel_device_numbers() {
-        let with_id = |maj, min, raw| IdentityMaterial::block(maj, min, Some(raw));
-        assert_eq!(with_id(8, 16, "serial=S1"), with_id(8, 32, "serial=S1"));
-        assert_ne!(with_id(8, 16, "serial=S1"), with_id(8, 16, "serial=S2"));
+    /// 目标本身是不是块设备上的分区节点（`/dev/sda1`），而不是整盘。
+    fn is_partition_node(&self, path: &Path) -> bool;
 
-        assert_eq!(
-            IdentityMaterial::block(8, 16, None),
-            IdentityMaterial::block(8, 16, None)
-        );
-        assert_ne!(
-            IdentityMaterial::block(8, 16, None),
-            IdentityMaterial::block(8, 32, None)
-        );
+    /// 目标的稳定身份；镜像取文件对象，块设备取设备本身。
+    fn identity(&self, path: &Path) -> PlatformResult<Fingerprint>;
 
-        // 一侧有稳定 ID、一侧只有设备号：无法证明是同一目标
-        assert_ne!(
-            with_id(8, 16, "serial=S1"),
-            IdentityMaterial::block(8, 16, None)
-        );
+    /// 目标的占用结论。
+    fn occupancy(&self, path: &Path) -> PlatformResult<Occupancy>;
+
+    /// LVM2 PV 收尾可接受的占用：DM 栈持有镜像的 loop 不算冲突（pvresize 只改 PV
+    /// 元数据，持有它的 dm 栈不解析这部分字节）。默认与 [`Self::occupancy`] 相同。
+    fn occupancy_for_lvm(&self, path: &Path) -> PlatformResult<Occupancy> {
+        self.occupancy(path)
     }
 
-    /// 身份是（命名空间, 值）：同一个值从不同属性读到仍是同一身份。
-    /// 值自带前缀时前缀就是命名空间；裸值没有自述，只能靠属性名区分
-    #[test]
-    fn an_identity_is_its_namespace_and_value_not_the_attribute_that_carried_it() {
-        let block = |raw| IdentityMaterial::block(8, 16, Some(raw));
-        assert_eq!(block("wwid=naa.5000c500aabbccdd"), block("device/wwid=naa.5000c500aabbccdd"));
-        assert_eq!(block("wwid=eui.0025385812345678"), block("device/wwid=eui.0025385812345678"));
-        // 裸值不自述命名空间：serial 与 wwid 下的同值字符串不是同一条声明
-        assert_ne!(block("device/serial=SN123456"), block("device/wwid=SN123456"));
-        assert_eq!(block("device/serial=SN123456"), block("serial=SN123456"));
-        // 命名空间不同即不同身份，即便值看起来一样
-        assert_ne!(block("wwid=naa.5000c500aabbccdd"), block("dm/uuid=mpath-5000c500aabbccdd"));
-        assert_ne!(block("wwid=eui.0025385812345678"), block("wwid=naa.0025385812345678"));
+    /// 记录根目录；宿主没有可写状态目录时返回 `None`。
+    fn state_root(&self) -> Option<PathBuf>;
+
+    /// 路径是否为目录。
+    fn is_directory(&self, path: &Path) -> bool;
+
+    /// 递归列出目录下的普通文件；根不存在或不可读时返回错误。
+    fn list_files(&self, root: &Path) -> PlatformResult<Vec<PathBuf>>;
+
+    /// 读取一个普通文件；不存在时返回 `None`。
+    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>>;
+
+    /// 运行一个外部程序。程序身份到可执行名与参数的映射留在本层。
+    fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun>;
+
+    /// 只读检查类程序必须带上的固定旗标（例如 `e2fsck -f -n`）；其他调用为空。
+    fn check_arguments(&self, _program: Program) -> &'static [&'static str] {
+        &[]
     }
 
-    /// 镜像拿不到文件 ID 时拒绝识别：卷序列号不参与比较，单独它不足以构成身份
-    #[test]
-    fn image_identity_without_file_id_is_refused() {
-        assert!(matches!(
-            IdentityMaterial::image(Some(7), None),
-            Err(PlatformError::Unidentifiable(_))
-        ));
-        assert!(IdentityMaterial::image(None, Some([0; 16])).is_ok());
+    /// 仅当 `program` 在宿主上可执行时返回真。
+    fn tool_available(&self, program: Program) -> bool;
+
+    /// 程序在宿主上的可执行名，用于提示文案。
+    fn tool_name(&self, program: Program) -> &'static str;
+
+    /// 把文件的字节区间绑定为块设备视图。
+    fn bind_loop(&self, path: &Path, offset: u64, len: u64) -> PlatformResult<LoopBinding>;
+
+    /// 整盘块设备上第 N 个分区的设备节点。
+    fn partition_device(&self, disk: &Path, number: u32) -> PlatformResult<PathBuf>;
+
+    /// LVM 报表里报出的设备与目标设备是不是同一段存储。
+    ///
+    /// 默认按"无法证明"返回：没有该能力的宿主不能让调用方把不确定当成不同。
+    fn compare_devices(&self, _target: &Path, _reported: &Path) -> DeviceMatch {
+        DeviceMatch::Unknown("this host cannot compare device identities".to_owned())
     }
 
-    /// 复制或移动得到新的文件 ID ⇒ 新目标。旧现场按"身份不符"处理，
-    /// 而不是"同一目标的数据已变"
-    #[test]
-    fn copied_image_is_a_new_target() {
-        let original = TargetId::from_material(IdentityMaterial::image(None, Some([1; 16])).unwrap());
-        let copied = TargetId::from_material(IdentityMaterial::image(None, Some([2; 16])).unwrap());
-        assert_ne!(original, copied);
-    }
+    /// 宿主随机字节，用于新表的 GUID。
+    fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>>;
 
-    /// 卷序列号被工具重写不改变目标身份：文件 ID 相同即同一文件
-    #[test]
-    fn volume_serial_rewrite_does_not_change_identity() {
-        let before = TargetId::from_material(IdentityMaterial::image(Some(7), Some([3; 16])).unwrap());
-        let after = TargetId::from_material(IdentityMaterial::image(Some(9), Some([3; 16])).unwrap());
-        assert_eq!(before, after);
-    }
+    /// 递归建立目录。
+    fn create_directory_all(&self, path: &Path) -> PlatformResult<()>;
 
-    #[test]
-    fn probe_carries_identity_and_capacity() {
-        let material = IdentityMaterial::image(None, Some([1; 16])).unwrap();
-        let probe = TargetProbe::new(TargetId::from_material(material.clone()), 8 * 1024 * 1024);
-        assert_eq!(probe.id().material(), &material);
-        assert_eq!(probe.total_bytes(), 8 * 1024 * 1024);
-    }
+    /// 删除一个空目录；不存在时视为成功。
+    fn remove_directory(&self, path: &Path) -> PlatformResult<()>;
 
-    /// 证据路径只接受相对锚点的分量序列
-    #[test]
-    fn relative_path_rejects_escape_forms() {
-        assert!(RelativePath::try_new("disk.img.diskedit.journal").is_ok());
-        assert!(RelativePath::try_new("sub/file").is_ok());
-        assert!(matches!(RelativePath::try_new(""), Err(PathError::Empty)));
-        assert!(matches!(
-            RelativePath::try_new(std::path::MAIN_SEPARATOR.to_string() + "abs"),
-            Err(PathError::Absolute)
-        ));
-        assert!(matches!(RelativePath::try_new("a/../b"), Err(PathError::EscapesAnchor)));
-        assert!(matches!(RelativePath::try_new(".."), Err(PathError::EscapesAnchor)));
-    }
+    /// 建立一个宿主临时目录，名字带 `tag` 且不与其他调用冲突。
+    fn temporary_directory(&self, tag: &str) -> PlatformResult<PathBuf>;
+
+    /// 以覆盖方式写一个状态文件并落盘。
+    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
+
+    /// 追加写一个状态文件并落盘。
+    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
+
+    /// 删除一个状态文件；不存在时视为成功。
+    fn remove_state_file(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 把目录项落盘。
+    fn sync_directory(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 对状态文件取独占锁；离开作用域即释放。
+    fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>>;
 }
