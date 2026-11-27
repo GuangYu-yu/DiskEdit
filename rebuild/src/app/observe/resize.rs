@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use diskedit_core::fs::{ContentKind, Program, Support, Verb, catalog};
+use diskedit_core::fs::{ContentKind, FsKind, Program, Support, Verb, catalog};
 
 use crate::app::lvm::{self, LvSelection, LvmError};
 use crate::platform::{MountFacts, Occupancy, PartitionMount, Platform, TargetKind};
@@ -15,7 +15,7 @@ use super::new::{PriorState, prior_state, stamp_of};
 use super::records::RecordState;
 use super::snapshot::{CaptureError, TargetFacts, open_target, record_state};
 use super::table::{self, PartitionView, TableView};
-use super::{Command, PartitionSelector, Request};
+use super::{Command, PartitionSelector, Request, ResizeRequest, SizeSpec};
 
 /// `resize` 消费的现场。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +44,10 @@ pub struct ResizeSnapshot {
     pub partition_mount: Option<PartitionMount>,
     /// 设备形态下所选分区是否是活动 swap。
     pub swap_active: Option<bool>,
+    /// 收缩 ext 时的最小字节估算（`resize2fs -P` 块数 × `dumpe2fs -h` 块大小）。
+    /// 非 ext、非收缩、`--no-fs`、在线形态或工具缺失时为 `None`；探针本身失败为
+    /// `Some(Err)`，由判定层折成 `MinimumSizeUnknown` 拒绝。
+    pub min_bytes: Option<Result<u64, String>>,
 }
 
 /// 已挂载分区的在线几何调整现场。
@@ -186,6 +190,14 @@ pub fn capture_resize(
         )),
         _ => None,
     };
+    let min_bytes = offline_min_bytes(
+        platform,
+        &target,
+        selected.as_ref(),
+        resize,
+        online.as_ref(),
+        &tools,
+    );
     Ok(ResizeSnapshot {
         target: TargetFacts {
             sector_size,
@@ -206,6 +218,7 @@ pub fn capture_resize(
         online,
         partition_mount,
         swap_active,
+        min_bytes,
     })
 }
 
@@ -306,6 +319,7 @@ fn capture_mounted(
         }),
         partition_mount: None,
         swap_active,
+        min_bytes: None,
     })
 }
 
@@ -379,6 +393,124 @@ fn capture_lvm(
         selection: grow_lv.then(|| lvm::select_lv(platform, device, want_lv)),
         allocated_end: lvm::pv_allocated_end_bytes(platform, device),
     }
+}
+
+/// 收缩 ext 前的最小尺寸探针：只对"离线 + 未 `--no-fs` + ext + 收缩请求"采集。
+///
+/// 其余情形返回 `None`，由文件系统步骤按工具是否缺失自行拒绝；在线形态不在此处
+/// 采（在线收缩只允许 btrfs）。
+fn offline_min_bytes(
+    platform: &dyn Platform,
+    target: &TargetFacts,
+    selected: Option<&PartitionView>,
+    resize: &ResizeRequest,
+    online: Option<&OnlineFacts>,
+    tools: &[(Program, bool)],
+) -> Option<Result<u64, String>> {
+    if resize.no_fs || online.is_some() {
+        return None;
+    }
+    let partition = selected?;
+    if partition.content != ContentKind::Filesystem(FsKind::Ext) {
+        return None;
+    }
+    if !is_shrink_request(resize, partition) {
+        return None;
+    }
+    let available = |program: Program| tools.iter().any(|(known, ok)| *known == program && *ok);
+    if !available(Program::Resize2fs) || !available(Program::Dumpe2fs) {
+        return None;
+    }
+    Some(probe_min_bytes(platform, target, partition))
+}
+
+/// 请求方向是否为收缩：显式 `--end` 小于当前末端，或尺寸规格指向更小。
+fn is_shrink_request(resize: &ResizeRequest, partition: &PartitionView) -> bool {
+    if let Some(end) = resize.end {
+        return end < partition.last_lba;
+    }
+    match resize.size.as_ref() {
+        Some(SizeSpec::Absolute(bytes)) => *bytes < partition.bytes,
+        Some(SizeSpec::Delta { grow: false, .. }) | Some(SizeSpec::Percent { grow: false, .. }) => {
+            true
+        }
+        _ => false,
+    }
+}
+
+/// 只读探针：`resize2fs -P` 的块数 × `dumpe2fs -h` 的块大小（与基线口径一致）。
+fn probe_min_bytes(
+    platform: &dyn Platform,
+    target: &TargetFacts,
+    partition: &PartitionView,
+) -> Result<u64, String> {
+    let start = partition.first_lba.saturating_mul(target.sector_size);
+    let bytes = partition.bytes;
+    let path = match target.kind {
+        TargetKind::BlockDevice => platform
+            .partition_device(&target.path, partition.number)
+            .map_err(|error| error.to_string())?,
+        TargetKind::File => platform
+            .bind_loop(&target.path, start, bytes)
+            .map(|binding| binding.device().to_path_buf())
+            .map_err(|error| error.to_string())?,
+        TargetKind::Other => {
+            return Err("the target is neither an image nor a block device".to_owned());
+        }
+    };
+    let device = path
+        .to_str()
+        .ok_or_else(|| "the partition device path is not valid UTF-8".to_owned())?
+        .to_owned();
+    let run = platform
+        .run(Program::Resize2fs, &["-P".to_owned(), device.clone()])
+        .map_err(|error| error.to_string())?;
+    if run.code != Some(0) {
+        return Err(format!(
+            "resize2fs -P exited {:?}: {}",
+            run.code,
+            run.stderr.trim()
+        ));
+    }
+    let blocks = leading_number(
+        &format!("{}{}", run.stdout, run.stderr),
+        "Estimated minimum size of the filesystem:",
+    )
+    .ok_or_else(|| {
+        "resize2fs -P did not report \"Estimated minimum size of the filesystem\"".to_owned()
+    })?;
+    let run = platform
+        .run(Program::Dumpe2fs, &["-h".to_owned(), device])
+        .map_err(|error| error.to_string())?;
+    if run.code != Some(0) {
+        return Err(format!(
+            "dumpe2fs -h exited {:?}: {}",
+            run.code,
+            run.stderr.trim()
+        ));
+    }
+    let block_size = leading_number(&format!("{}{}", run.stdout, run.stderr), "Block size:")
+        .ok_or_else(|| "dumpe2fs -h did not report \"Block size\"".to_owned())?;
+    blocks.checked_mul(block_size).ok_or_else(|| {
+        format!("resize2fs -P × dumpe2fs block size overflows ({blocks} × {block_size})")
+    })
+}
+
+/// 取以 `prefix` 开头的行里紧随其后的十进制数。
+fn leading_number(text: &str, prefix: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix(prefix)?;
+        let digits: String = rest
+            .trim()
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.is_empty() {
+            None
+        } else {
+            digits.parse().ok()
+        }
+    })
 }
 
 fn resolve(view: &TableView, selector: PartitionSelector) -> Option<&PartitionView> {

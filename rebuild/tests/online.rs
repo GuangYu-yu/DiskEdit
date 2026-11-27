@@ -434,6 +434,7 @@ fn online_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
         }),
         partition_mount: None,
         swap_active: Some(false),
+        min_bytes: None,
     }
 }
 
@@ -550,6 +551,79 @@ fn btrfs_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
     }
     snapshot.tools.push((Program::Btrfs, true));
     snapshot
+}
+
+/// 离线 ext 现场：无挂载、无在线信息，分区 1 为 ext。
+fn offline_ext_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
+    let mut snapshot = online_snapshot(start, sectors);
+    snapshot.online = None;
+    snapshot.partition_mount = None;
+    snapshot.min_bytes = None;
+    snapshot
+}
+
+// covers: R0211, R0382, R0416
+#[test]
+fn offline_ext_shrink_below_the_probed_minimum_is_refused_before_any_write() {
+    let mut snapshot = offline_ext_snapshot(2048, 1024);
+    snapshot.min_bytes = Some(Ok(600_000));
+    // 收缩到分区 1 的 2500 LBA：新尺寸 453 扇区 = 231936 字节 < 探针最小值。
+    let decision =
+        diskedit::app::decide::resize::decide(&snapshot, &resize_request(None, Some(2500)));
+    let diskedit::app::decide::Decision::Refuse(refusal) = decision else {
+        panic!("收缩低于 resize2fs -P 的最小尺寸必须拒绝：{decision:?}");
+    };
+    assert!(
+        matches!(
+            refusal,
+            diskedit::app::decide::Refusal::BelowMinimumSize {
+                minimum: 600_000,
+                ..
+            }
+        ),
+        "{refusal:?}"
+    );
+}
+
+// covers: R0211, R0382, R0416
+#[test]
+fn offline_ext_shrink_with_an_unreadable_minimum_is_refused_as_unknown() {
+    let mut snapshot = offline_ext_snapshot(2048, 1024);
+    snapshot.min_bytes = Some(Err("resize2fs -P exited Some(1): bad".to_owned()));
+    let decision =
+        diskedit::app::decide::resize::decide(&snapshot, &resize_request(None, Some(2500)));
+    let diskedit::app::decide::Decision::Refuse(refusal) = decision else {
+        panic!("探针失败必须按最小值未知拒绝：{decision:?}");
+    };
+    assert!(
+        matches!(
+            refusal,
+            diskedit::app::decide::Refusal::MinimumSizeUnknown { .. }
+        ),
+        "{refusal:?}"
+    );
+}
+
+// covers: R0211, R0382, R0416
+#[test]
+fn offline_ext_shrink_above_the_probed_minimum_plans_the_shrink() {
+    let mut snapshot = offline_ext_snapshot(2048, 1024);
+    snapshot.min_bytes = Some(Ok(1024));
+    let decision =
+        diskedit::app::decide::resize::decide(&snapshot, &resize_request(None, Some(2500)));
+    let diskedit::app::decide::Decision::Execute { plan, .. } = decision else {
+        panic!("高于最小值应可收缩：{decision:?}");
+    };
+    assert!(
+        plan.steps()
+            .iter()
+            .any(|step| matches!(step.kind, StepKind::ShrinkFilesystem { .. })),
+        "{:?}",
+        plan.steps()
+            .iter()
+            .map(|step| &step.kind)
+            .collect::<Vec<_>>()
+    );
 }
 
 // covers: B28, R0742
