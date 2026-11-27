@@ -30,6 +30,8 @@ pub enum CaptureError {
     Identity(PlatformError),
     /// 内核回报的逻辑扇区尺寸不在允许集合内：几何无法确定，按能力不支持处理。
     UnsupportedSector { bytes: u64 },
+    /// 目标的逻辑块大小既没有内核值，用户也没有声明。
+    SectorSizeUnknown,
     /// 用户声明的身份名不适用于这个目标：它自身已能证明身份，或不是块设备。
     DeclaredIdentityNotApplicable,
     /// `--sector-size` 只命名镜像的扇区尺寸；块设备的逻辑扇区由内核给出。
@@ -58,6 +60,10 @@ impl std::fmt::Display for CaptureError {
             Self::UnsupportedSector { bytes } => write!(
                 f,
                 "the target's sector size {bytes} is outside the supported set (512..=65536, powers of two)"
+            ),
+            Self::SectorSizeUnknown => f.write_str(
+                "the target does not report a logical sector size and none was declared; \
+                 pass --sector-size",
             ),
             Self::DeclaredIdentityNotApplicable => f.write_str(
                 "--alias applies only to block devices with no readable WWN, EUI or repeatable \
@@ -130,9 +136,15 @@ pub struct RecoverSnapshot {
 pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, CaptureError> {
     let target = open_target(platform, request)?;
     let handle = platform.open_target_read_only(&target.path)?;
+    if handle.kind() == TargetKind::Other {
+        return Err(CaptureError::Unreadable {
+            why: "the target is neither a regular file nor a block device".to_owned(),
+        });
+    }
     let sector_size = handle
-        .sector_size()
-        .unwrap_or(request.sector_size().unwrap_or(512));
+        .resolved_sector_size()
+        .or(request.sector_size())
+        .ok_or(CaptureError::SectorSizeUnknown)?;
     if handle.len() < 512 {
         return Err(CaptureError::TooSmall {
             bytes: handle.len(),

@@ -82,7 +82,10 @@ impl Platform for Fake {
     }
 
     fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
-        Err(PlatformError::not_supported("no target in this test"))
+        // 只读句柄提供磁盘的扇区事实；在线扩容经载体交接时宿主据此填写请求。
+        Ok(Box::new(MemHandle {
+            bytes: Arc::new(Mutex::new(Vec::new())),
+        }))
     }
 
     fn path_kind(&self, _path: &Path) -> TargetKind {
