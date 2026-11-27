@@ -336,7 +336,12 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
 /// 可编辑的表：GPT 与 MBR 主表。
 enum Resizable {
     Gpt(GptTable),
-    Mbr { lba0: Vec<u8>, total_lba: u64 },
+    Mbr {
+        lba0: Vec<u8>,
+        total_lba: u64,
+        /// 构造时解析出的主分区占用区间；解析失败即拒绝，不在使用时兜底。
+        used: Vec<(u64, u64)>,
+    },
 }
 
 impl Resizable {
@@ -357,9 +362,7 @@ impl Resizable {
     fn used_ranges(&self) -> Vec<(u64, u64)> {
         match self {
             Self::Gpt(table) => table.used_ranges(),
-            Self::Mbr { lba0, total_lba } => {
-                edit::mbr_used_ranges(lba0, *total_lba).unwrap_or_default()
-            }
+            Self::Mbr { used, .. } => used.clone(),
         }
     }
 
@@ -384,7 +387,9 @@ impl Resizable {
                 }
                 table.segments(&entries).map_err(|error| error.to_string())
             }
-            Self::Mbr { lba0, total_lba } => {
+            Self::Mbr {
+                lba0, total_lba, ..
+            } => {
                 let bytes = edit::resize_mbr(lba0, number, start, new_end, *total_lba)
                     .map_err(|error| error.to_string())?;
                 Ok(vec![Segment {
@@ -1024,13 +1029,21 @@ fn editable(snapshot: &ResizeSnapshot) -> Result<(Resizable, Option<Vec<u8>>), R
             let repaired = super::repair::adopt(&mut gpt, *state, *pmbr, lba0)?;
             Ok((Resizable::Gpt(gpt), repaired.protective_mbr))
         }
-        TableFacts::Mbr { lba0, total_lba } => Ok((
-            Resizable::Mbr {
-                lba0: lba0.clone(),
-                total_lba: *total_lba,
-            },
-            None,
-        )),
+        TableFacts::Mbr { lba0, total_lba } => {
+            // 占用区间在这里解析一次：解析失败是表不可用，不是"没有占用"。
+            let used =
+                edit::mbr_used_ranges(lba0, *total_lba).map_err(|error| Refusal::TableDamaged {
+                    why: error.to_string(),
+                })?;
+            Ok((
+                Resizable::Mbr {
+                    lba0: lba0.clone(),
+                    total_lba: *total_lba,
+                    used,
+                },
+                None,
+            ))
+        }
     }
 }
 
@@ -1904,4 +1917,70 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
         Plan::external(vec![step], identity),
         format!("resized the filesystem on partition #{number} through its mounted volume"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::app::observe::records::RecordState;
+    use crate::app::observe::table::{MbrView, TableView};
+    use crate::app::observe::{PriorState, TableFacts, TargetFacts};
+    use crate::platform::{Occupancy, TargetKind};
+    use diskedit_core::fingerprint::Fingerprint;
+
+    use super::*;
+
+    fn mbr_snapshot(lba0: Vec<u8>) -> ResizeSnapshot {
+        ResizeSnapshot {
+            target: TargetFacts {
+                display: "img".to_owned(),
+                path: PathBuf::from("img"),
+                bytes: 1024 * 512,
+                kind: TargetKind::File,
+                sector_size: 512,
+                identity: Some(Fingerprint::strong([7; 32])),
+            },
+            occupancy: Occupancy::Idle,
+            record: RecordState {
+                directory: None,
+                directory_exists: false,
+                file: None,
+                bytes: None,
+                unavailable: None,
+            },
+            prior: PriorState::Absent,
+            view: TableView::Mbr(MbrView {
+                sector_size: 512,
+                partitions: Vec::new(),
+            }),
+            facts: Some(TableFacts::Mbr {
+                lba0,
+                total_lba: 1024,
+            }),
+            whole_content: None,
+            stamp: [0u8; 32],
+            is_partition_node: false,
+            selector: None,
+            selected: None,
+            tools: Vec::new(),
+            lvm: None,
+            online: None,
+            partition_mount: None,
+            swap_active: None,
+            min_bytes: None,
+        }
+    }
+
+    // covers: I14
+    #[test]
+    fn an_mbr_table_too_short_for_entries_is_not_an_empty_table() {
+        // 短于一个扇区的 MBR 解析不出任何分区记录：占用区间是"不知道"，不是
+        // "没有占用"。按空集继续会让扩容把已有分区当成空白区域。
+        let snapshot = mbr_snapshot(vec![0u8; 64]);
+        assert!(
+            matches!(editable(&snapshot), Err(Refusal::TableDamaged { .. })),
+            "解析不出分区记录的 MBR 必须拒绝，不能按无占用继续"
+        );
+    }
 }
