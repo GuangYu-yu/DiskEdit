@@ -14,8 +14,8 @@ use diskedit_core::record::{Frame, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
 use super::digest::Hasher;
-use super::transaction::LOCK_FILE;
-use super::{ExecError, FailureKind, Outcome};
+use super::transaction::{LOCK_FILE, Mint};
+use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
 use crate::app::decide::{ConfirmedPlan, StepKind};
 use crate::app::observe::RecoverMode;
 use crate::app::observe::records::{RECORD_FILE, hex16};
@@ -358,12 +358,12 @@ fn rolled_back_image(preimages: &[Preimage]) -> Result<Vec<(u64, Vec<u8>)>, Exec
     Ok(image)
 }
 
-fn target_matches_image(
-    handle: &dyn TargetHandle,
+fn image_matches(
     image: &[(u64, Vec<u8>)],
+    mut read: impl FnMut(u64, usize) -> Result<Vec<u8>, ExecError>,
 ) -> Result<bool, ExecError> {
     for (offset, expected) in image {
-        if read_exact(handle, *offset, expected.len())? != *expected {
+        if read(*offset, expected.len())? != *expected {
             return Ok(false);
         }
     }
@@ -384,7 +384,9 @@ fn admit_replay(
     }
     let handle = platform.open_target_read_only(target)?;
     let image = rolled_back_image(preimages)?;
-    if target_matches_image(handle.as_ref(), &image)? {
+    if image_matches(&image, |offset, len| {
+        read_exact(handle.as_ref(), offset, len)
+    })? {
         return Ok(false);
     }
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
@@ -433,11 +435,18 @@ fn replay(
     let mut handle = platform
         .open_target(target)
         .map_err(|error| (ExecError::from(error), false))?;
+    // 恢复没有活跃事务：记录本身已是"原像已落盘"的凭证，因此按一次会话铸造令牌，
+    // 让回写仍然经过写通道的区间、长度、目标上界与写后回读校验。
+    let mint = Mint::new();
+    let token = Recorded::mint(&mint, 0);
+    let declared: Vec<Region> = preimages.iter().map(|item| item.region).collect();
+    let mut channel = WriteChannel::new(handle.as_mut(), &declared, mint.session());
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut wrote = false;
     for item in preimages.iter().rev() {
         let offset = item.region.start();
-        let now = read_virtual(handle.as_mut(), offset, item.data.len(), &patches)
+        let now = channel
+            .read_exact(offset, item.data.len())
             .map_err(|error| (error, wrote))?;
         if now == item.data {
             patches.push((offset, item.data.clone()));
@@ -454,17 +463,18 @@ fn replay(
                 wrote,
             ));
         }
-        handle
-            .write_at(offset, &item.data)
-            .map_err(|error| (ExecError::from(error), wrote))?;
+        channel
+            .write(&token, item.region, &item.data)
+            .map_err(|error| (error, wrote))?;
         wrote = true;
         patches.push((offset, item.data.clone()));
     }
-    handle
-        .barrier()
-        .map_err(|error| (ExecError::from(error), wrote))?;
+    channel.barrier().map_err(|error| (error, wrote))?;
+    channel.verify_written().map_err(|error| (error, wrote))?;
     let image = rolled_back_image(preimages).map_err(|error| (error, wrote))?;
-    if !target_matches_image(handle.as_ref(), &image).map_err(|error| (error, wrote))? {
+    if !image_matches(&image, |offset, len| channel.read_exact(offset, len))
+        .map_err(|error| (error, wrote))?
+    {
         return Err((
             ExecError::Io(
                 "the rollback wrote the preimages but the target holds different bytes".to_owned(),
