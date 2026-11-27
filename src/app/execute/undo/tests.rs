@@ -319,6 +319,44 @@ fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
     assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
 }
 
+// covers: F2
+#[test]
+fn a_completed_irreversible_step_is_not_undone() {
+    // 外部动作成功后驱动追加了完成帧；记录因此可以被识别为"不可逆步骤已完成"，
+    // 但 undo 仍不能把它当作可回滚：目标字节已不可恢复，必须显式 release。
+    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
+    memory.put(
+        &record_path(),
+        record_bytes(&[
+            Frame {
+                seq: 0,
+                kind: FrameKind::Intent,
+                completed: false,
+                irreversible: true,
+                intent: b"make-filesystem".to_vec(),
+                regions: Vec::new(),
+            },
+            Frame {
+                seq: 1,
+                kind: FrameKind::Progress,
+                completed: true,
+                irreversible: true,
+                intent: Vec::new(),
+                regions: Vec::new(),
+            },
+        ]),
+    );
+    let outcome = run_mode(&memory, RecoverMode::Undo);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert!(memory.get(&record_path()).is_some(), "记录必须保留");
+    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
+}
+
 // covers: B7, B9
 #[test]
 fn rollback_verifies_the_preimage_and_cleans_the_record() {

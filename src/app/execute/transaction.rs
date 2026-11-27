@@ -240,6 +240,38 @@ impl<'a> RecordSession<'a> {
         if !self.registered {
             return Err(ExecError::Record("no preimage was registered".to_owned()));
         }
+        self.rewrite_append(FrameKind::Committed, true, false, Vec::new())?;
+        self.platform
+            .remove_state_file(&self.file)
+            .map_err(ExecError::from)?;
+        self.platform
+            .sync_directory(&self.directory)
+            .map_err(ExecError::from)?;
+        Ok(())
+    }
+
+    /// 外部不可逆动作成功后追加完成帧。
+    ///
+    /// `begin_irreversible` 落下的意图帧是 `completed:false`：中断时恢复器无法
+    /// 判断外部动作是否已发生。驱动在外部动作成功后调用本方法把完成标记落盘，
+    /// 恢复器据此把"已完成的不可逆步骤"与"未完成的不可逆步骤"分开。
+    pub fn complete_irreversible(&mut self) -> Result<(), ExecError> {
+        if !self.registered {
+            return Err(ExecError::Record(
+                "no irreversible step was declared".to_owned(),
+            ));
+        }
+        self.rewrite_append(FrameKind::Progress, true, true, Vec::new())
+    }
+
+    /// 读回记录、追加一帧并整条重编码落盘。
+    fn rewrite_append(
+        &mut self,
+        kind: FrameKind,
+        completed: bool,
+        irreversible: bool,
+        intent: Vec<u8>,
+    ) -> Result<(), ExecError> {
         let existing = match self
             .platform
             .read_record(&self.file)
@@ -248,7 +280,7 @@ impl<'a> RecordSession<'a> {
             RecordEntry::Contents(bytes) if !bytes.is_empty() => bytes,
             RecordEntry::Contents(_) | RecordEntry::Absent => {
                 return Err(ExecError::Record(
-                    "the record vanished before commit".to_owned(),
+                    "the record vanished before it was completed".to_owned(),
                 ));
             }
             RecordEntry::NotARecoveryFile => {
@@ -264,19 +296,16 @@ impl<'a> RecordSession<'a> {
             .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
         decoded.frames.push(Frame {
             seq,
-            kind: FrameKind::Committed,
-            completed: true,
-            irreversible: false,
-            intent: Vec::new(),
+            kind,
+            completed,
+            irreversible,
+            intent,
             regions: Vec::new(),
         });
         let encoded = record::encode(&decoded.body, &decoded.frames)
             .map_err(|error| ExecError::Record(error.to_string()))?;
         self.platform
             .write_state_file(&self.file, &encoded)
-            .map_err(ExecError::from)?;
-        self.platform
-            .remove_state_file(&self.file)
             .map_err(ExecError::from)?;
         self.platform
             .sync_directory(&self.directory)

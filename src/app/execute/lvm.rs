@@ -193,6 +193,9 @@ pub(super) fn execute_plan(
     if let Err(error) = result {
         return Err((lvm_exec_error(error), true));
     }
+    session
+        .complete_irreversible()
+        .map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     Ok(())
 }

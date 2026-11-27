@@ -627,6 +627,9 @@ pub(super) fn execute_plan(
         }
     }
 
+    session
+        .complete_irreversible()
+        .map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     Ok(())
 }
