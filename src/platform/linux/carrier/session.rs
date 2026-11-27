@@ -24,13 +24,10 @@ pub struct Disk {
 impl Disk {
     pub fn open(path: &Path) -> PlatformResult<Self> {
         let handle = crate::platform::host().open_target_read_only(path)?;
-        let sector = handle.resolved_sector_size().ok_or_else(|| {
-            PlatformError::not_supported("the disk does not report a logical sector size")
-        })?;
         Ok(Self {
             path: path.to_path_buf(),
             len: handle.len(),
-            sector,
+            sector: handle.sector_size().unwrap_or(512),
         })
     }
 }

@@ -154,8 +154,9 @@ fn capture_mounted(
     let selected = view.find(number).map(PartitionFacts::from);
     let tools = selected
         .as_ref()
-        .map(|partition| programs(catalog::profile(partition.content).support(Verb::Grow)))
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |partition| {
+            programs(catalog::profile(partition.content).support(Verb::Grow))
+        })
         .into_iter()
         .map(|program| (program, platform.tool_available(program)))
         .collect();
@@ -181,9 +182,10 @@ pub(super) fn open_disk(
     request: &Request,
 ) -> Result<TargetFacts, CaptureError> {
     let handle = platform.open_target_read_only(disk)?;
-    // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
-    let fingerprint = platform.identity(disk)?;
-    let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
+    let strong = platform
+        .identity(disk)
+        .ok()
+        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
     let identity = request
         .alias()
         .map(diskedit_core::fingerprint::Fingerprint::declared)
@@ -249,9 +251,9 @@ fn required_programs(command: &Command, selected: Option<&PartitionFacts>) -> Ve
         Command::Mkfs { filesystem, .. } => {
             programs(catalog::profile(filesystem.content()).support(Verb::Mkfs))
         }
-        Command::Resize(resize) if resize.fs_only => selected
-            .map(|partition| programs(catalog::profile(partition.content).support(Verb::Grow)))
-            .unwrap_or_default(),
+        Command::Resize(resize) if resize.fs_only => selected.map_or_else(Vec::new, |partition| {
+            programs(catalog::profile(partition.content).support(Verb::Grow))
+        }),
         Command::Layout { .. }
         | Command::RecordsList { .. }
         | Command::RecordsVerify { .. }
@@ -271,5 +273,5 @@ fn required_programs(command: &Command, selected: Option<&PartitionFacts>) -> Ve
 }
 
 fn programs(support: catalog::Support) -> Vec<Program> {
-    support.tools().map(<[Program]>::to_vec).unwrap_or_default()
+    support.tools().map_or_else(Vec::new, <[Program]>::to_vec)
 }

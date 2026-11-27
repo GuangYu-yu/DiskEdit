@@ -130,7 +130,6 @@ diskedit undo /dev/sdb --yes
 - [docs/zh/capability-matrix.md](docs/zh/capability-matrix.md) — 每条命令与每项能力在“平台 × 介质”上的矩阵。生成物，不要手改；英文版见 [docs/en/capability-matrix.md](docs/en/capability-matrix.md)。
 - [docs/zh/internals.md](docs/zh/internals.md) — 行为边界：能力门、占用与并发、目标身份、恢复记录、续跑语义、外部工具、验证范围。
 - [docs/zh/interop.md](docs/zh/interop.md) — 在工具之外处理 qcow2/vmdk/vdi、远程目标与稀疏镜像：命令、接缝，以及哪些未经实测。
-- [docs/policy.md](docs/policy.md) — 兜底与拒绝政策（英文）：何时继续是安全的、何时必须拒绝，以及哪些状态属于本工具的职责。
 
 ## License
 

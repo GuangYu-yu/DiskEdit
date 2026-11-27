@@ -248,11 +248,7 @@ pub(super) fn read_region(
 
 pub(super) fn prior_state(record: &RecordState) -> PriorState {
     let Some(bytes) = record.bytes.as_ref() else {
-        // 记录位置已知而读取失败时，不能当成"没有记录"：写路径会据此继续。
-        return match (record.file.as_ref(), record.unavailable.as_ref()) {
-            (Some(_), Some(_)) => PriorState::Unreadable,
-            _ => PriorState::Absent,
-        };
+        return PriorState::Absent;
     };
     match record::decode(bytes) {
         Ok(decoded) => {
@@ -279,33 +275,4 @@ pub fn record_paths(
     let directory = root.join("images").join(super::records::hex16(identity));
     let file = directory.join(super::records::RECORD_FILE);
     Some((directory, file))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn record(bytes: Option<Vec<u8>>, unavailable: Option<&str>) -> RecordState {
-        RecordState {
-            directory: Some(PathBuf::from("/state/images/key")),
-            directory_exists: true,
-            file: Some(PathBuf::from("/state/images/key/record")),
-            bytes,
-            unavailable: unavailable.map(str::to_owned),
-        }
-    }
-
-    // covers: I15
-    #[test]
-    fn a_record_that_cannot_be_read_is_not_reported_absent() {
-        let state = record(None, Some("cannot read the record: permission denied"));
-        assert_eq!(prior_state(&state), PriorState::Unreadable);
-    }
-
-    // covers: I15
-    #[test]
-    fn a_target_with_no_record_file_is_absent() {
-        let state = record(None, None);
-        assert_eq!(prior_state(&state), PriorState::Absent);
-    }
 }

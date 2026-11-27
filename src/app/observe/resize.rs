@@ -287,8 +287,7 @@ fn capture_mounted(
     let selected = view.find(number).cloned();
     let tools: Vec<(Program, bool)> = selected
         .as_ref()
-        .map(|partition| programs_for(partition.content))
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |partition| programs_for(partition.content))
         .into_iter()
         .map(|program| (program, platform.tool_available(program)))
         .collect();

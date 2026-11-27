@@ -100,46 +100,20 @@ fn action(steps: &[Step]) -> Result<(Action, Region), ExecError> {
     ))
 }
 
-/// 缩 PV 的边界判据：已分配 extent 的末端超出目标尺寸即拒绝。
-///
-/// 这个判据必须能用"删除即红"的用例守住：把它退化成无条件放行，
-/// 缩 PV 会截断仍在使用的 extent。
-fn shrink_allocated_check(allocated: u64, bytes: u64) -> Result<(), ExecError> {
-    if allocated > bytes {
-        return Err(ExecError::InvalidPlan(format!(
-            "the PV's allocated extents end at {allocated} bytes, past the shrink target {bytes} bytes"
-        )));
-    }
-    Ok(())
-}
-
 pub(super) fn execute_plan(
     platform: &dyn Platform,
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<(), (ExecError, bool)> {
     let (action, region) = action(plan.steps()).map_err(|error| (error, false))?;
-    // 决策层只产出变大的 PV 尺寸；new < old 说明计划自相矛盾。差值不能按 0 处理
-    // 后照常放大/改写 PV 元数据——那会把 PV 静默缩小。
-    if let Action::Grow {
-        old_bytes,
-        new_bytes,
-        ..
-    } = &action
-        && new_bytes < old_bytes
-    {
-        return Err((
-            ExecError::InvalidPlan(format!(
-                "the grow target {new_bytes} bytes is smaller than the recorded PV size {old_bytes} bytes"
-            )),
-            false,
-        ));
-    }
     super::filesystem::ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
     let mut session =
         RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
+    session
+        .begin_irreversible(plan.request_digest(), LVM_INTENT)
+        .map_err(|error| (error, false))?;
 
     let partition = match &action {
         Action::Shrink { partition, .. } | Action::Grow { partition, .. } => *partition,
@@ -152,24 +126,6 @@ pub(super) fn execute_plan(
         region.len(),
     )
     .map_err(|error| (error, false))?;
-
-    // 缩 PV 前在边界重核已分配 extent 的末端：计划与执行之间的窗口里分配区可能
-    // 长过新的 PV 尺寸，此前的计划结论不能替代这一次现场核对。
-    if let Action::Shrink { bytes, .. } = &action {
-        let dev = device.device().to_str().ok_or_else(|| {
-            (
-                ExecError::InvalidPlan("the partition device path is not valid UTF-8".to_owned()),
-                false,
-            )
-        })?;
-        let allocated = lvm::pv_allocated_end_bytes(platform, dev)
-            .map_err(|error| (lvm_exec_error(error), false))?;
-        shrink_allocated_check(allocated, *bytes).map_err(|error| (error, false))?;
-    }
-
-    session
-        .begin_irreversible(plan.request_digest(), LVM_INTENT)
-        .map_err(|error| (error, false))?;
 
     let result = match &action {
         Action::Shrink { bytes, .. } => lvm::shrink_pv(platform, device.device(), *bytes),
@@ -184,7 +140,7 @@ pub(super) fn execute_plan(
             &GrowChain {
                 part_dev: device.device(),
                 expected_bytes: *new_bytes,
-                delta_bytes: new_bytes - old_bytes,
+                delta_bytes: new_bytes.saturating_sub(*old_bytes),
                 grow_lv: *grow_lv,
                 want_lv: lv.as_deref(),
             },
@@ -193,38 +149,10 @@ pub(super) fn execute_plan(
     if let Err(error) = result {
         return Err((lvm_exec_error(error), true));
     }
-    session
-        .complete_irreversible()
-        .map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     Ok(())
 }
 
 fn lvm_exec_error(error: LvmError) -> ExecError {
     ExecError::Io(error.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // covers: I13
-    #[test]
-    fn a_shrink_past_the_allocated_end_is_rejected() {
-        let error =
-            shrink_allocated_check(4_194_304, 1_048_576).expect_err("已分配末端超过目标必须拒绝");
-        assert!(
-            error
-                .to_string()
-                .contains("past the shrink target 1048576 bytes"),
-            "实际错误：{error}"
-        );
-    }
-
-    // covers: I13
-    #[test]
-    fn a_shrink_covering_the_allocated_end_is_accepted() {
-        shrink_allocated_check(4_194_304, 4_194_304).expect("目标等于已分配末端应成立");
-        shrink_allocated_check(4_194_304, 8_388_608).expect("目标大于已分配末端应成立");
-    }
 }

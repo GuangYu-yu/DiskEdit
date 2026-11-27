@@ -14,12 +14,12 @@ use diskedit_core::record::{Frame, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
 use super::digest::Hasher;
-use super::transaction::{LOCK_FILE, Mint};
-use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
+use super::transaction::LOCK_FILE;
+use super::{ExecError, FailureKind, Outcome};
 use crate::app::decide::{ConfirmedPlan, StepKind};
 use crate::app::observe::RecoverMode;
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, RecordEntry, TargetHandle};
+use crate::platform::{Platform, TargetHandle};
 
 /// 执行一份已确认的回滚计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
@@ -46,15 +46,7 @@ fn execute(
     }
     let site = prepare(platform, target, plan)?;
     let identity = plan.identity();
-    rollback(
-        platform,
-        target,
-        &site.directory,
-        &site.file,
-        site.bytes,
-        identity,
-        mode,
-    )
+    rollback(platform, target, &site.file, site.bytes, identity)
 }
 
 /// 锁内现场：记录目录、记录文件与记录字节。回放与放弃共用这一段准入。
@@ -96,27 +88,13 @@ pub(super) fn prepare(
         ));
     }
     let file = directory.join(RECORD_FILE);
-    let bytes = site_bytes(platform, &file).map_err(|error| (error, false))?;
+    let bytes = crate::app::observe::records::read_bytes(platform, &file)
+        .map_err(|error| (ExecError::from(error), false))?;
     Ok(Site {
         directory,
         file,
         bytes,
     })
-}
-
-/// 读记录位置：链接、目录等非普通条目一律按"不是恢复文件"拒绝。
-pub(super) fn site_bytes(
-    platform: &dyn Platform,
-    file: &Path,
-) -> Result<Option<Vec<u8>>, ExecError> {
-    match platform.read_record(file)? {
-        RecordEntry::Contents(bytes) => Ok(Some(bytes)),
-        RecordEntry::Absent => Ok(None),
-        RecordEntry::NotARecoveryFile => Err(ExecError::Record(format!(
-            "{} is not a recovery file",
-            file.display()
-        ))),
-    }
 }
 
 pub(super) fn mode_of(plan: &ConfirmedPlan) -> Result<RecoverMode, (ExecError, bool)> {
@@ -157,11 +135,9 @@ pub(super) fn mode_of(plan: &ConfirmedPlan) -> Result<RecoverMode, (ExecError, b
 fn rollback(
     platform: &dyn Platform,
     target: &Path,
-    directory: &Path,
     file: &Path,
     bytes: Option<Vec<u8>>,
     identity: Fingerprint,
-    mode: RecoverMode,
 ) -> Result<Outcome, (ExecError, bool)> {
     let Some(bytes) = bytes else {
         // 记录在执行层取锁前被清理：已无事可做。
@@ -170,7 +146,7 @@ fn rollback(
     match recover(&bytes, identity) {
         RecoveryPlan::Absent => Ok(Outcome::completed()),
         RecoveryPlan::Committed => {
-            clear(platform, directory, file, &bytes).map_err(|error| (error, false))?;
+            clear(platform, file, &bytes).map_err(|error| (error, false))?;
             Ok(Outcome::completed())
         }
         RecoveryPlan::Foreign { magic } => Err((
@@ -182,19 +158,6 @@ fn rollback(
         )),
         RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why), false)),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
-            // 已执行过不可逆步骤（外部建卷/改数据区）的记录没有完整原像，`undo`
-            // 不能把它当成可回滚：那会把"外部动作已发生"悄悄清掉。`replay` 只回放
-            // 表区原像，仍可继续；彻底放弃走 `release`。
-            if mode == RecoverMode::Undo && frames.iter().any(|frame| frame.irreversible) {
-                return Err((
-                    ExecError::Record(
-                        "the record contains an irreversible step; build/format or data writes \
-                         cannot be rolled back — use `release` to abandon it explicitly"
-                            .to_owned(),
-                    ),
-                    false,
-                ));
-            }
             let plan = preimages(&frames).map_err(|error| (error, false))?;
             let pending = admit_replay(platform, target, &plan).map_err(|error| (error, false))?;
             let wrote = if pending {
@@ -202,7 +165,7 @@ fn rollback(
             } else {
                 false
             };
-            clear(platform, directory, file, &bytes).map_err(|error| (error, wrote))?;
+            clear(platform, file, &bytes).map_err(|error| (error, wrote))?;
 
             Ok(Outcome::rolled_back())
         }
@@ -323,12 +286,12 @@ impl TearLog {
 
 /// 把逆序回放中原先写过的区间叠加到读出字节上。
 fn read_virtual(
-    handle: &dyn TargetHandle,
+    mut read: impl FnMut(u64, usize) -> Result<Vec<u8>, ExecError>,
     offset: u64,
     len: usize,
     patches: &[(u64, Vec<u8>)],
 ) -> Result<Vec<u8>, ExecError> {
-    let mut buffer = read_exact(handle, offset, len)?;
+    let mut buffer = read(offset, len)?;
     for (patch_at, patch) in patches {
         let patch_end = patch_at.saturating_add(patch.len() as u64);
         let overlap_start = (*patch_at).max(offset);
@@ -373,9 +336,9 @@ fn rolled_back_image(preimages: &[Preimage]) -> Result<Vec<(u64, Vec<u8>)>, Exec
     Ok(image)
 }
 
-fn image_matches(
-    image: &[(u64, Vec<u8>)],
+fn target_matches_image(
     mut read: impl FnMut(u64, usize) -> Result<Vec<u8>, ExecError>,
+    image: &[(u64, Vec<u8>)],
 ) -> Result<bool, ExecError> {
     for (offset, expected) in image {
         if read(*offset, expected.len())? != *expected {
@@ -399,9 +362,7 @@ fn admit_replay(
     }
     let handle = platform.open_target_read_only(target)?;
     let image = rolled_back_image(preimages)?;
-    if image_matches(&image, |offset, len| {
-        read_exact(handle.as_ref(), offset, len)
-    })? {
+    if target_matches_image(|at, len| read_exact(handle.as_ref(), at, len), &image)? {
         return Ok(false);
     }
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
@@ -409,7 +370,12 @@ fn admit_replay(
     let mut pending = false;
     for item in preimages.iter().rev() {
         let offset = item.region.start();
-        let now = read_virtual(handle.as_ref(), offset, item.data.len(), &patches)?;
+        let now = read_virtual(
+            |at, len| read_exact(handle.as_ref(), at, len),
+            offset,
+            item.data.len(),
+            &patches,
+        )?;
         if now != item.data {
             let torn = match RecordedWrite::of(&now, &item.after, &item.data) {
                 Some(RecordedWrite::After) => None,
@@ -450,19 +416,20 @@ fn replay(
     let mut handle = platform
         .open_target(target)
         .map_err(|error| (ExecError::from(error), false))?;
-    // 恢复没有活跃事务：记录本身已是"原像已落盘"的凭证，因此按一次会话铸造令牌，
-    // 让回写仍然经过写通道的区间、长度、目标上界与写后回读校验。
-    let mint = Mint::new();
-    let token = Recorded::mint(&mint, 0);
     let declared: Vec<Region> = preimages.iter().map(|item| item.region).collect();
-    let mut channel = WriteChannel::new(handle.as_mut(), &declared, mint.session());
+    // 回滚写入也走唯一写通道：原始写原语只留在通道内部，授权来自记录里的原像。
+    let mut channel = super::WriteChannel::for_recovery(handle.as_mut(), &declared);
     let mut patches: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut wrote = false;
     for item in preimages.iter().rev() {
         let offset = item.region.start();
-        let now = channel
-            .read_exact(offset, item.data.len())
-            .map_err(|error| (error, wrote))?;
+        let now = read_virtual(
+            |at, len| channel.read_exact(at, len),
+            offset,
+            item.data.len(),
+            &patches,
+        )
+        .map_err(|error| (error, wrote))?;
         if now == item.data {
             patches.push((offset, item.data.clone()));
             continue;
@@ -479,15 +446,14 @@ fn replay(
             ));
         }
         channel
-            .write(&token, item.region, &item.data)
+            .write(item.region, &item.data)
             .map_err(|error| (error, wrote))?;
         wrote = true;
         patches.push((offset, item.data.clone()));
     }
     channel.barrier().map_err(|error| (error, wrote))?;
-    channel.verify_written().map_err(|error| (error, wrote))?;
     let image = rolled_back_image(preimages).map_err(|error| (error, wrote))?;
-    if !image_matches(&image, |offset, len| channel.read_exact(offset, len))
+    if !target_matches_image(|at, len| channel.read_exact(at, len), &image)
         .map_err(|error| (error, wrote))?
     {
         return Err((
@@ -517,20 +483,14 @@ fn read_exact(handle: &dyn TargetHandle, offset: u64, len: usize) -> Result<Vec<
 }
 
 /// B23 清理：回读必须仍是同一份记录，才删除并对目录 `fsync`。
-fn clear(
-    platform: &dyn Platform,
-    directory: &Path,
-    file: &Path,
-    expected: &[u8],
-) -> Result<(), ExecError> {
-    let current = site_bytes(platform, file)?;
+fn clear(platform: &dyn Platform, file: &Path, expected: &[u8]) -> Result<(), ExecError> {
+    let current = crate::app::observe::records::read_bytes(platform, file)?;
     if current.as_deref() != Some(expected) {
         return Err(ExecError::Record(
             "the record changed before it could be cleaned up".to_owned(),
         ));
     }
-    platform.remove_state_file(file)?;
-    platform.sync_directory(directory)?;
+    platform.remove_record(file)?;
     Ok(())
 }
 

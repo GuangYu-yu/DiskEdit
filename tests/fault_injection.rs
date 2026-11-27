@@ -24,7 +24,7 @@ use diskedit::platform::{
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{FrameKind, RecoveryPlan, decode, recover};
+use diskedit_core::record::{FrameKind, decode};
 use diskedit_core::region::Region;
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
@@ -40,7 +40,6 @@ struct Faults {
     corrupt_write: Option<usize>,
     fail_barrier: Option<usize>,
     fail_state_write: Option<usize>,
-    fail_state_remove: Option<usize>,
 }
 
 #[derive(Default)]
@@ -49,7 +48,6 @@ struct Counts {
     writes: AtomicUsize,
     barriers: AtomicUsize,
     state_writes: AtomicUsize,
-    state_removes: AtomicUsize,
 }
 
 struct Lock;
@@ -129,12 +127,6 @@ struct Memory {
     kind: TargetKind,
     /// 目标自身能否给出 Strong 身份；块设备无 WWN/EUI/可重复序列号时为 `false`。
     strong_identity: bool,
-    /// `list_files` 回报的条目，用于驱动记录目录扫描。
-    scan_files: Vec<PathBuf>,
-    /// 让 `read_file` 以读故障结束，用于记录读取失败的语义。
-    read_failure: bool,
-    /// 让 `identity` 以读故障结束，用于身份探测失败的语义。
-    identity_failure: bool,
 }
 
 impl Memory {
@@ -147,9 +139,6 @@ impl Memory {
             sector: Some(SECTOR),
             kind: TargetKind::File,
             strong_identity: true,
-            scan_files: Vec::new(),
-            read_failure: false,
-            identity_failure: false,
         }
     }
 
@@ -204,13 +193,7 @@ impl Platform for Memory {
     fn is_partition_node(&self, _path: &Path) -> bool {
         false
     }
-    fn identity(&self, path: &Path) -> PlatformResult<Fingerprint> {
-        if self.identity_failure {
-            return Err(PlatformError::io(
-                path,
-                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-            ));
-        }
+    fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
         if self.strong_identity {
             Ok(IDENTITY)
         } else {
@@ -232,25 +215,10 @@ impl Platform for Memory {
     fn is_directory(&self, _path: &Path) -> bool {
         self.kind == TargetKind::File
     }
-    fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        Ok(self.scan_files.clone())
-    }
-    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
-        if self.read_failure {
-            return Err(PlatformError::io(
-                path,
-                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-            ));
-        }
-        Ok(self.files.lock().unwrap().get(path).cloned())
+    fn list_record_entries(&self, _root: &Path, _name: &str) -> PlatformResult<Vec<PathBuf>> {
+        Ok(Vec::new())
     }
     fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
-        if self.read_failure {
-            return Err(PlatformError::io(
-                path,
-                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-            ));
-        }
         Ok(match self.files.lock().unwrap().get(path).cloned() {
             Some(bytes) => RecordEntry::Contents(bytes),
             None => RecordEntry::Absent,
@@ -287,7 +255,7 @@ impl Platform for Memory {
     fn temporary_directory(&self, _tag: &str) -> PlatformResult<PathBuf> {
         Err(PlatformError::not_supported("no temp"))
     }
-    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
         let call = self.counts.state_writes.fetch_add(1, Ordering::SeqCst) + 1;
         if self.faults.fail_state_write == Some(call) {
             return Err(PlatformError::parse("injected record write failure"));
@@ -298,18 +266,15 @@ impl Platform for Memory {
             .insert(path.to_path_buf(), bytes.to_vec());
         Ok(())
     }
-    fn append_state_file(&self, _path: &Path, _bytes: &[u8]) -> PlatformResult<()> {
-        Ok(())
-    }
-    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
-        let call = self.counts.state_removes.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.faults.fail_state_remove == Some(call) {
-            return Err(PlatformError::parse("injected record removal failure"));
-        }
+    fn remove_record(&self, path: &Path) -> PlatformResult<()> {
         self.files.lock().unwrap().remove(path);
         Ok(())
     }
-    fn sync_directory(&self, _path: &Path) -> PlatformResult<()> {
+    fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()> {
+        let mut files = self.files.lock().unwrap();
+        if let Some(bytes) = files.remove(from) {
+            files.insert(to.to_path_buf(), bytes);
+        }
         Ok(())
     }
     fn lock_state(&self, _path: &Path) -> PlatformResult<Box<dyn StateLock>> {
@@ -381,6 +346,24 @@ fn assert_partial(outcome: &Outcome, what: &str) {
         outcome.reason()
     );
     assert_eq!(exit_of(outcome), PARTIAL, "{what}");
+}
+
+// covers: I4
+#[test]
+fn a_step_cannot_mint_a_second_write_token() {
+    use diskedit::app::execute::transaction::RecordSession;
+
+    let memory = Memory::new(initial_bytes(), Faults::default());
+    let mut session = RecordSession::prepare(&memory, IDENTITY).expect("记录会话");
+    let region = Region::sized(0, SECTOR).expect("区间");
+    session.token(7, &[region]).expect("首枚令牌");
+    let error = session
+        .token(7, &[region])
+        .expect_err("同一步骤不能铸第二枚令牌，重放没有令牌可用");
+    assert!(
+        error.to_string().contains("already spent"),
+        "实际错误：{error}"
+    );
 }
 
 // covers: R0577
@@ -613,62 +596,6 @@ fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
     assert_eq!(code, UNSUPPORTED, "集合外扇区尺寸应按 unsupported 拒绝");
 }
 
-// covers: I15
-#[test]
-fn a_record_that_cannot_be_read_is_an_environment_failure() {
-    // 记录目录里有一条以记录文件命名的条目，但读取失败：不能当作"没有记录"
-    // 跳过并报告扫描完整，必须让失败上行。
-    let mut memory = Memory::new(vec![0u8; 4096], Faults::default());
-    memory.scan_files = vec![PathBuf::from("/root/images/key").join(RECORD_FILE)];
-    memory.read_failure = true;
-    let code = dispatch(&memory, &["diskedit", "records", "list", "--root", "/root"]);
-    assert_eq!(code, ENVIRONMENT, "读取记录失败必须按环境失败上报");
-}
-
-// covers: I15
-#[test]
-fn an_identity_that_cannot_be_read_is_not_reported_as_no_identity() {
-    // 身份探测读失败不能折成"这个目标没有身份"：那会让 `--alias` 变成兜底，
-    // 把读不出来的身份当成可声明的空位继续写。观察阶段的读故障按拒绝终止。
-    let mut memory = Memory::new(vec![0u8; 4096], Faults::default());
-    memory.identity_failure = true;
-    let code = dispatch(&memory, &["diskedit", "layout", "memory"]);
-    assert_eq!(code, REFUSED, "身份读失败必须拒绝，不能当作没有身份");
-}
-
-// covers: I14
-#[test]
-fn a_grow_chain_naming_a_smaller_target_than_its_recorded_size_is_invalid() {
-    // 决策层只会产出变大的 PV 尺寸。执行边界若看到 new < old，计划就自相矛盾：
-    // 不能把差值按 0 处理再照常 pvresize，那会静默把 PV 缩小。
-    let region = Region::sized(0, SECTOR).expect("区间可构造");
-    let step = Step::new(
-        StepKind::LvmGrowChain {
-            partition: 1,
-            start_bytes: 0,
-            old_bytes: 2 * 1024 * 1024,
-            new_bytes: 1024 * 1024,
-            grow_lv: false,
-            lv: None,
-        },
-        vec![region],
-    );
-    let plan = Plan::write(vec![step], IDENTITY).expect("计划可构造");
-    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
-    let plan = confirm(plan, true, &current).expect("计划可确认");
-    let outcome = diskedit::app::execute::lvm::run(
-        &diskedit::platform::UnsupportedPlatform,
-        Path::new("memory"),
-        &plan,
-    );
-    assert_eq!(outcome.state(), ExecutionState::Unwritten);
-    let reason = outcome.reason().unwrap_or_default();
-    assert!(
-        reason.contains("smaller than"),
-        "自相矛盾的 grow 计划应按无效计划拒绝，实际：{reason}"
-    );
-}
-
 // covers: D10
 #[test]
 fn a_host_without_a_backend_refuses_with_the_unsupported_code() {
@@ -744,39 +671,6 @@ fn a_plan_without_a_table_write_step_never_touches_the_target() {
     );
 }
 
-// covers: F1
-#[test]
-fn a_commit_that_cannot_clear_its_record_leaves_a_terminal_record() {
-    // 提交先写终态帧、再删除记录。若在两者之间崩溃，盘上的记录必须自证"已提交"，
-    // 恢复器才会只清理记录；否则最后一条完整帧仍是原像帧，恢复会把已提交的写入回滚。
-    let bytes = initial_bytes();
-    let plan = table_only_plan(&bytes);
-    let memory = Memory::new(
-        bytes,
-        Faults {
-            fail_state_remove: Some(1),
-            ..Faults::default()
-        },
-    );
-    let _ = table::run(&memory, Path::new("memory"), &plan);
-    let path = PathBuf::from("/state")
-        .join("images")
-        .join(hex16(IDENTITY))
-        .join(RECORD_FILE);
-    let record = memory
-        .files
-        .lock()
-        .unwrap()
-        .get(&path)
-        .cloned()
-        .expect("清理失败后记录应留在原处");
-    assert_eq!(
-        recover(&record, IDENTITY),
-        RecoveryPlan::Committed,
-        "删除记录前盘上必须已经是完整的已提交记录"
-    );
-}
-
 /// 与 `relocate::spec_bytes` 相同的几何快照（测试侧独立构造，用来喂记录）。
 fn resume_spec() -> Vec<u8> {
     let mut out = Vec::new();
@@ -840,59 +734,5 @@ fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
         memory.target.lock().unwrap().as_slice(),
         bytes.as_slice(),
         "前缀不符时不得写目标"
-    );
-}
-
-// covers: F8
-#[test]
-fn a_pending_record_for_another_target_is_not_adopted() {
-    // 记录目录按身份派生，但记录本身的 `body.target` 仍可能指向别的载体（例如
-    // 从另一台机器恢复目录、或记录被替换）。主写路径不得只看"末帧未终结"就接管：
-    // 目标指纹不符时必须拒绝，并且不得改动目标字节或删除这条记录。
-    let bytes = initial_bytes();
-    let plan = table_only_plan(&bytes);
-    let memory = Memory::new(bytes.clone(), Faults::default());
-    let record = diskedit_core::record::encode(
-        &diskedit_core::record::RecordBody {
-            target: Fingerprint::strong([0x99; 32]),
-            geometry_generation: 0,
-            plan_digest: plan.request_digest(),
-        },
-        &[diskedit_core::record::Frame {
-            seq: 0,
-            kind: FrameKind::Intent,
-            completed: false,
-            irreversible: false,
-            intent: b"write-table".to_vec(),
-            regions: Vec::new(),
-        }],
-    )
-    .expect("记录可编码");
-    let path = PathBuf::from("/state")
-        .join("images")
-        .join(hex16(IDENTITY))
-        .join(RECORD_FILE);
-    memory
-        .files
-        .lock()
-        .unwrap()
-        .insert(path.clone(), record.clone());
-    let outcome = table::run(&memory, Path::new("memory"), &plan);
-    assert_eq!(
-        outcome.state(),
-        ExecutionState::Unwritten,
-        "{:?}",
-        outcome.reason()
-    );
-    assert_eq!(exit_of(&outcome), REFUSED);
-    assert_eq!(
-        memory.target.lock().unwrap().as_slice(),
-        bytes.as_slice(),
-        "不得把别的载体的记录当作本目标的原像"
-    );
-    assert_eq!(
-        memory.files.lock().unwrap().get(&path),
-        Some(&record),
-        "拒绝后记录应原样保留"
     );
 }

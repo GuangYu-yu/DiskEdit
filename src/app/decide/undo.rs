@@ -178,11 +178,10 @@ fn external_cleanup(mode: RecoverMode, identity: Fingerprint, note: &str) -> Dec
     }
 }
 
-/// 记录里是否已有完成落盘、不可回滚的数据区步骤。
+/// 记录里是否已有不可回滚的步骤：只要出现不可逆帧（无论是否已完成），
+/// `undo` 都不能把目标当成可完整撤销。
 fn data_may_have_moved(frames: &[Frame]) -> bool {
-    frames
-        .iter()
-        .any(|frame| frame.completed && frame.irreversible)
+    frames.iter().any(|frame| frame.irreversible)
 }
 
 /// 从记录帧里取出可回写的表区区间。
@@ -324,6 +323,21 @@ mod tests {
         );
         assert!(matches!(
             plan,
+            Decision::Refuse(Refusal::RecoveryRefused { .. })
+        ));
+    }
+
+    // covers: F2, B7
+    #[test]
+    fn undo_refuses_an_irreversible_step_that_did_not_complete() {
+        let frames = [frame(0, FrameKind::Intent, false, true, &[])];
+        let bytes = encode(&body(), &frames).unwrap();
+        let decision = decide(
+            &snapshot(Some(bytes), Occupancy::Idle),
+            &request(Command::Undo),
+        );
+        assert!(matches!(
+            decision,
             Decision::Refuse(Refusal::RecoveryRefused { .. })
         ));
     }

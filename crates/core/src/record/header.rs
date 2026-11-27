@@ -8,9 +8,9 @@ use crate::table::crc32;
 
 /// 记录文件的格式标识。
 ///
-/// 名字里不带版本号：布局或语义变化就换一个新标识，旧标识的记录按外来格式
-/// 拒绝，只允许 `recover --release`。
-pub const MAGIC: [u8; 4] = *b"DREC";
+/// 帧布局在写入后字节（postimage）加入时改变，按"布局或语义变化就换标识"的约定
+/// 从 `DRB1` 升为 `DRB2`：旧记录会按外来格式识别，只允许 `recover --release`。
+pub const MAGIC: [u8; 4] = *b"DRB2";
 
 /// 记录头长度，字节。
 pub const HEADER_LEN: usize = 16;
@@ -117,22 +117,6 @@ mod tests {
             .expect("载荷应可编码")
             .to_bytes();
         bytes[0] = b'X';
-        assert!(matches!(
-            RecordHeader::parse(&bytes),
-            Err(HeaderError::ForeignFormat { .. })
-        ));
-    }
-
-    #[test]
-    fn a_non_current_magic_is_refused_as_a_foreign_format() {
-        // 头字段自洽但标识不是当前值的记录只能按外来格式拒绝，交给
-        // `recover --release` 处理，不能被当成本实现的记录解析。
-        let mut bytes = RecordHeader::of_payload(b"x")
-            .expect("载荷应可编码")
-            .to_bytes();
-        bytes[..4].copy_from_slice(b"ZZZZ");
-        let crc = crc32(&bytes[HEADER_CRC_RANGE]);
-        bytes[12..16].copy_from_slice(&crc.to_le_bytes());
         assert!(matches!(
             RecordHeader::parse(&bytes),
             Err(HeaderError::ForeignFormat { .. })

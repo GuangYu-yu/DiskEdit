@@ -50,7 +50,11 @@ pub fn verify(snapshot: &RecordSnapshot, token: &str) -> Decision {
             token: token.to_owned(),
         });
     }
-    let path = snapshot.record.file.clone().unwrap_or_default();
+    let Some(path) = snapshot.record.file.clone() else {
+        return Decision::Refuse(Refusal::RecordNotFound {
+            token: token.to_owned(),
+        });
+    };
     let report = RecordsReport {
         root: snapshot.record.directory.clone(),
         records: vec![entry(&path, bytes)],

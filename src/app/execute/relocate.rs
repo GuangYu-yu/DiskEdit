@@ -4,22 +4,18 @@
 //! 搬移每写完一块就追加一条进度帧（块游标与已写前缀摘要），续跑据此判断能否
 //! 接上。表步仍走"先登记整扇区原像、再经唯一写通道落盘"的同一套约束。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{self, Frame, FrameKind, Preimage, RecordBody};
 use diskedit_core::region::Region;
 use diskedit_core::table::relocate::{self, ChunkSpan};
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
 use super::digest::{Hasher, read_region};
-use super::token::SessionId;
-use super::transaction::{LOCK_FILE, Mint};
-use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
+use super::transaction::RelocateSession;
+use super::{ExecError, FailureKind, Outcome, WriteChannel};
 use crate::app::decide::step::TableSegment;
 use crate::app::decide::{ConfirmedPlan, Step, StepKind};
-use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, RecordEntry, StateLock, TargetHandle};
+use crate::platform::{Platform, TargetHandle};
 
 /// 读原像与摘要时分段大小。
 const CHUNK: usize = 1 << 20;
@@ -53,10 +49,11 @@ fn execute(
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<Option<String>, (ExecError, bool)> {
-    let table = plan
+    let (table_index, table) = plan
         .steps()
         .iter()
-        .find(|step| matches!(step.kind, StepKind::WriteTable { .. }))
+        .enumerate()
+        .find(|(_, step)| matches!(step.kind, StepKind::WriteTable { .. }))
         .ok_or_else(|| {
             (
                 ExecError::InvalidPlan("the plan has no table write step".to_owned()),
@@ -65,6 +62,21 @@ fn execute(
         })?;
     let (segment_size, stamp, segments) = table_parts(table)?;
     let data = data_step(plan, segment_size)?;
+    let data_index = plan
+        .steps()
+        .iter()
+        .position(|step| {
+            matches!(
+                step.kind,
+                StepKind::MovePartition { .. } | StepKind::CopyPartition { .. }
+            )
+        })
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan("the plan has no copy step".to_owned()),
+                false,
+            )
+        })?;
     let sector_size = segment_size;
     let source_bytes = data
         .source_lba
@@ -112,7 +124,7 @@ fn execute(
 
     let spec = spec_bytes(&data, sector_size, handle.len());
     let (mut session, recorded) =
-        Session::prepare(platform, plan.identity(), plan.digest(), &spec)?;
+        RelocateSession::prepare(platform, plan.identity(), plan.digest(), &spec)?;
     if !super::identity_still_matches(platform, target, plan.identity()) {
         return Err((
             ExecError::IdentityChanged("target identity changed after planning".to_owned()),
@@ -129,7 +141,6 @@ fn execute(
         })?;
     let spans = layout.spans(data.source_lba);
     let total = u64::try_from(spans.len()).expect("块数可表示");
-    let token = session.token();
 
     let mut cursor = 0u64;
     if let Some((recorded_cursor, recorded_digest)) = recorded {
@@ -180,7 +191,18 @@ fn execute(
 
     let mut wrote = false;
     if cursor < total {
-        let mut channel = WriteChannel::new(handle.as_mut(), &data.regions, session.session());
+        let data_number = u64::try_from(data_index).expect("步骤号可表示");
+        let token = session
+            .token(data_number, &data.regions)
+            .map_err(|(error, _)| (error, wrote))?;
+        let mut channel = WriteChannel::new(
+            handle.as_mut(),
+            session.id(),
+            token,
+            data_number,
+            &data.regions,
+        )
+        .map_err(|error| (error, wrote))?;
         let mut rolling = Hasher::new();
         hash_prefix_in_channel(
             &channel,
@@ -197,7 +219,7 @@ fn execute(
                 .read_exact(source.start(), usize_from(source.len()))
                 .map_err(|error| (error, wrote))?;
             channel
-                .write(&token, destination, &bytes)
+                .write(destination, &bytes)
                 .map_err(|error| (error, wrote))?;
             wrote = true;
             rolling.update(&bytes);
@@ -222,10 +244,21 @@ fn execute(
         .register_table(&registered)
         .map_err(|(error, _)| (error, wrote))?;
 
-    let mut channel = WriteChannel::new(handle.as_mut(), &table.regions, session.session());
+    let table_number = u64::try_from(table_index).expect("步骤号可表示");
+    let token = session
+        .token(table_number, &table.regions)
+        .map_err(|(error, _)| (error, wrote))?;
+    let mut channel = WriteChannel::new(
+        handle.as_mut(),
+        session.id(),
+        token,
+        table_number,
+        &table.regions,
+    )
+    .map_err(|error| (error, wrote))?;
     for segment in segments {
         channel
-            .write(&token, segment.region, &segment.bytes)
+            .write(segment.region, &segment.bytes)
             .map_err(|error| (error, wrote))?;
         wrote = true;
     }
@@ -453,279 +486,6 @@ fn spec_bytes(data: &DataStep, sector_size: u64, disk_len: u64) -> Vec<u8> {
         out.extend_from_slice(&value.to_le_bytes());
     }
     out
-}
-
-/// 一次搬移/复制的记录现场。
-struct Session<'a> {
-    platform: &'a dyn Platform,
-    directory: PathBuf,
-    file: PathBuf,
-    _lock: Box<dyn StateLock>,
-    body: RecordBody,
-    frames: Vec<Frame>,
-    mint: Mint,
-    table_registered: bool,
-}
-
-/// 续跑点：已完成进度与最近一帧摘要。
-type ResumePoint = (u64, [u8; 16]);
-
-/// 执行失败与"目标是否可能已被写过"的成对结果。
-type ExecFailure = (ExecError, bool);
-
-impl<'a> Session<'a> {
-    /// 取锁、读出可续跑进度；没有记录时先落一条意图帧。
-    fn prepare(
-        platform: &'a dyn Platform,
-        identity: Fingerprint,
-        plan_digest: [u8; 32],
-        spec: &[u8],
-    ) -> Result<(Self, Option<ResumePoint>), ExecFailure> {
-        let root = platform.state_root().ok_or_else(|| {
-            (
-                ExecError::Record("the host has no state directory".to_owned()),
-                false,
-            )
-        })?;
-        let directory = root.join("images").join(hex16(identity));
-        platform
-            .create_directory_all(&directory)
-            .map_err(|error| (ExecError::from(error), false))?;
-        let lock = platform
-            .lock_state(&directory.join(LOCK_FILE))
-            .map_err(|error| (ExecError::from(error), false))?;
-        let file = directory.join(RECORD_FILE);
-        let body = RecordBody {
-            target: identity,
-            geometry_generation: 0,
-            plan_digest,
-        };
-
-        let existing = match platform
-            .read_record(&file)
-            .map_err(|error| (ExecError::from(error), false))?
-        {
-            RecordEntry::Contents(bytes) => Some(bytes),
-            RecordEntry::Absent => None,
-            RecordEntry::NotARecoveryFile => {
-                return Err((
-                    ExecError::Record(format!("{} is not a recovery file", file.display())),
-                    false,
-                ));
-            }
-        };
-        if let Some(bytes) = existing.filter(|bytes| !bytes.is_empty()) {
-            let decoded = record::decode(&bytes).map_err(|error| {
-                (
-                    ExecError::Record(format!("the existing record is unreadable: {error}")),
-                    false,
-                )
-            })?;
-            if !decoded.body.target.matches(identity) {
-                return Err((
-                    ExecError::Record("the record targets a different device".to_owned()),
-                    false,
-                ));
-            }
-            if decoded.body.plan_digest != plan_digest {
-                return Err((
-                    ExecError::Record("the existing record belongs to a different plan".to_owned()),
-                    false,
-                ));
-            }
-            let Some(Frame {
-                kind: FrameKind::Intent,
-                intent,
-                ..
-            }) = decoded.frames.first()
-            else {
-                return Err((
-                    ExecError::Record("the record does not begin with an intent".to_owned()),
-                    false,
-                ));
-            };
-            if intent.as_slice() != spec {
-                return Err((
-                    ExecError::Record(
-                        "the record's relocation geometry does not match this request".to_owned(),
-                    ),
-                    false,
-                ));
-            }
-            let resume = decoded.frames.iter().rev().find_map(|frame| {
-                if frame.kind == FrameKind::Progress && frame.intent.len() == 24 {
-                    Some(progress_of(&frame.intent))
-                } else {
-                    None
-                }
-            });
-            let table_registered = decoded
-                .frames
-                .iter()
-                .any(|frame| frame.kind == FrameKind::Preimage);
-            let frames = decoded.frames;
-            return Ok((
-                Self {
-                    platform,
-                    directory,
-                    file,
-                    _lock: lock,
-                    body,
-                    frames,
-                    mint: Mint::new(),
-                    table_registered,
-                },
-                resume,
-            ));
-        }
-
-        let intent = Frame {
-            seq: 0,
-            kind: FrameKind::Intent,
-            completed: false,
-            irreversible: false,
-            intent: spec.to_vec(),
-            regions: Vec::new(),
-        };
-        let frames = vec![intent];
-        let encoded = record::encode(&body, &frames).map_err(|error| {
-            (
-                ExecError::Record(format!("the record cannot be encoded: {error}")),
-                false,
-            )
-        })?;
-        platform
-            .write_state_file(&file, &encoded)
-            .map_err(|error| (ExecError::from(error), false))?;
-        platform
-            .sync_directory(&directory)
-            .map_err(|error| (ExecError::from(error), false))?;
-        Ok((
-            Self {
-                platform,
-                directory,
-                file,
-                _lock: lock,
-                body,
-                frames,
-                mint: Mint::new(),
-                table_registered: false,
-            },
-            None,
-        ))
-    }
-
-    fn token(&self) -> Recorded {
-        Recorded::mint(
-            &self.mint,
-            u64::try_from(self.frames.len()).unwrap_or(u64::MAX),
-        )
-    }
-
-    fn session(&self) -> SessionId {
-        self.mint.session()
-    }
-
-    fn table_registered(&self) -> bool {
-        self.table_registered
-    }
-
-    /// 追加一条进度帧：块游标与已写前缀摘要。
-    fn checkpoint(&mut self, cursor: u64, digest: [u8; 16]) -> Result<(), (ExecError, bool)> {
-        let mut intent = Vec::with_capacity(24);
-        intent.extend_from_slice(&cursor.to_le_bytes());
-        intent.extend_from_slice(&digest);
-        self.append(Frame {
-            seq: u32::try_from(self.frames.len()).unwrap_or(u32::MAX),
-            kind: FrameKind::Progress,
-            completed: true,
-            irreversible: true,
-            intent,
-            regions: Vec::new(),
-        })
-    }
-
-    /// 登记表区原像与写后字节；已有原像帧时复用。
-    fn register_table(
-        &mut self,
-        segments: &[(Region, Vec<u8>, Vec<u8>)],
-    ) -> Result<(), (ExecError, bool)> {
-        if self.table_registered {
-            return Ok(());
-        }
-        let frame = Frame {
-            seq: u32::try_from(self.frames.len()).unwrap_or(u32::MAX),
-            kind: FrameKind::Preimage,
-            completed: true,
-            irreversible: false,
-            intent: Vec::new(),
-            regions: segments
-                .iter()
-                .map(|(region, before, after)| preimage(*region, before, after))
-                .collect(),
-        };
-        self.append(frame)?;
-        self.table_registered = true;
-        Ok(())
-    }
-
-    /// 追加提交帧、落盘并删除记录。
-    fn commit(&mut self) -> Result<(), (ExecError, bool)> {
-        self.append(Frame {
-            seq: u32::try_from(self.frames.len()).unwrap_or(u32::MAX),
-            kind: FrameKind::Committed,
-            completed: true,
-            irreversible: false,
-            intent: Vec::new(),
-            regions: Vec::new(),
-        })?;
-        self.platform
-            .remove_state_file(&self.file)
-            .map_err(|error| (ExecError::from(error), false))?;
-        self.platform
-            .sync_directory(&self.directory)
-            .map_err(|error| (ExecError::from(error), false))?;
-        Ok(())
-    }
-
-    fn append(&mut self, frame: Frame) -> Result<(), (ExecError, bool)> {
-        let mut frames = self.frames.clone();
-        frames.push(frame);
-        let encoded = record::encode(&self.body, &frames).map_err(|error| {
-            (
-                ExecError::Record(format!("the record cannot be encoded: {error}")),
-                false,
-            )
-        })?;
-        self.platform
-            .write_state_file(&self.file, &encoded)
-            .map_err(|error| (ExecError::from(error), false))?;
-        self.platform
-            .sync_directory(&self.directory)
-            .map_err(|error| (ExecError::from(error), false))?;
-        self.frames = frames;
-        Ok(())
-    }
-}
-
-fn progress_of(intent: &[u8]) -> (u64, [u8; 16]) {
-    let mut cursor = [0u8; 8];
-    cursor.copy_from_slice(&intent[..8]);
-    let mut digest = [0u8; 16];
-    digest.copy_from_slice(&intent[8..24]);
-    (u64::from_le_bytes(cursor), digest)
-}
-
-fn preimage(region: Region, before: &[u8], after: &[u8]) -> Preimage {
-    let mut hasher = Hasher::new();
-    hasher.update(before);
-    Preimage {
-        offset: region.start(),
-        len: region.len(),
-        digest: hasher.finish(),
-        data: before.to_vec(),
-        after: after.to_vec(),
-    }
 }
 
 /// 把执行错误归档为可报告的终态。

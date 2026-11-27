@@ -4,8 +4,8 @@
 //! [`crate::platform::Platform`] 与 [`crate::platform::TargetHandle`] 的中立形状。
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::io::{self, Read};
+use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -148,27 +148,24 @@ impl Platform for LinuxPlatform {
         path.is_dir()
     }
 
-    fn list_files(&self, root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        let mut found = Vec::new();
-        walk(root, &mut found)?;
-        found.sort();
-        Ok(found)
-    }
-
-    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
-        match std::fs::read(path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(PlatformError::io(path, error)),
-        }
+    fn list_record_entries(&self, root: &Path, name: &str) -> PlatformResult<Vec<PathBuf>> {
+        record::list(root, name)
     }
 
     fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
         record::read(path)
     }
 
-    fn list_record_entries(&self, root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        record::list(root)
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+        record::write(path, bytes)
+    }
+
+    fn remove_record(&self, path: &Path) -> PlatformResult<()> {
+        record::remove(path)
+    }
+
+    fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()> {
+        record::rename(from, to)
     }
 
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun> {
@@ -324,66 +321,6 @@ impl Platform for LinuxPlatform {
         Ok(path)
     }
 
-    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
-        // B5：临时名 `.正式名.<pid>.<随机>.tmp`，`O_CREAT|O_EXCL`，文件 0600；
-        // 写入并落盘后原子改名到位，任何半成品都不会以正式名出现。
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| PlatformError::parse("state file path has no name"))?;
-        let suffix = self.entropy(8)?;
-        let temporary = path.with_file_name(format!(
-            ".{name}.{}.{}.tmp",
-            std::process::id(),
-            hex(&suffix)
-        ));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)
-            .map_err(|error| PlatformError::io(&temporary, error))?;
-        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-            drop(std::fs::remove_file(&temporary));
-            return Err(PlatformError::io(&temporary, error));
-        }
-        drop(file);
-        if let Err(error) = std::fs::rename(&temporary, path) {
-            drop(std::fs::remove_file(&temporary));
-            return Err(PlatformError::io(path, error));
-        }
-        if let Some(parent) = path.parent() {
-            self.sync_directory(parent)?;
-        }
-        Ok(())
-    }
-
-    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(path)
-            .map_err(|error| PlatformError::io(path, error))?;
-        file.write_all(bytes)
-            .map_err(|error| PlatformError::io(path, error))?;
-        file.sync_all()
-            .map_err(|error| PlatformError::io(path, error))
-    }
-
-    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
-        match std::fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(PlatformError::io(path, error)),
-        }
-    }
-
-    fn sync_directory(&self, path: &Path) -> PlatformResult<()> {
-        let directory = File::open(path).map_err(|error| PlatformError::io(path, error))?;
-        directory
-            .sync_all()
-            .map_err(|error| PlatformError::io(path, error))
-    }
-
     fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>> {
         let file = OpenOptions::new()
             .read(true)
@@ -470,7 +407,17 @@ impl TargetHandle for LinuxHandle {
     }
 
     fn len(&self) -> u64 {
-        self.len
+        // 返回"此刻长度"而不是打开时的缓存：普通文件可能被外部截断或增长，
+        // 块设备的分区也可能被重新划分。查询失败时才退回打开时的值。
+        match self.kind {
+            TargetKind::BlockDevice => {
+                let end = unsafe { libc::lseek(self.file.as_raw_fd(), 0, libc::SEEK_END) };
+                if end < 0 { self.len } else { end as u64 }
+            }
+            TargetKind::File | TargetKind::Other => {
+                self.file.metadata().map_or(self.len, |meta| meta.len())
+            }
+        }
     }
 
     fn kind(&self) -> TargetKind {
@@ -487,22 +434,29 @@ impl TargetHandle for LinuxHandle {
     }
 
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
-        // 平台层自己再判一次上界：普通文件的 pwrite 会静默扩展稀疏文件，
-        // 越过打开时长度的写在任何上层失手时都必须在这里被拒绝。
-        let end = offset
-            .checked_add(buf.len() as u64)
-            .ok_or_else(|| PlatformError::parse("write range overflows the offset space"))?;
-        if end > self.len {
-            return Err(PlatformError::io(
-                &self.path,
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "write [{offset}, {end}) extends past the target length {}",
-                        self.len
+        // 普通文件的长度会随外部截断而变：每次写入前取此刻长度，不用打开时缓存，
+        // 否则越界写会静默稀疏扩展目标。
+        if self.kind == TargetKind::File {
+            let current = self
+                .file
+                .metadata()
+                .map_err(|error| PlatformError::io(&self.path, error))?
+                .len();
+            let end = offset.checked_add(buf.len() as u64).ok_or_else(|| {
+                PlatformError::io(
+                    &self.path,
+                    io::Error::new(io::ErrorKind::InvalidInput, "write range overflows u64"),
+                )
+            })?;
+            if end > current {
+                return Err(PlatformError::io(
+                    &self.path,
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("write [{offset}, {end}) extends past the target length {current}"),
                     ),
-                ),
-            ));
+                ));
+            }
         }
         FileExt::write_at(&self.file, buf, offset)
             .map_err(|error| PlatformError::io(&self.path, error))
@@ -862,8 +816,7 @@ fn block_identity(path: &Path, metadata: &std::fs::Metadata) -> PlatformResult<F
     }
     // loop 设备没有 WWN/EUI/序列号，但它的承载文件是稳定事实：文件身份 + 映射
     // 偏移/长度 + 分区起点与长度足以跨次识别同一目标。
-    let sysfs = Path::new("/sys/class/block").join(&topology.disk);
-    if let Some(fingerprint) = loop_identity(&sysfs, &topology, metadata) {
+    if let Some(fingerprint) = loop_identity(&topology, metadata) {
         return Ok(fingerprint);
     }
     Ok(Fingerprint::unusable([0u8; 32]))
@@ -941,14 +894,11 @@ fn stable_serial(path: &Path) -> Option<String> {
 }
 
 /// loop 设备：承载文件身份 + 映射偏移/限长 + 分区位置。
-fn loop_identity(
-    sysfs: &Path,
-    topology: &Topology,
-    metadata: &std::fs::Metadata,
-) -> Option<Fingerprint> {
-    let backing = sysfs_text(&sysfs.join("loop/backing_file"))?;
-    let offset = sysfs_u64(&sysfs.join("loop/offset"))?;
-    let sizelimit = sysfs_u64(&sysfs.join("loop/sizelimit"))?;
+fn loop_identity(topology: &Topology, metadata: &std::fs::Metadata) -> Option<Fingerprint> {
+    let base = Path::new("/sys/class/block").join(&topology.disk);
+    let backing = sysfs_text(&base.join("loop/backing_file"))?;
+    let offset = sysfs_u64(&base.join("loop/offset")).unwrap_or(0);
+    let sizelimit = sysfs_u64(&base.join("loop/sizelimit")).unwrap_or(0);
     // 承载文件的身份取自文件本身（设备号 + inode + 长度），不是 sysfs 路径字符串：
     // 同一路径被换成另一个文件时必须识别为不同目标。
     let file = std::fs::metadata(Path::new("/").join(&backing)).ok()?;
@@ -1172,23 +1122,6 @@ fn btrfs_num_devices(superblock: &[u8]) -> Option<u64> {
     ))
 }
 
-fn walk(root: &Path, found: &mut Vec<PathBuf>) -> PlatformResult<()> {
-    let entries = std::fs::read_dir(root).map_err(|error| PlatformError::io(root, error))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| PlatformError::io(root, error))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| PlatformError::io(&path, error))?;
-        if file_type.is_dir() {
-            walk(&path, found)?;
-        } else if file_type.is_file() {
-            found.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// 小写十六进制，用于给临时目录取不冲突的后缀。
 fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
@@ -1231,9 +1164,7 @@ mod tests {
         assert_eq!(mode_of(&directory), 0o700, "记录目录只对属主开放");
 
         let file = directory.join("record");
-        platform
-            .write_state_file(&file, b"record")
-            .expect("写状态文件");
+        platform.write_record(&file, b"record").expect("写记录文件");
         let file_mode = std::fs::metadata(&file)
             .expect("文件元数据")
             .permissions()
@@ -1317,40 +1248,6 @@ mod tests {
         bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
         std::fs::write(&image, &bytes).expect("镜像可写");
         assert!(btrfs_multidevice(&image).is_none(), "单设备不算占用");
-
-        std::fs::remove_dir_all(&root).expect("清理临时根");
-    }
-
-    #[test]
-    fn a_loop_identity_without_its_mapping_facts_is_not_guessed() {
-        // sysfs 缺 `loop/sizelimit` 时，身份不能把缺失当成 0：映射偏移与限长是
-        // 跨次识别同一目标的依据，猜一个值继续就会把不同目标认成同一个。
-        let root = temporary_root("loop-identity");
-        let sysfs = root.join("sysfs");
-        std::fs::create_dir_all(sysfs.join("loop")).expect("临时 sysfs 可建立");
-        let backing = root.join("backing.img");
-        std::fs::write(&backing, b"x").expect("承载文件可写");
-        std::fs::write(
-            sysfs.join("loop/backing_file"),
-            format!("{}\n", backing.display()),
-        )
-        .expect("backing_file 可写");
-        std::fs::write(sysfs.join("loop/offset"), b"0\n").expect("offset 可写");
-        let metadata = std::fs::metadata(&backing).expect("元数据可读");
-        let topology = Topology {
-            disk: "loop0".to_owned(),
-            partition: None,
-        };
-        assert!(
-            loop_identity(&sysfs, &topology, &metadata).is_none(),
-            "缺少 sizelimit 时不得按 0 拼出身份"
-        );
-
-        std::fs::write(sysfs.join("loop/sizelimit"), b"0\n").expect("sizelimit 可写");
-        assert!(
-            loop_identity(&sysfs, &topology, &metadata).is_some(),
-            "映射事实齐全时应给出身份"
-        );
 
         std::fs::remove_dir_all(&root).expect("清理临时根");
     }

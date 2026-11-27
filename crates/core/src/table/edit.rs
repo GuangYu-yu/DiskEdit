@@ -408,7 +408,7 @@ fn region(start: u64, len: u64) -> Result<Region, TableError> {
     Region::sized(start, len).map_err(|_| TableError::InvalidGeometry("region overflows"))
 }
 
-/// 新增条目的落地：属性位清零，名字按 GPT 名称规则截断到可用长度。
+/// 新增条目的落地：0 属性位、空名字，名字由调用方先行校验。
 pub fn new_entry(
     start: u64,
     end: u64,

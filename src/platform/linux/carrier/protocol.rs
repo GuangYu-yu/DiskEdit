@@ -115,7 +115,11 @@ pub struct DiskWrite {
     pub bytes: Vec<u8>,
 }
 
-pub fn decode_write_disk(frame: &Value, sid: &str) -> PlatformResult<(u64, Vec<DiskWrite>)> {
+pub fn decode_write_disk(
+    frame: &Value,
+    sid: &str,
+    disk_size: u64,
+) -> PlatformResult<(u64, Vec<DiskWrite>)> {
     if frame.get("sid").and_then(Value::as_str) != Some(sid) {
         return Err(PlatformError::parse("a request carries a wrong session id"));
     }
@@ -139,6 +143,14 @@ pub fn decode_write_disk(frame: &Value, sid: &str) -> PlatformResult<(u64, Vec<D
             .ok_or_else(|| PlatformError::parse("a write segment has no bytes"))?;
         let bytes = hex_decode(text)
             .ok_or_else(|| PlatformError::parse("a write segment is not hexadecimal"))?;
+        let past_end = offset
+            .checked_add(bytes.len() as u64)
+            .is_none_or(|end| end > disk_size);
+        if past_end {
+            return Err(PlatformError::parse(format!(
+                "a write segment at {offset} ends past the declared disk size {disk_size}"
+            )));
+        }
         writes.push(DiskWrite { offset, bytes });
     }
     if writes.is_empty() {
@@ -298,7 +310,7 @@ mod tests {
             "sid",
             &[(512, &[0xde, 0xad, 0xbe, 0xef]), (4096, &[0x01])],
         );
-        let (id, writes) = decode_write_disk(&frame, "sid").expect("帧可解");
+        let (id, writes) = decode_write_disk(&frame, "sid", 8192).expect("帧可解");
         assert_eq!(id, 7);
         assert_eq!(writes.len(), 2);
         assert_eq!(writes[0].offset, 512);
@@ -310,17 +322,25 @@ mod tests {
     #[test]
     fn write_disk_rejects_a_foreign_session_or_bad_hex() {
         let frame = write_disk(1, "sid", &[(0, &[0x00])]);
-        assert!(decode_write_disk(&frame, "other").is_err());
+        assert!(decode_write_disk(&frame, "other", 4096).is_err());
 
         let mut bad = write_disk(1, "sid", &[(0, &[0x00])]);
         bad["writes"][0]["bytes"] = json!("0g");
-        assert!(decode_write_disk(&bad, "sid").is_err());
+        assert!(decode_write_disk(&bad, "sid", 4096).is_err());
 
         let mut odd = write_disk(1, "sid", &[(0, &[0x00])]);
         odd["writes"][0]["bytes"] = json!("abc");
-        assert!(decode_write_disk(&odd, "sid").is_err());
+        assert!(decode_write_disk(&odd, "sid", 4096).is_err());
 
         let empty = write_disk(1, "sid", &[]);
-        assert!(decode_write_disk(&empty, "sid").is_err());
+        assert!(decode_write_disk(&empty, "sid", 4096).is_err());
+    }
+
+    #[test]
+    fn write_disk_rejects_a_segment_past_the_declared_disk() {
+        let past = write_disk(1, "sid", &[(4096, &[0x01])]);
+        assert!(decode_write_disk(&past, "sid", 4096).is_err());
+        let overflow = write_disk(1, "sid", &[(u64::MAX, &[0x01])]);
+        assert!(decode_write_disk(&overflow, "sid", 4096).is_err());
     }
 }

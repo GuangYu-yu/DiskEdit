@@ -83,10 +83,7 @@ impl Platform for Fake {
     }
 
     fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
-        // 只读句柄提供磁盘的扇区事实；在线扩容经载体交接时宿主据此填写请求。
-        Ok(Box::new(MemHandle {
-            bytes: Arc::new(Mutex::new(Vec::new())),
-        }))
+        Err(PlatformError::not_supported("no target in this test"))
     }
 
     fn path_kind(&self, _path: &Path) -> TargetKind {
@@ -113,12 +110,12 @@ impl Platform for Fake {
         false
     }
 
-    fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
+    fn list_record_entries(&self, _root: &Path, _name: &str) -> PlatformResult<Vec<PathBuf>> {
         Ok(Vec::new())
     }
 
-    fn read_file(&self, _path: &Path) -> PlatformResult<Option<Vec<u8>>> {
-        Ok(None)
+    fn read_record(&self, _path: &Path) -> PlatformResult<RecordEntry> {
+        Ok(RecordEntry::Absent)
     }
 
     fn run(&self, program: Program, _args: &[String]) -> PlatformResult<ToolRun> {
@@ -170,19 +167,15 @@ impl Platform for Fake {
         Ok(PathBuf::from("/tmp"))
     }
 
-    fn write_state_file(&self, _path: &Path, _bytes: &[u8]) -> PlatformResult<()> {
+    fn write_record(&self, _path: &Path, _bytes: &[u8]) -> PlatformResult<()> {
         Ok(())
     }
 
-    fn append_state_file(&self, _path: &Path, _bytes: &[u8]) -> PlatformResult<()> {
+    fn remove_record(&self, _path: &Path) -> PlatformResult<()> {
         Ok(())
     }
 
-    fn remove_state_file(&self, _path: &Path) -> PlatformResult<()> {
-        Ok(())
-    }
-
-    fn sync_directory(&self, _path: &Path) -> PlatformResult<()> {
+    fn rename_record(&self, _from: &Path, _to: &Path) -> PlatformResult<()> {
         Ok(())
     }
 
@@ -840,11 +833,23 @@ impl Platform for LivePlatform {
     fn is_directory(&self, path: &Path) -> bool {
         path == Path::new("/mnt")
     }
-    fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        Ok(self.files.lock().unwrap().keys().cloned().collect())
+    fn list_record_entries(&self, root: &Path, name: &str) -> PlatformResult<Vec<PathBuf>> {
+        Ok(self
+            .files
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|path| {
+                path.starts_with(root) && path.file_name().is_some_and(|entry| entry == name)
+            })
+            .cloned()
+            .collect())
     }
-    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
-        Ok(self.files.lock().unwrap().get(path).cloned())
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        Ok(match self.files.lock().unwrap().get(path).cloned() {
+            Some(bytes) => RecordEntry::Contents(bytes),
+            None => RecordEntry::Absent,
+        })
     }
     fn run(&self, program: Program, _args: &[String]) -> PlatformResult<ToolRun> {
         self.calls.lock().unwrap().push(program);
@@ -890,33 +895,22 @@ impl Platform for LivePlatform {
     fn temporary_directory(&self, _tag: &str) -> PlatformResult<PathBuf> {
         Ok(PathBuf::from("/tmp"))
     }
-    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
         self.files
             .lock()
             .unwrap()
             .insert(path.to_path_buf(), bytes.to_vec());
         Ok(())
     }
-    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
-        Ok(match self.files.lock().unwrap().get(path).cloned() {
-            Some(bytes) => RecordEntry::Contents(bytes),
-            None => RecordEntry::Absent,
-        })
-    }
-    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
-        self.files
-            .lock()
-            .unwrap()
-            .entry(path.to_path_buf())
-            .or_default()
-            .extend_from_slice(bytes);
-        Ok(())
-    }
-    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
+    fn remove_record(&self, path: &Path) -> PlatformResult<()> {
         self.files.lock().unwrap().remove(path);
         Ok(())
     }
-    fn sync_directory(&self, _path: &Path) -> PlatformResult<()> {
+    fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()> {
+        let mut files = self.files.lock().unwrap();
+        if let Some(bytes) = files.remove(from) {
+            files.insert(to.to_path_buf(), bytes);
+        }
         Ok(())
     }
     fn lock_state(&self, _path: &Path) -> PlatformResult<Box<dyn StateLock>> {

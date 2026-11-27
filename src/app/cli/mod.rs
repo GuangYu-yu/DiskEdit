@@ -157,39 +157,22 @@ fn scan_root(platform: &dyn Platform, root: &std::path::Path, request: &observe:
         );
         return exit::REFUSED;
     }
-    let files = match platform.list_record_entries(root) {
+    let files = match platform.list_record_entries(root, observe::records::RECORD_FILE) {
         Ok(files) => files,
         Err(error) => {
             eprintln!("error: cannot scan {}: {error}", root.display());
             return exit::ENVIRONMENT;
         }
     };
-    let mut records: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
-    for file in files {
-        if file
-            .file_name()
-            .is_none_or(|name| name != observe::records::RECORD_FILE)
-        {
-            continue;
-        }
-        // 读失败或"不是恢复文件"都不能当作"没有记录"跳过：否则扫描会把
-        // 不完整的结果报告成完整。
-        match platform.read_record(&file) {
-            Ok(crate::platform::RecordEntry::Contents(bytes)) => records.push((file, bytes)),
-            Ok(crate::platform::RecordEntry::Absent) => {
-                eprintln!("error: {} disappeared while scanning", file.display());
-                return exit::ENVIRONMENT;
-            }
-            Ok(crate::platform::RecordEntry::NotARecoveryFile) => {
-                eprintln!("error: {} is not a recovery file", file.display());
-                return exit::ENVIRONMENT;
-            }
-            Err(error) => {
-                eprintln!("error: cannot read {}: {error}", file.display());
-                return exit::ENVIRONMENT;
-            }
-        }
-    }
+    let records: Vec<(std::path::PathBuf, Vec<u8>)> = files
+        .into_iter()
+        .filter_map(|file| {
+            observe::records::read_bytes(platform, &file)
+                .ok()
+                .flatten()
+                .map(|bytes| (file, bytes))
+        })
+        .collect();
     conclude(
         platform,
         request,
@@ -234,13 +217,6 @@ fn capture_failed(
             );
             return exit::UNSUPPORTED;
         }
-        observe::CaptureError::SectorSizeUnknown => {
-            eprintln!(
-                "refused: the target does not report a logical sector size and none was \
-                 declared — pass --sector-size"
-            );
-            return exit::REFUSED;
-        }
         // 宿主本身不提供这项能力：不是目标拒绝，而是平台不支持。
         observe::CaptureError::Platform(platform::PlatformError::NotSupported(why)) => {
             eprintln!("unsupported: {why}");
@@ -259,7 +235,6 @@ fn capture_failed(
         observe::CaptureError::TooSmall { .. } => error.to_string(),
         observe::CaptureError::Unreadable { why } => why.clone(),
         observe::CaptureError::UnsupportedSector { .. } => unreachable!("上面已处理"),
-        observe::CaptureError::SectorSizeUnknown => unreachable!("上面已处理"),
         observe::CaptureError::DeclaredIdentityNotApplicable => unreachable!("上面已处理"),
         observe::CaptureError::SectorSizeOnBlockDevice => unreachable!("上面已处理"),
     };

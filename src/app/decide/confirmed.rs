@@ -10,9 +10,7 @@ use super::refusal::Refusal;
 use super::step::Step;
 
 /// 已确认、可执行的计划。
-///
-/// 只能由 [`confirm`] 产出；不实现 `Clone`，一份确认不会复制成两份可执行副本。
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfirmedPlan {
     steps: Vec<Step>,
     digest: [u8; 32],

@@ -123,7 +123,7 @@ pub fn run() -> u8 {
                 }
             }
             Some("write_disk") => {
-                let reply = match protocol::decode_write_disk(&frame, &sid) {
+                let reply = match protocol::decode_write_disk(&frame, &sid, disk_size) {
                     Ok((_, writes)) => write_segments(&mut *handle, &writes),
                     Err(error) => Reply::Failed(error.to_string()),
                 };
@@ -151,6 +151,15 @@ fn write_segments(
     writes: &[protocol::DiskWrite],
 ) -> Reply {
     for write in writes {
+        let end = write.offset.checked_add(write.bytes.len() as u64);
+        if end.is_none_or(|end| end > handle.len()) {
+            return Reply::Failed(format!(
+                "write at offset {} of {} bytes ends past the guest target length {}",
+                write.offset,
+                write.bytes.len(),
+                handle.len()
+            ));
+        }
         match handle.write_at(write.offset, &write.bytes) {
             Ok(written) if written == write.bytes.len() => {}
             Ok(written) => {

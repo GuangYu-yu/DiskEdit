@@ -37,10 +37,11 @@ pub(super) fn execute_plan(
     plan: &ConfirmedPlan,
     refresh: bool,
 ) -> Result<Option<String>, (ExecError, bool)> {
-    let step = plan
+    let (step_index, step) = plan
         .steps()
         .iter()
-        .find(|step| matches!(step.kind, StepKind::WriteTable { .. }))
+        .enumerate()
+        .find(|(_, step)| matches!(step.kind, StepKind::WriteTable { .. }))
         .ok_or_else(|| {
             (
                 ExecError::InvalidPlan("the plan has no table write step".to_owned()),
@@ -102,12 +103,22 @@ pub(super) fn execute_plan(
         .register(plan.request_digest(), &registered)
         .map_err(|error| (error, false))?;
 
-    let token = session.token();
-    let mut channel = WriteChannel::new(handle.as_mut(), &step.regions, session.session());
+    let step_number = u64::try_from(step_index).expect("步骤号可表示");
+    let token = session
+        .token(step_number, &step.regions)
+        .map_err(|error| (error, false))?;
+    let mut channel = WriteChannel::new(
+        handle.as_mut(),
+        session.id(),
+        token,
+        step_number,
+        &step.regions,
+    )
+    .map_err(|error| (error, false))?;
     let mut wrote = false;
     for segment in segments {
         channel
-            .write(&token, segment.region, &segment.bytes)
+            .write(segment.region, &segment.bytes)
             .map_err(|error| (error, wrote))?;
         wrote = true;
     }

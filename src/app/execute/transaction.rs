@@ -16,7 +16,11 @@ use super::digest::Hasher;
 use super::token::SessionId;
 use super::{ExecError, Recorded};
 use crate::app::observe::records::{RECORD_FILE, hex16};
-use crate::platform::{Platform, RecordEntry, StateLock};
+use crate::platform::{Platform, StateLock};
+
+mod relocate_session;
+
+pub(crate) use relocate_session::Session as RelocateSession;
 
 /// 记录目录里的锁文件名。
 pub const LOCK_FILE: &str = "record.lock";
@@ -26,26 +30,39 @@ pub const LOCK_FILE: &str = "record.lock";
 /// 元组字段私有，模块外无法构造；持有者才能铸造 [`Recorded`]。
 ///
 /// [`Recorded`]: super::token::Recorded
-pub struct Mint(SessionId);
+/// 铸造写令牌的凭据。
+///
+/// 构造函数只在 `transaction` 模块内可见（`relocate_session` 作为子模块也能用），
+/// 因此模块之外的代码，哪怕是 crate 内其他模块，也拿不到 `Mint`，无法伪造令牌。
+pub struct Mint(());
 
 impl Mint {
-    pub(crate) fn new() -> Self {
-        Self(SessionId::next())
+    const fn new() -> Self {
+        Self(())
     }
 
-    /// 本次会话的标识；令牌携带它，写通道据此拒绝跨会话的令牌。
-    pub(crate) const fn session(&self) -> SessionId {
-        self.0
+    /// 令牌用它留下“由铸币者签发”的痕迹；真正防伪靠构造函数私有。
+    pub(crate) const fn brand(&self) -> std::marker::PhantomData<Self> {
+        std::marker::PhantomData
+    }
+
+    /// 仅供测试模块构造；生产代码没有别的入口。
+    #[cfg(test)]
+    pub(crate) const fn for_test() -> Self {
+        Self(())
     }
 }
 
 /// 一次写目标字节的事务现场。
 pub struct RecordSession<'a> {
     platform: &'a dyn Platform,
-    directory: PathBuf,
     file: PathBuf,
     _lock: Box<dyn StateLock>,
     mint: Mint,
+    /// 本会话的标识；令牌与写通道据此拒绝别的会话。
+    session: SessionId,
+    /// 已铸造过令牌的步骤号；同一步骤只发一枚，重放没有第二枚可用。
+    minted: Vec<u64>,
     /// 本次事务绑定的目标身份，同时用于记录载荷与目录定位。
     bound: Fingerprint,
     /// 已有的未终结记录所绑定的摘要。
@@ -72,28 +89,12 @@ impl<'a> RecordSession<'a> {
 
         let mut pending = None;
         let mut sequence = 0;
-        let existing = match platform.read_record(&file).map_err(ExecError::from)? {
-            RecordEntry::Contents(bytes) => Some(bytes),
-            RecordEntry::Absent => None,
-            RecordEntry::NotARecoveryFile => {
-                return Err(ExecError::Record(format!(
-                    "{} is not a recovery file",
-                    file.display()
-                )));
-            }
-        };
-        if let Some(bytes) = existing
+        if let Some(bytes) =
+            crate::app::observe::records::read_bytes(platform, &file).map_err(ExecError::from)?
             && !bytes.is_empty()
         {
             let decoded =
                 record::decode(&bytes).map_err(|error| ExecError::Record(error.to_string()))?;
-            // 记录目录按身份派生，但记录内容仍要自证归属：末帧未终结只说明"没做完"，
-            // 不说明它是本目标的记录。指向别的载体时拒绝，不能把它当作本目标的原像。
-            if !decoded.body.target.matches(identity) {
-                return Err(ExecError::Record(
-                    "the record targets a different device".to_owned(),
-                ));
-            }
             let last_pending = decoded
                 .frames
                 .last()
@@ -107,10 +108,11 @@ impl<'a> RecordSession<'a> {
         }
         Ok(Self {
             platform,
-            directory,
             file,
             _lock: lock,
             mint: Mint::new(),
+            session: SessionId::next(),
+            minted: Vec::new(),
             bound: identity,
             pending,
             sequence,
@@ -167,10 +169,7 @@ impl<'a> RecordSession<'a> {
         let encoded =
             record::encode(&body, &frames).map_err(|error| ExecError::Record(error.to_string()))?;
         self.platform
-            .write_state_file(&self.file, &encoded)
-            .map_err(ExecError::from)?;
-        self.platform
-            .sync_directory(&self.directory)
+            .write_record(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.sequence = 2;
         self.registered = true;
@@ -211,10 +210,7 @@ impl<'a> RecordSession<'a> {
         let encoded =
             record::encode(&body, &frames).map_err(|error| ExecError::Record(error.to_string()))?;
         self.platform
-            .write_state_file(&self.file, &encoded)
-            .map_err(ExecError::from)?;
-        self.platform
-            .sync_directory(&self.directory)
+            .write_record(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.sequence = 1;
         self.registered = true;
@@ -222,93 +218,49 @@ impl<'a> RecordSession<'a> {
     }
 
     /// 本步原像已落盘，可以写目标字节。
-    pub fn token(&self) -> Recorded {
-        Recorded::mint(&self.mint, u64::from(self.sequence))
-    }
-
-    /// 本会话的标识；写通道用它核对令牌来源。
-    pub const fn session(&self) -> SessionId {
-        self.mint.session()
-    }
-
-    /// 写入终态帧、落盘并删除记录。
     ///
-    /// 终态必须整条重写：只追加一帧而不更新头部时，恢复器按头声明长度截取载荷，
-    /// 看不到这条终态，会把已提交的写入当成待回滚。重写后即使删除记录前崩溃，
-    /// 盘上也已是完整的已提交记录。
+    /// 令牌按值交出并绑定 `(会话, 步骤号, 区间摘要)`；同一步骤再次索取会失败，
+    /// 因此没有第二枚令牌可用于重放。
+    pub fn token(&mut self, step: u64, regions: &[Region]) -> Result<Recorded, ExecError> {
+        if self.minted.contains(&step) {
+            return Err(ExecError::Record(format!(
+                "step {step} already spent its write token"
+            )));
+        }
+        self.minted.push(step);
+        Ok(Recorded::mint(&self.mint, self.session, step, regions))
+    }
+
+    /// 本会话的标识。
+    pub const fn id(&self) -> SessionId {
+        self.session
+    }
+
+    /// 追加提交帧、落盘并删除记录。
     pub fn commit(&mut self) -> Result<(), ExecError> {
         if !self.registered {
             return Err(ExecError::Record("no preimage was registered".to_owned()));
         }
-        self.rewrite_append(FrameKind::Committed, true, false, Vec::new())?;
-        self.platform
-            .remove_state_file(&self.file)
-            .map_err(ExecError::from)?;
-        self.platform
-            .sync_directory(&self.directory)
-            .map_err(ExecError::from)?;
-        Ok(())
-    }
-
-    /// 外部不可逆动作成功后追加完成帧。
-    ///
-    /// `begin_irreversible` 落下的意图帧是 `completed:false`：中断时恢复器无法
-    /// 判断外部动作是否已发生。驱动在外部动作成功后调用本方法把完成标记落盘，
-    /// 恢复器据此把"已完成的不可逆步骤"与"未完成的不可逆步骤"分开。
-    pub fn complete_irreversible(&mut self) -> Result<(), ExecError> {
-        if !self.registered {
-            return Err(ExecError::Record(
-                "no irreversible step was declared".to_owned(),
-            ));
-        }
-        self.rewrite_append(FrameKind::Progress, true, true, Vec::new())
-    }
-
-    /// 读回记录、追加一帧并整条重编码落盘。
-    fn rewrite_append(
-        &mut self,
-        kind: FrameKind,
-        completed: bool,
-        irreversible: bool,
-        intent: Vec<u8>,
-    ) -> Result<(), ExecError> {
-        let existing = match self
-            .platform
-            .read_record(&self.file)
+        let mut encoded = crate::app::observe::records::read_bytes(self.platform, &self.file)
             .map_err(ExecError::from)?
-        {
-            RecordEntry::Contents(bytes) if !bytes.is_empty() => bytes,
-            RecordEntry::Contents(_) | RecordEntry::Absent => {
-                return Err(ExecError::Record(
-                    "the record vanished before it was completed".to_owned(),
-                ));
-            }
-            RecordEntry::NotARecoveryFile => {
-                return Err(ExecError::Record(format!(
-                    "{} is not a recovery file",
-                    self.file.display()
-                )));
-            }
-        };
-        let mut decoded =
-            record::decode(&existing).map_err(|error| ExecError::Record(error.to_string()))?;
-        let seq = u32::try_from(decoded.frames.len())
-            .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
-        decoded.frames.push(Frame {
-            seq,
-            kind,
-            completed,
-            irreversible,
-            intent,
+            .ok_or_else(|| {
+                ExecError::Record("the record vanished before it could be committed".to_owned())
+            })?;
+        Frame {
+            seq: self.sequence,
+            kind: FrameKind::Committed,
+            completed: true,
+            irreversible: false,
+            intent: Vec::new(),
             regions: Vec::new(),
-        });
-        let encoded = record::encode(&decoded.body, &decoded.frames)
-            .map_err(|error| ExecError::Record(error.to_string()))?;
+        }
+        .encode_into(&mut encoded)
+        .map_err(|error| ExecError::Record(error.to_string()))?;
         self.platform
-            .write_state_file(&self.file, &encoded)
+            .write_record(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.platform
-            .sync_directory(&self.directory)
+            .remove_record(&self.file)
             .map_err(ExecError::from)?;
         Ok(())
     }
@@ -341,8 +293,13 @@ mod tests {
     #[test]
     fn mint_grants_recorded_tokens() {
         let mint = Mint::new();
-        let token = Recorded::mint(&mint, 7);
-        assert_eq!(token.sequence(), 7);
+        let region = Region::sized(0, 512).expect("区间");
+        let token = Recorded::mint(&mint, SessionId::next(), 7, &[region]);
+        assert_eq!(token.step(), 7);
+        assert_eq!(
+            token.region_digest(),
+            super::super::token::RegionDigest::of(&[region]).finish()
+        );
     }
 
     #[test]

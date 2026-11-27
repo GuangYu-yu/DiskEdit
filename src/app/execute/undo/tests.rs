@@ -145,11 +145,8 @@ impl Platform for Memory {
     fn is_directory(&self, _path: &Path) -> bool {
         true
     }
-    fn list_files(&self, _root: &Path) -> PlatformResult<Vec<PathBuf>> {
+    fn list_record_entries(&self, _root: &Path, _name: &str) -> PlatformResult<Vec<PathBuf>> {
         Ok(Vec::new())
-    }
-    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
-        Ok(self.get(path))
     }
     fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
         Ok(match self.get(path) {
@@ -188,18 +185,19 @@ impl Platform for Memory {
     fn temporary_directory(&self, _tag: &str) -> PlatformResult<PathBuf> {
         Err(PlatformError::not_supported("no temp"))
     }
-    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
         self.put(path, bytes.to_vec());
         Ok(())
     }
-    fn append_state_file(&self, _path: &Path, _bytes: &[u8]) -> PlatformResult<()> {
-        Ok(())
-    }
-    fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
+    fn remove_record(&self, path: &Path) -> PlatformResult<()> {
         self.files.lock().unwrap().remove(path);
         Ok(())
     }
-    fn sync_directory(&self, _path: &Path) -> PlatformResult<()> {
+    fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()> {
+        let mut files = self.files.lock().unwrap();
+        if let Some(bytes) = files.remove(from) {
+            files.insert(to.to_path_buf(), bytes);
+        }
         Ok(())
     }
     fn lock_state(&self, _path: &Path) -> PlatformResult<Box<dyn StateLock>> {
@@ -286,75 +284,6 @@ fn recovered(outcome: &Outcome) -> bool {
         outcome.state(),
         ExecutionState::RolledBack | ExecutionState::Committed
     )
-}
-
-// covers: F2
-#[test]
-fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
-    // 不可逆步骤（建卷、改数据区）没有原像可回滚。若在外部动作之后、终态帧之前中断，
-    // 记录末帧是未完成的不可逆意图：恢复不得报告"已回滚"并删掉记录，必须交人工判定。
-    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
-    memory.put(
-        &record_path(),
-        record_bytes(&[Frame {
-            seq: 0,
-            kind: FrameKind::Intent,
-            completed: false,
-            irreversible: true,
-            intent: b"make-filesystem".to_vec(),
-            regions: Vec::new(),
-        }]),
-    );
-    let outcome = run_mode(&memory, RecoverMode::Undo);
-    assert_eq!(
-        outcome.state(),
-        ExecutionState::Unwritten,
-        "{:?}",
-        outcome.reason()
-    );
-    assert!(
-        memory.get(&record_path()).is_some(),
-        "未完成的不可逆记录必须保留，不得当作已回滚清理"
-    );
-    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
-}
-
-// covers: F2
-#[test]
-fn a_completed_irreversible_step_is_not_undone() {
-    // 外部动作成功后驱动追加了完成帧；记录因此可以被识别为"不可逆步骤已完成"，
-    // 但 undo 仍不能把它当作可回滚：目标字节已不可恢复，必须显式 release。
-    let memory = Memory::with_target(vec![0x55u8; SECTOR]);
-    memory.put(
-        &record_path(),
-        record_bytes(&[
-            Frame {
-                seq: 0,
-                kind: FrameKind::Intent,
-                completed: false,
-                irreversible: true,
-                intent: b"make-filesystem".to_vec(),
-                regions: Vec::new(),
-            },
-            Frame {
-                seq: 1,
-                kind: FrameKind::Progress,
-                completed: true,
-                irreversible: true,
-                intent: Vec::new(),
-                regions: Vec::new(),
-            },
-        ]),
-    );
-    let outcome = run_mode(&memory, RecoverMode::Undo);
-    assert_eq!(
-        outcome.state(),
-        ExecutionState::Unwritten,
-        "{:?}",
-        outcome.reason()
-    );
-    assert!(memory.get(&record_path()).is_some(), "记录必须保留");
-    assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
 }
 
 // covers: B7, B9

@@ -8,7 +8,7 @@ use diskedit_core::region::{Region, RegionSet};
 
 use super::ExecError;
 use super::digest::{Digest, Hasher};
-use super::token::{Recorded, SessionId};
+use super::token::{Recorded, RegionDigest, SessionId};
 use crate::platform::TargetHandle;
 
 /// 单次回读的块大小。
@@ -18,22 +18,59 @@ const VERIFY_CHUNK: usize = 1 << 20;
 pub struct WriteChannel<'a> {
     target: &'a mut dyn TargetHandle,
     declared: RegionSet,
-    session: SessionId,
+    /// 构造时按值收下的令牌；通道持有它，调用方无法再用同一枚令牌开第二个通道。
+    _token: Option<Recorded>,
     written: Vec<(Region, Digest)>,
     writes_done: usize,
     fail_after: Option<usize>,
 }
 
 impl<'a> WriteChannel<'a> {
-    /// 以本步声明区间与本步记录会话建立通道。
+    /// 以本步令牌与声明区间建立通道。
     ///
-    /// 通道只接受该会话铸造的令牌；别的会话的令牌在这里被拒绝，复制或跨步
-    /// 复用无法通过校验。
-    pub fn new(target: &'a mut dyn TargetHandle, declared: &[Region], session: SessionId) -> Self {
+    /// 令牌按值交入并留在通道里：会话、步骤号、区间摘要三者都要与本次构造一致。
+    /// 任何一项不符都说明令牌不属于这一步，通道不会建立。
+    pub fn new(
+        target: &'a mut dyn TargetHandle,
+        session: SessionId,
+        token: Recorded,
+        step: u64,
+        declared: &[Region],
+    ) -> Result<Self, ExecError> {
+        if token.session() != session {
+            return Err(ExecError::InvalidPlan(
+                "the write token was minted by a different record session".to_owned(),
+            ));
+        }
+        if token.step() != step {
+            return Err(ExecError::InvalidPlan(format!(
+                "the write token was minted for step {}, not step {step}",
+                token.step()
+            )));
+        }
+        if token.region_digest() != RegionDigest::of(declared).finish() {
+            return Err(ExecError::InvalidPlan(
+                "the write token does not cover this step's declared regions".to_owned(),
+            ));
+        }
+        Ok(Self {
+            target,
+            declared: RegionSet::from_regions(declared.iter().copied()),
+            _token: Some(token),
+            written: Vec::new(),
+            writes_done: 0,
+            fail_after: None,
+        })
+    }
+
+    /// 恢复回滚专用：授权来自记录里的原像，而不是本步令牌。
+    ///
+    /// 原始写原语仍然只在本模块内被调用；回滚的逐条准入判定由恢复执行器负责。
+    pub(crate) fn for_recovery(target: &'a mut dyn TargetHandle, declared: &[Region]) -> Self {
         Self {
             target,
             declared: RegionSet::from_regions(declared.iter().copied()),
-            session,
+            _token: None,
             written: Vec::new(),
             writes_done: 0,
             fail_after: None,
@@ -71,17 +108,7 @@ impl<'a> WriteChannel<'a> {
     }
 
     /// 写一段字节；区间必须被本步声明覆盖。
-    pub fn write(
-        &mut self,
-        token: &Recorded,
-        region: Region,
-        bytes: &[u8],
-    ) -> Result<(), ExecError> {
-        if token.session() != self.session {
-            return Err(ExecError::InvalidPlan(
-                "the write token was minted by a different record session".to_owned(),
-            ));
-        }
+    pub fn write(&mut self, region: Region, bytes: &[u8]) -> Result<(), ExecError> {
         if !self.declared.covers(region) {
             return Err(ExecError::InvalidPlan(format!(
                 "write region [{}, {}) not declared by this step",
@@ -224,16 +251,23 @@ mod tests {
         }
     }
 
-    fn token() -> Recorded {
-        Recorded::mint(&Mint::new(), 1)
+    fn token(session: SessionId, step: u64, declared: &[Region]) -> Recorded {
+        Recorded::mint(&Mint::for_test(), session, step, declared)
     }
 
     fn channel<'a>(
         target: &'a mut MemoryTarget,
+        session: SessionId,
+        step: u64,
         declared: &[Region],
-        token: &Recorded,
-    ) -> WriteChannel<'a> {
-        WriteChannel::new(target, declared, token.session())
+    ) -> Result<WriteChannel<'a>, ExecError> {
+        WriteChannel::new(
+            target,
+            session,
+            token(session, step, declared),
+            step,
+            declared,
+        )
     }
 
     // covers: I3
@@ -243,11 +277,10 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 512).expect("区间")];
-        let token = token();
-        let mut channel = channel(&mut target, &declared, &token);
+        let mut channel = channel(&mut target, SessionId::next(), 0, &declared).expect("通道");
         let region = Region::sized(512, 512).expect("区间");
         let error = channel
-            .write(&token, region, &[0u8; 512])
+            .write(region, &[0u8; 512])
             .expect_err("未声明的区间必须被拒绝");
         assert!(
             error.to_string().contains("not declared"),
@@ -262,11 +295,10 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 8192).expect("区间")];
-        let token = token();
-        let mut channel = channel(&mut target, &declared, &token);
+        let mut channel = channel(&mut target, SessionId::next(), 0, &declared).expect("通道");
         let region = Region::sized(4096, 512).expect("区间");
         let error = channel
-            .write(&token, region, &[0u8; 512])
+            .write(region, &[0u8; 512])
             .expect_err("越过目标长度的写入必须被拒绝");
         assert!(
             error.to_string().contains("past the target length"),
@@ -281,11 +313,10 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 1024).expect("区间")];
-        let token = token();
-        let mut channel = channel(&mut target, &declared, &token);
+        let mut channel = channel(&mut target, SessionId::next(), 0, &declared).expect("通道");
         let region = Region::sized(0, 512).expect("区间");
         channel
-            .write(&token, region, &[0x5au8; 512])
+            .write(region, &[0x5au8; 512])
             .expect("区间内的写入应成功");
         channel.verify_written().expect("回读摘要应一致");
     }
@@ -297,14 +328,59 @@ mod tests {
             bytes: vec![0u8; 4096],
         };
         let declared = [Region::sized(0, 512).expect("区间")];
-        let foreign = token();
-        let mut channel = WriteChannel::new(&mut target, &declared, SessionId::next());
-        let region = Region::sized(0, 512).expect("区间");
-        let error = channel
-            .write(&foreign, region, &[0u8; 512])
-            .expect_err("别的会话的令牌必须被拒绝");
+        let foreign = token(SessionId::next(), 0, &declared);
+        let error = WriteChannel::new(&mut target, SessionId::next(), foreign, 0, &declared)
+            .err()
+            .expect("别的会话的令牌必须被拒绝");
         assert!(
             error.to_string().contains("different record session"),
+            "实际错误：{error}"
+        );
+    }
+
+    // covers: I4
+    #[test]
+    fn a_token_for_another_step_is_rejected() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 512).expect("区间")];
+        let session = SessionId::next();
+        let error = WriteChannel::new(
+            &mut target,
+            session,
+            token(session, 2, &declared),
+            3,
+            &declared,
+        )
+        .err()
+        .expect("别的步骤的令牌必须被拒绝");
+        assert!(
+            error.to_string().contains("minted for step 2"),
+            "实际错误：{error}"
+        );
+    }
+
+    // covers: I4
+    #[test]
+    fn a_token_for_another_region_set_is_rejected() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 512).expect("区间")];
+        let other = [Region::sized(0, 1024).expect("区间")];
+        let session = SessionId::next();
+        let error = WriteChannel::new(
+            &mut target,
+            session,
+            token(session, 0, &other),
+            0,
+            &declared,
+        )
+        .err()
+        .expect("区间摘要不符的令牌必须被拒绝");
+        assert!(
+            error.to_string().contains("does not cover"),
             "实际错误：{error}"
         );
     }

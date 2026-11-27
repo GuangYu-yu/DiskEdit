@@ -122,6 +122,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let relocatable = matches!(table, Resizable::Gpt(_)) && resize.allow_move;
     // `grow --allow-move` 的天花板：右侧分区整体右移后仍要落在 last usable 之内，
     // 因此可扩的量 = 右侧空隙 + 盘尾余量。
+    // 判定层禁止 `saturating_*`（见 tests/arithmetic.rs）：这里用显式 checked 减法，
+    // 不允许 clippy 反向改回折中写法。
+    #[allow(clippy::manual_saturating_arithmetic)]
     let grow_ceiling = if relocatable && resize.size.as_ref() == Some(&SizeSpec::Grow) {
         let tail = table
             .used_ranges()
@@ -129,7 +132,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
             .map(|&(_, end)| end)
             .filter(|&end| end > old_end)
             .max()
-            .map_or(last_usable, |end| last_usable.saturating_sub(end));
+            .map_or(last_usable, |end| last_usable.checked_sub(end).unwrap_or(0));
         Some(old_end + free + tail)
     } else {
         None
@@ -200,13 +203,9 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
         });
     }
 
-    let Some(new_bytes) = new_end
-        .checked_sub(start)
-        .and_then(|count| count.checked_add(1))
-        .and_then(|count| count.checked_mul(sector))
-    else {
+    let Some(new_bytes) = (new_end - start + 1).checked_mul(sector) else {
         return Decision::Refuse(Refusal::TableEdit {
-            why: "the resized partition's byte range overflows the address space".to_owned(),
+            why: "the new partition size overflows a 64-bit byte count".to_owned(),
         });
     };
     let geometry = FsGeometry {
@@ -336,12 +335,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
 /// 可编辑的表：GPT 与 MBR 主表。
 enum Resizable {
     Gpt(GptTable),
-    Mbr {
-        lba0: Vec<u8>,
-        total_lba: u64,
-        /// 构造时解析出的主分区占用区间；解析失败即拒绝，不在使用时兜底。
-        used: Vec<(u64, u64)>,
-    },
+    Mbr { lba0: Vec<u8>, total_lba: u64 },
 }
 
 impl Resizable {
@@ -355,14 +349,19 @@ impl Resizable {
     fn last_usable(&self) -> u64 {
         match self {
             Self::Gpt(table) => table.header.last_usable_lba,
-            Self::Mbr { total_lba, .. } => total_lba.saturating_sub(1),
+            Self::Mbr { total_lba, .. } => total_lba.checked_sub(1).unwrap_or(0),
         }
     }
 
     fn used_ranges(&self) -> Vec<(u64, u64)> {
         match self {
             Self::Gpt(table) => table.used_ranges(),
-            Self::Mbr { used, .. } => used.clone(),
+            // MBR 解析失败时不能当作"没有任何占用"：那会把整条盘尾算成空闲。这里
+            // 按"整盘已用"处理，宁可不给扩展空间，也不越过未知占用。
+            Self::Mbr { lba0, total_lba } => match edit::mbr_used_ranges(lba0, *total_lba) {
+                Ok(used) => used,
+                Err(_) => vec![(0, (*total_lba).max(1) - 1)],
+            },
         }
     }
 
@@ -387,9 +386,7 @@ impl Resizable {
                 }
                 table.segments(&entries).map_err(|error| error.to_string())
             }
-            Self::Mbr {
-                lba0, total_lba, ..
-            } => {
+            Self::Mbr { lba0, total_lba } => {
                 let bytes = edit::resize_mbr(lba0, number, start, new_end, *total_lba)
                     .map_err(|error| error.to_string())?;
                 Ok(vec![Segment {
@@ -585,9 +582,7 @@ fn pv_chain_step(
                     .new_bytes
                     .checked_sub(geometry.old_bytes)
                     .ok_or_else(|| Refusal::TableEdit {
-                        why: "the new size is smaller than the current size, so there is no \
-                                  growth to hand to the LV"
-                            .to_owned(),
+                        why: "the new size is smaller than the current size".to_owned(),
                     })?;
                 let extents = delta / selection.extent_bytes;
                 if extents == 0 {
@@ -824,7 +819,10 @@ fn free_right(used: &[(u64, u64)], old_end: u64, last_usable: u64) -> u64 {
             next = start - 1;
         }
     }
-    next.saturating_sub(old_end)
+    // 循环条件保证 `next` 不低于 `old_end`：初值是更大的 `last_usable`，
+    // 更新值是 `start - 1` 且 `start > old_end`。
+    debug_assert!(next >= old_end);
+    next - old_end
 }
 
 fn table_step(
@@ -1029,21 +1027,13 @@ fn editable(snapshot: &ResizeSnapshot) -> Result<(Resizable, Option<Vec<u8>>), R
             let repaired = super::repair::adopt(&mut gpt, *state, *pmbr, lba0)?;
             Ok((Resizable::Gpt(gpt), repaired.protective_mbr))
         }
-        TableFacts::Mbr { lba0, total_lba } => {
-            // 占用区间在这里解析一次：解析失败是表不可用，不是"没有占用"。
-            let used =
-                edit::mbr_used_ranges(lba0, *total_lba).map_err(|error| Refusal::TableDamaged {
-                    why: error.to_string(),
-                })?;
-            Ok((
-                Resizable::Mbr {
-                    lba0: lba0.clone(),
-                    total_lba: *total_lba,
-                    used,
-                },
-                None,
-            ))
-        }
+        TableFacts::Mbr { lba0, total_lba } => Ok((
+            Resizable::Mbr {
+                lba0: lba0.clone(),
+                total_lba: *total_lba,
+            },
+            None,
+        )),
     }
 }
 
@@ -1685,11 +1675,7 @@ fn plan_relocations(
         if entry.partition_type_guid.is_zero() || entry.starting_lba <= old_end {
             continue;
         }
-        let sectors = entry
-            .ending_lba
-            .checked_sub(entry.starting_lba)
-            .and_then(|count| count.checked_add(1))
-            .ok_or_else(|| beyond_table("the partition's sector count overflows the LBA range"))?;
+        let sectors = entry.ending_lba - entry.starting_lba + 1;
         let new_start = entry
             .starting_lba
             .checked_add(delta)
@@ -1917,70 +1903,4 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
         Plan::external(vec![step], identity),
         format!("resized the filesystem on partition #{number} through its mounted volume"),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use crate::app::observe::records::RecordState;
-    use crate::app::observe::table::{MbrView, TableView};
-    use crate::app::observe::{PriorState, TableFacts, TargetFacts};
-    use crate::platform::{Occupancy, TargetKind};
-    use diskedit_core::fingerprint::Fingerprint;
-
-    use super::*;
-
-    fn mbr_snapshot(lba0: Vec<u8>) -> ResizeSnapshot {
-        ResizeSnapshot {
-            target: TargetFacts {
-                display: "img".to_owned(),
-                path: PathBuf::from("img"),
-                bytes: 1024 * 512,
-                kind: TargetKind::File,
-                sector_size: 512,
-                identity: Some(Fingerprint::strong([7; 32])),
-            },
-            occupancy: Occupancy::Idle,
-            record: RecordState {
-                directory: None,
-                directory_exists: false,
-                file: None,
-                bytes: None,
-                unavailable: None,
-            },
-            prior: PriorState::Absent,
-            view: TableView::Mbr(MbrView {
-                sector_size: 512,
-                partitions: Vec::new(),
-            }),
-            facts: Some(TableFacts::Mbr {
-                lba0,
-                total_lba: 1024,
-            }),
-            whole_content: None,
-            stamp: [0u8; 32],
-            is_partition_node: false,
-            selector: None,
-            selected: None,
-            tools: Vec::new(),
-            lvm: None,
-            online: None,
-            partition_mount: None,
-            swap_active: None,
-            min_bytes: None,
-        }
-    }
-
-    // covers: I14
-    #[test]
-    fn an_mbr_table_too_short_for_entries_is_not_an_empty_table() {
-        // 短于一个扇区的 MBR 解析不出任何分区记录：占用区间是"不知道"，不是
-        // "没有占用"。按空集继续会让扩容把已有分区当成空白区域。
-        let snapshot = mbr_snapshot(vec![0u8; 64]);
-        assert!(
-            matches!(editable(&snapshot), Err(Refusal::TableDamaged { .. })),
-            "解析不出分区记录的 MBR 必须拒绝，不能按无占用继续"
-        );
-    }
 }

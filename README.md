@@ -130,7 +130,6 @@ Identification (`layout`): ext, xfs, btrfs, f2fs, ntfs, vfat, exfat, swap, squas
 - [docs/en/capability-matrix.md](docs/en/capability-matrix.md) — platform × media matrix for every command and capability. Generated; do not edit by hand.
 - [docs/en/internals.md](docs/en/internals.md) — behaviour boundaries: capability gate, occupancy and locking, target identity, recovery records, resume semantics, external tools, verification scope.
 - [docs/en/interop.md](docs/en/interop.md) — working with qcow2/vmdk/vdi, remote targets and sparse images around the tool: commands, seams and what is unverified.
-- [docs/policy.md](docs/policy.md) — fallback and refusal policy: when continuing is safe, when to refuse, and which state belongs to this tool.
 
 ## License
 

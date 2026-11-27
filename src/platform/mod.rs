@@ -115,23 +115,56 @@ macro_rules! unsupported_platform {
                 false
             }
 
-            fn list_files(
+            fn list_record_entries(
                 &self,
                 _root: &std::path::Path,
+                _name: &str,
             ) -> $crate::platform::PlatformResult<Vec<std::path::PathBuf>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的目录端口尚未接入"
+                    " 的记录目录端口尚未接入"
                 )))
             }
 
-            fn read_file(
+            fn read_record(
                 &self,
                 _path: &std::path::Path,
-            ) -> $crate::platform::PlatformResult<Option<Vec<u8>>> {
+            ) -> $crate::platform::PlatformResult<$crate::platform::RecordEntry> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的文件端口尚未接入"
+                    " 的记录读取端口尚未接入"
+                )))
+            }
+
+            fn write_record(
+                &self,
+                _path: &std::path::Path,
+                _bytes: &[u8],
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的记录写入端口尚未接入"
+                )))
+            }
+
+            fn remove_record(
+                &self,
+                _path: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的记录删除端口尚未接入"
+                )))
+            }
+
+            fn rename_record(
+                &self,
+                _from: &std::path::Path,
+                _to: &std::path::Path,
+            ) -> $crate::platform::PlatformResult<()> {
+                Err($crate::platform::PlatformError::not_supported(concat!(
+                    $os,
+                    " 的记录改名端口尚未接入"
                 )))
             }
 
@@ -211,48 +244,6 @@ macro_rules! unsupported_platform {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
                     " 的临时目录端口尚未接入"
-                )))
-            }
-
-            fn write_state_file(
-                &self,
-                _path: &std::path::Path,
-                _bytes: &[u8],
-            ) -> $crate::platform::PlatformResult<()> {
-                Err($crate::platform::PlatformError::not_supported(concat!(
-                    $os,
-                    " 的状态文件端口尚未接入"
-                )))
-            }
-
-            fn append_state_file(
-                &self,
-                _path: &std::path::Path,
-                _bytes: &[u8],
-            ) -> $crate::platform::PlatformResult<()> {
-                Err($crate::platform::PlatformError::not_supported(concat!(
-                    $os,
-                    " 的状态文件端口尚未接入"
-                )))
-            }
-
-            fn remove_state_file(
-                &self,
-                _path: &std::path::Path,
-            ) -> $crate::platform::PlatformResult<()> {
-                Err($crate::platform::PlatformError::not_supported(concat!(
-                    $os,
-                    " 的状态文件端口尚未接入"
-                )))
-            }
-
-            fn sync_directory(
-                &self,
-                _path: &std::path::Path,
-            ) -> $crate::platform::PlatformResult<()> {
-                Err($crate::platform::PlatformError::not_supported(concat!(
-                    $os,
-                    " 的目录持久化端口尚未接入"
                 )))
             }
 
@@ -345,9 +336,6 @@ impl TargetKind {
     }
 }
 
-/// 镜像文件没有内核扇区事实时使用的逻辑块大小。
-pub const IMAGE_SECTOR_SIZE: u64 = 512;
-
 /// 目标在宿主上的占用结论。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Occupancy {
@@ -375,6 +363,20 @@ pub struct ToolRun {
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// 记录位置上是什么。
+///
+/// "没有记录"与"位置上有别的东西"必须分开：后者说明记录目录被动过，调用方要
+/// 按不可信现场处理，而不是当作空目录继续。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecordEntry {
+    /// 位置为空，没有记录。
+    Absent,
+    /// 位置上是普通文件，附字节。
+    Contents(Vec<u8>),
+    /// 位置上不是普通文件：符号链接、目录、设备、FIFO、Unix socket 等。
+    NotARecoveryFile,
 }
 
 /// 临时绑定到目标的块设备视图；销毁时解除绑定。
@@ -514,15 +516,6 @@ pub trait TargetHandle {
     /// 块设备的逻辑扇区字节数；普通文件没有这一事实。
     fn sector_size(&self) -> Option<u64>;
 
-    /// 解析目标的逻辑块大小。
-    ///
-    /// 块设备以内核回报为准，内核读不到时这里是 `None`：没有可信值，调用方必须
-    /// 显式处理，不能当成 512。镜像没有内核扇区事实，按镜像格式的固定块大小。
-    fn resolved_sector_size(&self) -> Option<u64> {
-        self.sector_size()
-            .or_else(|| matches!(self.kind(), TargetKind::File).then_some(IMAGE_SECTOR_SIZE))
-    }
-
     /// 目标是否为空。
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -543,20 +536,6 @@ pub trait TargetHandle {
 
 /// 记录目录上的独占锁；销毁时释放。
 pub trait StateLock {}
-
-/// 记录位置上的读取结果。
-///
-/// 记录位置只接受普通文件：符号链接、目录、设备、FIFO 等都不是恢复记录，
-/// 必须作为独立结果上报，不能折成"没有记录"或空字节。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RecordEntry {
-    /// 位置不存在。
-    Absent,
-    /// 是普通文件，字节已读出。
-    Contents(Vec<u8>),
-    /// 位置上有东西，但不是普通文件。
-    NotARecoveryFile,
-}
 
 /// 宿主端口。
 pub trait Platform: Send + Sync {
@@ -644,35 +623,24 @@ pub trait Platform: Send + Sync {
     /// 路径是否为目录。
     fn is_directory(&self, path: &Path) -> bool;
 
-    /// 递归列出目录下的普通文件；根不存在或不可读时返回错误。
-    fn list_files(&self, root: &Path) -> PlatformResult<Vec<PathBuf>>;
-
-    /// 读取一个普通文件；不存在时返回 `None`。
-    fn read_file(&self, path: &Path) -> PlatformResult<Option<Vec<u8>>>;
-
-    /// 读取记录位置：不跟随符号链接，返回明确的结果。
+    /// 递归列出记录目录里指定文件名的条目，不进入符号链接目录。
     ///
-    /// 默认实现只回答存在性（`symlink_metadata`），普通文件按"读不出来"拒绝；
-    /// 会逐级 `openat` 的宿主覆盖它。
-    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
-        match std::fs::symlink_metadata(path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(RecordEntry::Absent),
-            Err(error) => Err(PlatformError::io(path, error)),
-            Ok(metadata) if metadata.file_type().is_file() => Err(PlatformError::not_supported(
-                "this host cannot read a recovery record",
-            )),
-            Ok(_) => Ok(RecordEntry::NotARecoveryFile),
-        }
-    }
+    /// 根不存在或不可读时返回错误。这是记录位置的唯一目录入口；不存在通用的
+    /// "列目录"端口，记录扫描无法改走跟随链接的路径。
+    fn list_record_entries(&self, root: &Path, name: &str) -> PlatformResult<Vec<PathBuf>>;
 
-    /// 递归列出记录目录里名为 `record` 的条目（含非普通条目）。
-    fn list_record_entries(&self, root: &Path) -> PlatformResult<Vec<PathBuf>> {
-        Ok(self
-            .list_files(root)?
-            .into_iter()
-            .filter(|path| path.file_name().is_some_and(|name| name == "record"))
-            .collect())
-    }
+    /// 读取记录位置。文件不存在返回 [`RecordEntry::Absent`]，不是普通文件返回
+    /// [`RecordEntry::NotARecoveryFile`]；只有真的读不到才是 `Err`。
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry>;
+
+    /// 以覆盖方式写记录位置：父目录 fd 锚定，同目录临时名落盘后原子改名。
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
+
+    /// 删除记录位置：父目录 fd 锚定，删除后同步目录；不存在视为成功。
+    fn remove_record(&self, path: &Path) -> PlatformResult<()>;
+
+    /// 在同一目录内改名：两个父目录 fd 锚定，改名后同步目录。
+    fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()>;
 
     /// 运行一个外部程序。程序身份到可执行名与参数的映射留在本层。
     fn run(&self, program: Program, args: &[String]) -> PlatformResult<ToolRun>;
@@ -713,93 +681,6 @@ pub trait Platform: Send + Sync {
     /// 建立一个宿主临时目录，名字带 `tag` 且不与其他调用冲突。
     fn temporary_directory(&self, tag: &str) -> PlatformResult<PathBuf>;
 
-    /// 以覆盖方式写一个状态文件并落盘。
-    fn write_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
-
-    /// 追加写一个状态文件并落盘。
-    fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()>;
-
-    /// 删除一个状态文件；不存在时视为成功。
-    fn remove_state_file(&self, path: &Path) -> PlatformResult<()>;
-
-    /// 把目录项落盘。
-    fn sync_directory(&self, path: &Path) -> PlatformResult<()>;
-
     /// 对状态文件取独占锁；离开作用域即释放。
     fn lock_state(&self, path: &Path) -> PlatformResult<Box<dyn StateLock>>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 只提供形态与扇区事实的句柄，用于校验块大小解析规则。
-    struct Probe {
-        kind: TargetKind,
-        sector: Option<u64>,
-    }
-
-    impl TargetHandle for Probe {
-        fn path(&self) -> &Path {
-            Path::new("probe")
-        }
-
-        fn len(&self) -> u64 {
-            0
-        }
-
-        fn kind(&self) -> TargetKind {
-            self.kind
-        }
-
-        fn sector_size(&self) -> Option<u64> {
-            self.sector
-        }
-
-        fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> PlatformResult<usize> {
-            Ok(0)
-        }
-
-        fn write_at(&mut self, _offset: u64, _buf: &[u8]) -> PlatformResult<usize> {
-            Ok(0)
-        }
-
-        fn barrier(&mut self) -> PlatformResult<()> {
-            Ok(())
-        }
-
-        fn refresh_partitions(&mut self) -> PlatformResult<()> {
-            Ok(())
-        }
-    }
-
-    // covers: I5
-    #[test]
-    fn an_image_without_a_kernel_sector_fact_uses_the_image_default() {
-        let probe = Probe {
-            kind: TargetKind::File,
-            sector: None,
-        };
-        assert_eq!(probe.resolved_sector_size(), Some(IMAGE_SECTOR_SIZE));
-    }
-
-    // covers: I5
-    #[test]
-    fn a_block_device_without_a_reported_sector_has_no_trusted_value() {
-        let probe = Probe {
-            kind: TargetKind::BlockDevice,
-            sector: None,
-        };
-        assert_eq!(probe.resolved_sector_size(), None);
-    }
-
-    // covers: I5
-    #[test]
-    fn a_reported_sector_size_wins_over_the_image_default() {
-        let probe = Probe {
-            kind: TargetKind::BlockDevice,
-            sector: Some(4096),
-        };
-        assert_eq!(probe.resolved_sector_size(), Some(4096));
-    }
 }

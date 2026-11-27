@@ -76,7 +76,7 @@ fn abandon(
     let mut number = 1u64;
     let archived = loop {
         let candidate = directory.join(format!("{ABANDONED_PREFIX}{number}.abandoned"));
-        if platform.read_file(&candidate)?.is_none() {
+        if crate::app::observe::records::read_bytes(platform, &candidate)?.is_none() {
             break candidate;
         }
         number += 1;
@@ -86,9 +86,7 @@ fn abandon(
             ));
         }
     };
-    platform.write_state_file(&archived, bytes)?;
-    platform.sync_directory(directory)?;
-    platform.remove_state_file(file)?;
-    platform.sync_directory(directory)?;
+    platform.write_record(&archived, bytes)?;
+    platform.remove_record(file)?;
     Ok(())
 }

@@ -10,7 +10,7 @@ use diskedit_core::fs::{ContentKind, FsKind, MkfsKind, Program};
 use diskedit_core::region::Region;
 
 use super::transaction::RecordSession;
-use super::{ExecError, FailureKind, Outcome, Recorded, WriteChannel};
+use super::{ExecError, FailureKind, Outcome, WriteChannel};
 use crate::app::decide::{ConfirmedPlan, PropertyValue, Step, StepKind};
 use crate::app::observe::ContentProperty;
 use crate::platform::{LoopBinding, Occupancy, Platform, TargetKind, ToolRun};
@@ -426,7 +426,7 @@ fn run_online_carrier(
             false,
         ));
     };
-    let sector_size = target_sector_size(platform, online.disk).map_err(|error| (error, false))?;
+    let sector_size = target_sector_size(platform, online.disk).unwrap_or(512);
     let request = OnlineRequest {
         mount_point: online.mount_point.to_path_buf(),
         device: online.device.to_path_buf(),
@@ -511,7 +511,7 @@ pub(super) fn execute_plan(
     target: &Path,
     plan: &ConfirmedPlan,
 ) -> Result<(), (ExecError, bool)> {
-    let (action, region) = fs_action(plan.steps()).map_err(|error| (error, false))?;
+    let (step_index, action, region) = fs_action(plan.steps()).map_err(|error| (error, false))?;
     ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     // 锁前核对一次身份，持锁后再核对一次。
     check_identity(platform, target, plan).map_err(|error| (error, false))?;
@@ -549,8 +549,6 @@ pub(super) fn execute_plan(
     session
         .begin_irreversible(plan.request_digest(), FS_INTENT)
         .map_err(|error| (error, false))?;
-    // 本步原像已落盘；此后每一次工具调用都必须带着它，写类工具无法在记录之外执行。
-    let token = session.token();
 
     match &action {
         FsAction::Make {
@@ -572,8 +570,14 @@ pub(super) fn execute_plan(
                         false,
                     )
                 })?];
-                let mut channel = WriteChannel::new(handle.as_mut(), &declared, session.session());
-                wipe(&mut channel, &token, &ranges).map_err(|error| (error, true))?;
+                let step_number = u64::try_from(step_index).expect("步骤号可表示");
+                let token = session
+                    .token(step_number, &declared)
+                    .map_err(|error| (error, true))?;
+                let mut channel =
+                    WriteChannel::new(handle.as_mut(), session.id(), token, step_number, &declared)
+                        .map_err(|error| (error, true))?;
+                wipe(&mut channel, &ranges).map_err(|error| (error, true))?;
                 channel.barrier().map_err(|error| (error, true))?;
             }
             let (program, mut args) =
@@ -586,26 +590,26 @@ pub(super) fn execute_plan(
                     )
                 })?;
             args.push(device.device().display().to_string());
-            run_checked(platform, program, &args, &token)
+            run_checked(platform, program, &args)
                 .map(|_| ())
                 .map_err(|(error, _)| (error, true))?;
         }
         FsAction::Grow {
             filesystem, bytes, ..
         } => {
-            grow(platform, *filesystem, device.device(), *bytes, &token)?;
+            grow(platform, *filesystem, device.device(), *bytes)?;
         }
         FsAction::Shrink {
             filesystem, bytes, ..
         } => {
-            shrink(platform, *filesystem, device.device(), *bytes, &token)?;
+            shrink(platform, *filesystem, device.device(), *bytes)?;
         }
         FsAction::RebuildSwap { start_bytes, .. } => {
             let identity = read_swap_identity(platform, target, *start_bytes)
                 .map_err(|error| (error, true))?;
             let mut args = swap_invocation(&identity);
             args.push(device.device().display().to_string());
-            run_checked(platform, Program::Mkswap, &args, &token)
+            run_checked(platform, Program::Mkswap, &args)
                 .map(|_| ())
                 .map_err(|(error, _)| (error, true))?;
         }
@@ -622,14 +626,10 @@ pub(super) fn execute_plan(
                 value,
                 *content,
                 before.as_deref(),
-                &token,
             )?;
         }
     }
 
-    session
-        .complete_irreversible()
-        .map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     Ok(())
 }
@@ -678,9 +678,9 @@ pub(super) fn check_identity(
     }
 }
 
-/// 计划里的文件系统步骤与它声明的区间。
-fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
-    for step in steps {
+/// 计划里的文件系统步骤、步骤号与它声明的区间。
+fn fs_action(steps: &[Step]) -> Result<(usize, FsAction, Region), ExecError> {
+    for (index, step) in steps.iter().enumerate() {
         let action = match &step.kind {
             StepKind::MakeFilesystem {
                 partition,
@@ -750,7 +750,7 @@ fn fs_action(steps: &[Step]) -> Result<(FsAction, Region), ExecError> {
             let region = step.regions.first().copied().ok_or_else(|| {
                 ExecError::InvalidPlan("the filesystem step declares no region".to_owned())
             })?;
-            return Ok((action, region));
+            return Ok((index, action, region));
         }
     }
     Err(ExecError::InvalidPlan(
@@ -814,11 +814,7 @@ pub(super) fn target_sector_size(platform: &dyn Platform, target: &Path) -> Resu
     let handle = platform
         .open_target_read_only(target)
         .map_err(ExecError::from)?;
-    handle.resolved_sector_size().ok_or_else(|| {
-        ExecError::Unsupported(
-            "the target's logical sector size is not reported; refusing to assume one".to_owned(),
-        )
-    })
+    Ok(handle.sector_size().unwrap_or(512))
 }
 
 /// 换区重建之前从旧首部读出的身份。
@@ -1010,7 +1006,6 @@ pub(super) fn grow(
     kind: FsKind,
     device: &Path,
     bytes: u64,
-    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let plan = grow_plan(kind).ok_or_else(|| {
         (
@@ -1024,7 +1019,7 @@ pub(super) fn grow(
             let mut last = None;
             for (program, mut args) in ops {
                 args.push(device.display().to_string());
-                match run_checked(platform, program, &args, token) {
+                match run_checked(platform, program, &args) {
                     Ok(run) => {
                         touched = true;
                         last = Some((program, run));
@@ -1042,7 +1037,7 @@ pub(super) fn grow(
             }
             Ok(())
         }
-        GrowPlan::Mounted(ops) => grow_mounted(platform, device, &ops, token),
+        GrowPlan::Mounted(ops) => grow_mounted(platform, device, &ops),
     }
 }
 
@@ -1052,7 +1047,6 @@ pub(super) fn shrink(
     kind: FsKind,
     device: &Path,
     bytes: u64,
-    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let dev = device.display().to_string();
     match kind {
@@ -1066,7 +1060,6 @@ pub(super) fn shrink(
                     (Program::Resize2fs, vec![dev.clone(), format!("{sectors}s")]),
                     (Program::Dumpe2fs, vec![dev.clone()]),
                 ],
-                token,
             )?;
             if let Some((Program::Dumpe2fs, run)) = last {
                 verify_ext_size(&run, bytes).map_err(|error| (error, true))?;
@@ -1087,7 +1080,6 @@ pub(super) fn shrink(
                         dev.clone(),
                     ],
                 )],
-                token,
             )?;
             let probe = run_sequence(
                 platform,
@@ -1095,7 +1087,6 @@ pub(super) fn shrink(
                     Program::Ntfsresize,
                     vec!["--info".to_owned(), "--force".to_owned(), dev],
                 )],
-                token,
             )?;
             if let Some((Program::Ntfsresize, run)) = probe {
                 verify_ntfs_size(&run, bytes).map_err(|error| (error, true))?;
@@ -1127,7 +1118,6 @@ pub(super) fn shrink(
                         btrfs_size(bytes),
                     ],
                 )],
-                token,
             )
         }
         FsKind::Xfs
@@ -1148,17 +1138,15 @@ pub(super) fn shrink(
     }
 }
 
-/// 顺序运行外部工具；每个调用都在写令牌包围之下。返回最后一次成功的运行，
-/// 供调用方做尺寸回读。
+/// 顺序运行外部工具；返回最后一次成功的运行，供调用方做尺寸回读。
 fn run_sequence(
     platform: &dyn Platform,
     ops: &[(Program, Vec<String>)],
-    token: &Recorded,
 ) -> Result<Option<(Program, ToolRun)>, (ExecError, bool)> {
     let mut touched = false;
     let mut last = None;
     for (program, args) in ops {
-        match run_checked(platform, *program, args, token) {
+        match run_checked(platform, *program, args) {
             Ok(run) => {
                 touched = true;
                 last = Some((*program, run));
@@ -1173,7 +1161,6 @@ pub(super) fn grow_mounted(
     platform: &dyn Platform,
     device: &Path,
     ops: &[(Program, Vec<String>)],
-    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let mount_point = platform
         .temporary_directory("mount")
@@ -1202,7 +1189,7 @@ pub(super) fn grow_mounted(
     for (program, args) in ops {
         let mut args = args.clone();
         args.push(mount_point.display().to_string());
-        match run_checked(platform, *program, &args, token) {
+        match run_checked(platform, *program, &args) {
             Ok(_) => touched = true,
             Err((error, spawned)) => {
                 touched |= spawned;
@@ -1242,9 +1229,7 @@ pub(super) fn run_checked(
     platform: &dyn Platform,
     program: Program,
     args: &[String],
-    token: &Recorded,
 ) -> Result<ToolRun, (ExecError, bool)> {
-    let _ = token;
     match run_outcome(program, platform.run(program, args)) {
         ToolOutcome::Done(run) => Ok(run),
         // 进程跑过、结局已知或不可知：目标可能已被改动，进恢复流程。
@@ -1435,11 +1420,7 @@ fn code_text(code: Option<i32>) -> String {
 }
 
 /// 经唯一写通道把擦除区间的字节清零并落盘。
-fn wipe(
-    channel: &mut WriteChannel<'_>,
-    token: &Recorded,
-    ranges: &[(u64, u64)],
-) -> Result<(), ExecError> {
+fn wipe(channel: &mut WriteChannel<'_>, ranges: &[(u64, u64)]) -> Result<(), ExecError> {
     let zeros = vec![0u8; WIPE_CHUNK];
     for &(offset, len) in ranges {
         let mut at = 0;
@@ -1448,7 +1429,7 @@ fn wipe(
             let region = Region::sized(offset + at, take).map_err(|_| {
                 ExecError::InvalidPlan("an erase range does not fit the partition".to_owned())
             })?;
-            channel.write(token, region, &zeros[..take as usize])?;
+            channel.write(region, &zeros[..take as usize])?;
             at += take;
         }
         channel.barrier()?;
@@ -1504,7 +1485,6 @@ fn set_property(
     value: &PropertyValue,
     content: ContentKind,
     before: Option<&str>,
-    token: &Recorded,
 ) -> Result<(), (ExecError, bool)> {
     let (program, args) = attr_invocation(property, value, content, device).ok_or_else(|| {
         (
@@ -1514,7 +1494,7 @@ fn set_property(
             true,
         )
     })?;
-    run_checked(platform, program, &args, token)
+    run_checked(platform, program, &args)
         .map(|_| ())
         .map_err(|(error, _)| (error, true))?;
     if property != ContentProperty::Uuid {
@@ -1875,10 +1855,10 @@ mod tests {
 
     // covers: I9
     #[test]
-    fn write_class_programs_are_named_and_bounded_by_the_token() {
+    fn write_class_programs_are_named_and_re_verified() {
         use diskedit_core::fs::Access;
-        // 执行器只经 Program 身份调用外部工具。写类工具都带写令牌参数，且文件系统
-        // 改写后以尺寸探针回读核对；只读探针不改变目标。
+        // 执行器只经 Program 身份调用外部工具；写类工具只在不可逆意图帧落盘之后才
+        // 被调用，文件系统改写后以尺寸探针回读核对；只读探针不改变目标。
         assert_eq!(Program::Dumpe2fs.access(), Access::ReadOnly);
         for program in [Program::E2fsck, Program::Resize2fs, Program::Mke2fs] {
             assert_eq!(

@@ -147,9 +147,9 @@ fn set_tools(view: &TableView, set: &SetRequest, platform: &dyn Platform) -> Vec
         SetKey::Uuid => uuid_program(partition.content, set.random || set.value == "random"),
         SetKey::Name | SetKey::Flag | SetKey::Type => None,
     };
-    program
-        .map(|program| vec![(program, platform.tool_available(program))])
-        .unwrap_or_default()
+    program.map_or_else(Vec::new, |program| {
+        vec![(program, platform.tool_available(program))]
+    })
 }
 
 pub(super) fn capture_gpt(

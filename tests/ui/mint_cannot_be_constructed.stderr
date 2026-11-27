@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/mint_cannot_be_constructed.rs:5:23
+  |
+5 |     let _mint = Mint::new();
+  |                       ^^^ private associated function
+  |
+ ::: src/app/execute/transaction.rs
+  |
+  |     const fn new() -> Self {
+  |     ---------------------- private associated function defined here

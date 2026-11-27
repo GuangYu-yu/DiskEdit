@@ -3,11 +3,11 @@
 //! 记录的字节格式由纯核解释；本模块只负责按目标身份定位目录、读字节，并把
 //! "读不到"与"没有记录"分开。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use diskedit_core::fingerprint::Fingerprint;
 
-use crate::platform::{Platform, PlatformResult, RecordEntry};
+use crate::platform::{Platform, PlatformError, PlatformResult, RecordEntry};
 
 /// 记录目录的文件名。
 pub const RECORD_FILE: &str = "record";
@@ -25,6 +25,13 @@ pub struct RecordState {
     pub bytes: Option<Vec<u8>>,
     /// 无法定位或读取的原因。
     pub unavailable: Option<String>,
+}
+
+impl RecordState {
+    /// 没有记录或无法定位记录。
+    pub fn absent(&self) -> bool {
+        self.bytes.is_none()
+    }
 }
 
 /// 按目标身份定位记录目录。
@@ -53,26 +60,52 @@ pub fn locate(
     let directory = root.join("images").join(hex16(fingerprint));
     let directory_exists = platform.is_directory(&directory);
     let file = directory.join(RECORD_FILE);
-    let state = |bytes: Option<Vec<u8>>, unavailable: Option<String>| RecordState {
-        directory: Some(directory.clone()),
-        directory_exists,
-        file: Some(file.clone()),
-        bytes,
-        unavailable,
-    };
     match platform.read_record(&file) {
-        Ok(RecordEntry::Contents(bytes)) => Ok(state(Some(bytes), None)),
-        Ok(RecordEntry::Absent) => Ok(state(None, None)),
-        // 位置上有东西但不是普通文件：这是"有东西、但不是我们的记录"，
-        // 不能被当成"没有记录"，也不能被当成可读的记录。
-        Ok(RecordEntry::NotARecoveryFile) => Ok(state(
-            None,
-            Some(format!("{} is not a recovery file", file.display())),
-        )),
-        Err(error) => Ok(state(
-            None,
-            Some(format!("cannot read {}: {error}", file.display())),
-        )),
+        Ok(RecordEntry::Contents(bytes)) => Ok(RecordState {
+            directory: Some(directory),
+            directory_exists,
+            file: Some(file),
+            bytes: Some(bytes),
+            unavailable: None,
+        }),
+        Ok(RecordEntry::Absent) => Ok(RecordState {
+            directory: Some(directory),
+            directory_exists,
+            file: Some(file),
+            bytes: None,
+            unavailable: None,
+        }),
+        Ok(RecordEntry::NotARecoveryFile) => Ok(RecordState {
+            directory: Some(directory),
+            directory_exists,
+            file: Some(file.clone()),
+            bytes: None,
+            unavailable: Some(format!("{} is not a regular file", file.display())),
+        }),
+        Err(error) => {
+            let message = format!("cannot read {}: {error}", file.display());
+            Ok(RecordState {
+                directory: Some(directory),
+                directory_exists,
+                file: Some(file),
+                bytes: None,
+                unavailable: Some(message),
+            })
+        }
+    }
+}
+
+/// 读记录字节：不存在为 `None`，不是普通文件为错误。
+///
+/// 执行器只经这里读记录；判断"没有记录"与"位置被动过"的差异不能靠调用方各自拼。
+pub fn read_bytes(platform: &dyn Platform, path: &Path) -> PlatformResult<Option<Vec<u8>>> {
+    match platform.read_record(path)? {
+        RecordEntry::Absent => Ok(None),
+        RecordEntry::Contents(bytes) => Ok(Some(bytes)),
+        RecordEntry::NotARecoveryFile => Err(PlatformError::parse(format!(
+            "{} is not a regular file",
+            path.display()
+        ))),
     }
 }
 
