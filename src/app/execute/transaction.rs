@@ -231,24 +231,49 @@ impl<'a> RecordSession<'a> {
         self.mint.session()
     }
 
-    /// 追加提交帧、落盘并删除记录。
+    /// 写入终态帧、落盘并删除记录。
+    ///
+    /// 终态必须整条重写：只追加一帧而不更新头部时，恢复器按头声明长度截取载荷，
+    /// 看不到这条终态，会把已提交的写入当成待回滚。重写后即使删除记录前崩溃，
+    /// 盘上也已是完整的已提交记录。
     pub fn commit(&mut self) -> Result<(), ExecError> {
         if !self.registered {
             return Err(ExecError::Record("no preimage was registered".to_owned()));
         }
-        let mut encoded = Vec::new();
-        Frame {
-            seq: self.sequence,
+        let existing = match self
+            .platform
+            .read_record(&self.file)
+            .map_err(ExecError::from)?
+        {
+            RecordEntry::Contents(bytes) if !bytes.is_empty() => bytes,
+            RecordEntry::Contents(_) | RecordEntry::Absent => {
+                return Err(ExecError::Record(
+                    "the record vanished before commit".to_owned(),
+                ));
+            }
+            RecordEntry::NotARecoveryFile => {
+                return Err(ExecError::Record(format!(
+                    "{} is not a recovery file",
+                    self.file.display()
+                )));
+            }
+        };
+        let mut decoded =
+            record::decode(&existing).map_err(|error| ExecError::Record(error.to_string()))?;
+        let seq = u32::try_from(decoded.frames.len())
+            .map_err(|_| ExecError::Record("record has too many frames".to_owned()))?;
+        decoded.frames.push(Frame {
+            seq,
             kind: FrameKind::Committed,
             completed: true,
             irreversible: false,
             intent: Vec::new(),
             regions: Vec::new(),
-        }
-        .encode_into(&mut encoded)
-        .map_err(|error| ExecError::Record(error.to_string()))?;
+        });
+        let encoded = record::encode(&decoded.body, &decoded.frames)
+            .map_err(|error| ExecError::Record(error.to_string()))?;
         self.platform
-            .append_state_file(&self.file, &encoded)
+            .write_state_file(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.platform
             .remove_state_file(&self.file)

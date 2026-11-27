@@ -20,7 +20,8 @@ use diskedit::app::observe::{
 use diskedit::app::report::exit;
 use diskedit::platform::{
     Carrier, LoopBinding, MountFacts, Occupancy, OnlineReport, OnlineRequest, PartitionMount,
-    Platform, PlatformError, PlatformResult, StateLock, TargetHandle, TargetKind, ToolRun,
+    Platform, PlatformError, PlatformResult, RecordEntry, StateLock, TargetHandle, TargetKind,
+    ToolRun,
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
@@ -895,6 +896,12 @@ impl Platform for LivePlatform {
             .unwrap()
             .insert(path.to_path_buf(), bytes.to_vec());
         Ok(())
+    }
+    fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+        Ok(match self.files.lock().unwrap().get(path).cloned() {
+            Some(bytes) => RecordEntry::Contents(bytes),
+            None => RecordEntry::Absent,
+        })
     }
     fn append_state_file(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
         self.files

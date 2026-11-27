@@ -24,7 +24,7 @@ use diskedit::platform::{
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{FrameKind, decode};
+use diskedit_core::record::{FrameKind, RecoveryPlan, decode, recover};
 use diskedit_core::region::Region;
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
@@ -40,6 +40,7 @@ struct Faults {
     corrupt_write: Option<usize>,
     fail_barrier: Option<usize>,
     fail_state_write: Option<usize>,
+    fail_state_remove: Option<usize>,
 }
 
 #[derive(Default)]
@@ -48,6 +49,7 @@ struct Counts {
     writes: AtomicUsize,
     barriers: AtomicUsize,
     state_writes: AtomicUsize,
+    state_removes: AtomicUsize,
 }
 
 struct Lock;
@@ -300,6 +302,10 @@ impl Platform for Memory {
         Ok(())
     }
     fn remove_state_file(&self, path: &Path) -> PlatformResult<()> {
+        let call = self.counts.state_removes.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.faults.fail_state_remove == Some(call) {
+            return Err(PlatformError::parse("injected record removal failure"));
+        }
         self.files.lock().unwrap().remove(path);
         Ok(())
     }
@@ -735,6 +741,39 @@ fn a_plan_without_a_table_write_step_never_touches_the_target() {
         memory.target.lock().unwrap().as_slice(),
         initial_bytes().as_slice(),
         "计划不含表写时不得改动目标"
+    );
+}
+
+// covers: F1
+#[test]
+fn a_commit_that_cannot_clear_its_record_leaves_a_terminal_record() {
+    // 提交先写终态帧、再删除记录。若在两者之间崩溃，盘上的记录必须自证"已提交"，
+    // 恢复器才会只清理记录；否则最后一条完整帧仍是原像帧，恢复会把已提交的写入回滚。
+    let bytes = initial_bytes();
+    let plan = table_only_plan(&bytes);
+    let memory = Memory::new(
+        bytes,
+        Faults {
+            fail_state_remove: Some(1),
+            ..Faults::default()
+        },
+    );
+    let _ = table::run(&memory, Path::new("memory"), &plan);
+    let path = PathBuf::from("/state")
+        .join("images")
+        .join(hex16(IDENTITY))
+        .join(RECORD_FILE);
+    let record = memory
+        .files
+        .lock()
+        .unwrap()
+        .get(&path)
+        .cloned()
+        .expect("清理失败后记录应留在原处");
+    assert_eq!(
+        recover(&record, IDENTITY),
+        RecoveryPlan::Committed,
+        "删除记录前盘上必须已经是完整的已提交记录"
     );
 }
 
