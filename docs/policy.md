@@ -2,6 +2,8 @@
 
 A fallback is not a way to make a command succeed. It is a decision about whether to continue when a fact is missing. This tool is responsible for the records it creates, the changes it starts, and the recovery of its own interrupted work. It is not responsible for repairing disks, reconstructing foreign metadata, or rescuing data. When the facts are not available, the safe default is to refuse.
 
+Recovery in this document means only resuming or rolling back an operation this tool started. It does not mean handling arbitrary disk, filesystem, platform, or third-party failures. An external tool invoked by this tool is part of the operation it started, not a failure outside that boundary. Everything outside the boundary is refused.
+
 ## Scope
 
 This document answers one narrow question: when a fact is missing or an observation failed, does the tool continue, refuse, or recover? It does not define the product's command set. A capability counts as promised when it appears in the current command surface, in the README, in the generated reference or capability matrix, or in the observable behaviour of the previous release. This policy cannot be used on its own to remove a promised capability. Removing one is a separate scope decision with its own review, tests, and recorded rationale.
@@ -35,6 +37,8 @@ Read-only inspection is allowed. Reading a foreign record, an unknown table, or 
 Documented compatibility is allowed. Old record formats, CLI aliases, and behaviours that appear in the README, reference, capability matrix, or previous release are product promises. They may be kept, but each needs tests and an owner. This policy does not authorize dropping them.
 
 Documented features that touch these areas remain product scope. Online resize, LVM handling, the VM carrier, and image formats are features when they appear in the command surface or capability matrix. They are not fallbacks, and this policy is not a reason to remove them.
+
+These exclusions do not remove documented commands. `layout` and `records` are read-only. `check` reports filesystem state and does not repair it. `mkfs`, `resize`, label, and UUID steps run the official tools; a failure there is a failure of the operation this tool started, not a foreign failure. Writing a protective MBR or relocating a backup header is part of writing a table this tool owns, not repairing someone else's table. Online resize, LVM, the VM carrier, and image interop remain product features.
 
 A partial failure of our own operation may be finished, rolled back, or cleaned up. Only artifacts created by this tool are touched; foreign artifacts are preserved.
 
