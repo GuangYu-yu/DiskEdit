@@ -539,7 +539,7 @@ fn weak_block_bytes() -> Vec<u8> {
     bytes
 }
 
-// covers: I2, I5
+// covers: I2, I5, D25
 #[test]
 fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed() {
     // 块设备没有 WWN/EUI/可重复序列号时，`--alias NAME` 就是它的身份。确认阶段

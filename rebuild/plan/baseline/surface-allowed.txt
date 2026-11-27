@@ -1,3 +1,30 @@
 # 命令面允许差异清单：每行一条，格式与 census.py surface 打印的差集行完全一致，行尾注明对应的 D 编号
 # 例：surface|common-options|info|['--identity']|[]  D9
 # 没有登记的差异写在这里无效：先在 divergences.md 登记，再把差集行抄到这里
+# 换版批次 D20–D26：用法面刻意重造，下列差异逐条对应差异表。
+surface|command-missing|info	D20
+surface|command-extra|layout	D20
+surface|command-missing|inspect	D21
+surface|command-extra|records show	D21
+surface|command-missing|recover	D22
+surface|command-extra|undo	D22
+surface|command-extra|replay	D22
+surface|command-extra|release	D22
+surface|command-missing|resizefs	D23
+surface|variant-extra|resize|<TARGET>:N --fs-only --yes	D23
+surface|variant-extra|resize|<MOUNTPOINT> [BYTES] --fs-only --yes	D23
+surface|command-missing|records scan	D24
+surface|variant-missing|records list|[TARGET]	D24
+surface|variant-extra|records list|[TARGET] [--root ROOT]	D24
+surface|common-options|add|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|copy|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|delete|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|mkfs|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|move|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|new|['--identity', '--sector-size', '--yes']|['--alias', '--sector-size', '--yes']	D25
+surface|common-options|records list|['--identity']|['--alias']	D25
+surface|common-options|records verify|['--identity']|['--alias']	D25
+surface|common-options|resize|['--identity', '--no-fs', '--sector-size', '--yes']|['--alias', '--no-fs', '--sector-size', '--yes']	D25
+surface|common-options|set|['--identity', '--random', '--sector-size', '--yes']|['--alias', '--random', '--sector-size', '--yes']	D25
+surface|variant-missing|add|<TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] --yes	D26
+surface|variant-extra|add|<TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] [--dry-run] --yes	D26

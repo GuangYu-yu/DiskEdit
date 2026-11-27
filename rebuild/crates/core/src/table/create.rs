@@ -583,7 +583,7 @@ mod tests {
         assert_eq!(header.entry_array_crc32, backup_header.entry_array_crc32);
     }
 
-    // covers: B25
+    // covers: B25, D13
     #[test]
     fn protective_mbr_is_rewritten_only_when_non_canonical() {
         let canonical = protective_mbr_image(&[0u8; 512], 2048);

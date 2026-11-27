@@ -495,7 +495,12 @@ def covers(plan: Path, src: Path, tests: Path) -> int:
     want = plan_ids(plan)
     found: dict[str, set[str]] = {k: set() for k in want}
     scanned = 0
-    for root in (src, tests):
+    roots = [src, tests]
+    # 工作区 crate 的单元测试同样可以钉住某条差异；只扫 src/tests 会漏掉它们。
+    crates = src.parent / "crates"
+    if crates.is_dir() and crates not in roots:
+        roots.append(crates)
+    for root in roots:
         if not root.exists():
             continue
         for f in root.rglob("*.rs"):

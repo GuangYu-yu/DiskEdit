@@ -119,6 +119,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
     }
 
+    // covers: D17
     #[test]
     fn rejects_a_mid_chain_sector_without_the_boot_signature() {
         // 首 EBR 正常，链接指向的下一级 EBR 丢了 0x55AA：整条链按签名缺失拒绝。

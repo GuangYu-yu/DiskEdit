@@ -654,7 +654,7 @@ fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
     assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
 }
 
-// covers: B15, R0064, R0094
+// covers: B15, D23, R0064, R0094
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {
     fixtures::prepare();
@@ -728,6 +728,7 @@ fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
 
 // covers: R0302
 // covers: R0851, R0853, R0855, R0857, R0859
+// covers: D22
 #[test]
 fn undo_refuses_a_target_without_a_record() {
     fixtures::prepare();
@@ -893,6 +894,7 @@ fn record_body(
 
 // covers: R0149, R0150, R0151, R0152, R0153, R0154
 #[cfg(target_os = "linux")]
+// covers: D21
 #[test]
 fn records_show_refuses_a_damaged_or_foreign_record() {
     fixtures::prepare();

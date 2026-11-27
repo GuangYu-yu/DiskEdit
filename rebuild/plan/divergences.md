@@ -35,7 +35,7 @@
 | D23 | `resizefs` 并入 `resize`（`--fs-only`，挂载点在线形式同批并入；与 `--no-fs` 互斥） | resize/resizefs 互为前缀是近义词病（命名法②），fs 轴用旗标表达 | 首个外部用户出现即锁定本面 | `tests/case_runner.rs` resize --fs-only 组 + `check-naming` 前缀闸 |
 | D24 | `records scan` 并入 `records list [--root ROOT]` | 与 list 语义重叠，扫描起点是参数不是命令 | 首个外部用户出现即锁定本面 | `tests/contract_surface.rs` 面枚举 |
 | D25 | `--identity` → `--alias` | 名字说用户决策（为无法自证身份的目标声明稳定句柄），identity 是域概念词保留内部 | 首个外部用户出现即锁定本面 | `tests/fault_injection.rs`（--alias）+ residue 禁词 |
-| D26 | `info --grow` 落位预览退役，职责由 `add --dry-run` 承接（add 落位判定现成，只补输出通道） | 预览住在动词里（命名法②）：想做的事是"新增分区"，动词是 add；info 是读几何不该夹预览 | 首个外部用户出现即锁定本面 | `tests/cases/mod.rs` add --dry-run 两条 case |
+| D26 | `info --grow` 落位预览退役，职责由 `add --dry-run` 承接（add 落位判定现成，只补输出通道） | 预览住在动词里（命名法②）：想做的事是"新增分区"，动词是 add；info 是读几何不该夹预览 | 首个外部用户出现即锁定本面 | `tests/cases/mod.rs` add --dry-run 两条 case；`add --dry-run` 无旧等价物，不进 G7 对照（`tests/equivalence.rs::legacy` 返回 `None`） |
 
 ## 登记资格
 

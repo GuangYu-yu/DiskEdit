@@ -362,6 +362,157 @@ const SCENARIOS: &[Scenario] = &[
     },
 ];
 
+/// 把本实现的命令行翻译成旧基线的等价命令行。
+///
+/// 旧二进制只作行为 oracle：新命令面是刻意重造的（`divergences.md` D20–D26），
+/// 因此对照前必须经这一层适配，而不是把新 argv 原样喂给旧基线。翻译只覆盖
+/// 一一对应的改名与形态合并；`None` 表示新面没有旧等价物，该条不参与对照。
+fn legacy(argv: &[String]) -> Option<Vec<String>> {
+    // 全局旗标改名：--alias → --identity（D25）。
+    let mut tokens: Vec<String> = argv
+        .iter()
+        .map(|token| {
+            if token == "--alias" {
+                "--identity".to_owned()
+            } else {
+                token.clone()
+            }
+        })
+        .collect();
+    let command = tokens.first().map(String::as_str).unwrap_or_default();
+    match command {
+        // layout（--json 承载结构化明细）↔ info（旧版恒为 JSON，且不认识 --json）。
+        "layout" => {
+            tokens.remove(0);
+            tokens.retain(|token| token != "--json");
+            tokens.insert(0, "info".to_owned());
+            Some(tokens)
+        }
+        // records show ↔ inspect（D21）。
+        "records" if tokens.get(1).map(String::as_str) == Some("show") => {
+            tokens.remove(0);
+            tokens[0] = "inspect".to_owned();
+            Some(tokens)
+        }
+        // records list --root ROOT ↔ records scan ROOT（D24）。
+        "records"
+            if tokens.get(1).map(String::as_str) == Some("list")
+                && tokens.iter().any(|t| t == "--root") =>
+        {
+            let root = tokens
+                .iter()
+                .position(|token| token == "--root")
+                .and_then(|at| tokens.get(at + 1).cloned());
+            let mut reference = vec!["records".to_owned(), "scan".to_owned()];
+            if let Some(root) = root {
+                reference.push(root);
+            }
+            Some(reference)
+        }
+        // undo 是旧 recover 的默认回放；replay 对应 --replay-table-only；release 对应 --release（D22）。
+        "undo" => {
+            tokens[0] = "recover".to_owned();
+            Some(tokens)
+        }
+        "replay" => {
+            tokens[0] = "recover".to_owned();
+            Some(reinsert_flag(tokens, "--replay-table-only", 1))
+        }
+        "release" => {
+            tokens[0] = "recover".to_owned();
+            Some(reinsert_flag(tokens, "--release", 1))
+        }
+        // resize --fs-only ↔ resizefs（D23）。
+        "resize" if tokens.iter().any(|token| token == "--fs-only") => {
+            tokens.remove(0);
+            tokens.retain(|token| token != "--fs-only");
+            tokens.insert(0, "resizefs".to_owned());
+            Some(tokens)
+        }
+        // 旧 new 要求目标紧跟命令；本实现接受选项在目标前。对照时规范化为旧顺序。
+        "new" if tokens.len() > 1 && !tokens.last().unwrap().starts_with("--") => {
+            let target = tokens.pop().unwrap();
+            tokens.insert(1, target);
+            Some(tokens)
+        }
+        // add --dry-run 是旧版没有的预览通道（D26），无旧等价物。
+        "add" if tokens.iter().any(|token| token == "--dry-run") => None,
+        // --help 后带命令：旧版 --help 不接主题，等价于顶层帮助。
+        "--help" if tokens.len() > 1 => Some(vec!["--help".to_owned()]),
+        // help <topic>：主题按改名映射。
+        "help" if tokens.get(1).map(String::as_str) == Some("layout") => {
+            tokens[1] = "info".to_owned();
+            Some(tokens)
+        }
+        _ => Some(tokens),
+    }
+}
+
+/// 把 `flag` 插到位置 `after` 之后（旧 recover 的形态旗标紧跟目标）。
+fn reinsert_flag(mut tokens: Vec<String>, flag: &str, after: usize) -> Vec<String> {
+    let at = (after + 1).min(tokens.len());
+    tokens.insert(at, flag.to_owned());
+    tokens
+}
+
+/// 适配层自身的行为：改名、形态合并、无等价物必须逐条钉住，
+/// 否则新旧对照会因为翻译错误而假绿。
+#[test]
+fn legacy_adapter_maps_the_renamed_surface() {
+    let map = |argv: &[&str]| legacy(&owned(argv));
+    assert_eq!(
+        map(&["layout", "img", "--json"]),
+        Some(owned(&["info", "img"]))
+    );
+    assert_eq!(
+        map(&["records", "show", "img"]),
+        Some(owned(&["inspect", "img"]))
+    );
+    assert_eq!(
+        map(&["records", "list", "--root", "dir"]),
+        Some(owned(&["records", "scan", "dir"]))
+    );
+    assert_eq!(
+        map(&["records", "list", "--alias", "n", "img"]),
+        Some(owned(&["records", "list", "--identity", "n", "img"]))
+    );
+    assert_eq!(
+        map(&["undo", "img", "--yes"]),
+        Some(owned(&["recover", "img", "--yes"]))
+    );
+    assert_eq!(
+        map(&["replay", "img", "--yes"]),
+        Some(owned(&["recover", "img", "--replay-table-only", "--yes"]))
+    );
+    assert_eq!(
+        map(&["release", "img", "--discard-replay", "--yes"]),
+        Some(owned(&[
+            "recover",
+            "img",
+            "--release",
+            "--discard-replay",
+            "--yes"
+        ]))
+    );
+    assert_eq!(
+        map(&["resize", "img:1", "--fs-only", "--yes"]),
+        Some(owned(&["resizefs", "img:1", "--yes"]))
+    );
+    assert_eq!(
+        map(&["new", "--table", "mbr", "--yes", "img"]),
+        Some(owned(&["new", "img", "--table", "mbr", "--yes"]))
+    );
+    assert_eq!(map(&["help", "layout"]), Some(owned(&["help", "info"])));
+    assert_eq!(map(&["--help", "layout"]), Some(owned(&["--help"])));
+    // 旧版没有预览通道：不伪造对照。
+    assert_eq!(map(&["add", "img", "1M", "--dry-run"]), None);
+    // 未改名、未变更形态的命令原样透传。
+    assert_eq!(
+        map(&["add", "img", "1M", "--yes"]),
+        Some(owned(&["add", "img", "1M", "--yes"]))
+    );
+}
+
 fn code(program: &std::path::Path, argv: &[&str]) -> i32 {
     Command::new(program)
         .env("XDG_STATE_HOME", fixtures::STATE_HOME)
@@ -408,8 +559,20 @@ fn capture(program: &std::path::Path, argv: &[&str]) -> std::process::Output {
         .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
 }
 
-// covers: D9
-// 注：对照的基线二进制仍是旧命令面；改名后该对照只对未改名的条目有意义。
+fn capture_owned(program: &std::path::Path, argv: &[String]) -> std::process::Output {
+    Command::new(program)
+        .env("XDG_STATE_HOME", fixtures::STATE_HOME)
+        .args(argv)
+        .output()
+        .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", program.display()))
+}
+
+fn owned(argv: &[&str]) -> Vec<String> {
+    argv.iter().map(|token| (*token).to_owned()).collect()
+}
+
+// covers: D9, D16, D18, D20
+// 旧基线仍是旧命令面：对照前先经 `legacy` 适配（改名/形态合并），无等价物的条目跳过。
 #[test]
 fn both_binaries_agree_on_layout_json_fields() {
     let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
@@ -442,7 +605,11 @@ fn both_binaries_agree_on_layout_json_fields() {
         ],
     ];
     for argv in cases {
-        let base = capture(&baseline, argv);
+        // add --dry-run 是旧版没有的预览通道（D26）；没有 oracle 就不假装对照。
+        let Some(reference) = legacy(&owned(argv)) else {
+            continue;
+        };
+        let base = capture_owned(&baseline, &reference);
         let cand = capture(&candidate, argv);
         assert_eq!(
             cand.status.code(),
@@ -502,7 +669,10 @@ fn both_binaries_agree_on_write_scenarios() {
             argv.push(target.to_owned());
             argv
         };
-        let expected = code_owned(&baseline, &argv(&for_baseline));
+        let expected = code_owned(
+            &baseline,
+            &legacy(&argv(&for_baseline)).expect("写场景都有旧等价物"),
+        );
         let actual = code_owned(&candidate, &argv(&for_candidate));
         assert_eq!(actual, expected, "{name} 的退出码不一致");
         let after_base = std::fs::read(&for_baseline).expect("读取基线副本");
@@ -579,7 +749,10 @@ fn both_binaries_agree_on_table_edits() {
                 .map(|part| part.replace("{T}", target))
                 .collect::<Vec<String>>()
         };
-        let expected = code_owned(&baseline, &argv(&for_baseline));
+        let expected = code_owned(
+            &baseline,
+            &legacy(&argv(&for_baseline)).expect("表编辑都有旧等价物"),
+        );
         let actual = code_owned(&candidate, &argv(&for_candidate));
         assert_eq!(actual, expected, "{name} 的退出码不一致");
         let after_base = std::fs::read(&for_baseline).expect("读取基线副本");
@@ -603,7 +776,11 @@ fn both_binaries_agree_on_every_scenario() {
     fixtures::prepare();
 
     for scenario in SCENARIOS {
-        let expected = code(&baseline, scenario.argv);
+        let Some(reference) = legacy(&owned(scenario.argv)) else {
+            // 新面没有旧等价物（如 add --dry-run），由候选侧用例覆盖。
+            continue;
+        };
+        let expected = code_owned(&baseline, &reference);
         let actual = code(&candidate, scenario.argv);
         assert_eq!(
             actual, expected,

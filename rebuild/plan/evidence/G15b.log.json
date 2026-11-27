@@ -1,0 +1,24 @@
+{
+ "gate": "G15b",
+ "kind": "test",
+ "command": [
+  "cargo",
+  "test",
+  "--test",
+  "negative_declarations"
+ ],
+ "exit_code": 0,
+ "commit": "b2e147f",
+ "tree": "ad126f4f4bc7a327",
+ "at": "2026-11-27T12:23:00+00:00",
+ "counts": {
+  "result_lines": 1,
+  "passed": 1,
+  "failed": 0,
+  "ignored": 0,
+  "not_applicable": 0
+ },
+ "ok": true,
+ "reasons": [],
+ "log": "plan/evidence/G15b.log"
+}

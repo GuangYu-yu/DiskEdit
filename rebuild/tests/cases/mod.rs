@@ -113,6 +113,7 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "unknown filesystem",
     },
+    // covers: D23
     Case {
         name: "resize --fs-only size only applies to the mountpoint form",
         argv: &[
@@ -210,6 +211,7 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "diskedit",
     },
+    // covers: D26
     Case {
         name: "add --dry-run previews the landing spot",
         argv: &["add", "target/fixtures/s1/gpt.img", "1M", "--dry-run"],
@@ -224,6 +226,7 @@ pub const CASES: &[Case] = &[
         stdout: "(dry run: no bytes were written)",
         stderr: "",
     },
+    // covers: D19
     Case {
         name: "layout rejects a non-power-of-two sector size",
         argv: &[
@@ -276,6 +279,7 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "refused:",
     },
+    // covers: D24
     Case {
         name: "records list --root needs a directory",
         argv: &["records", "list", "--root", "target/fixtures/s1/missing"],
@@ -661,6 +665,7 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "unsupported:",
     },
+    // covers: D15
     Case {
         name: "set label on ext refuses an over-long label",
         argv: &[

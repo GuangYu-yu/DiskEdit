@@ -1,8 +1,19 @@
 name: 全量测试
 
-# 手动触发的全量测试。
+# 手动触发，或由 build.yml 复用同一套。
+# 说明：GitHub 只执行仓库根 `.github/workflows/`，本文件位于 `rebuild/` 下，
+# 是重建工程的全量门禁定义；启用时把本节内容放到根目录同名 workflow 即可。
+#
+# 作业分工：
+#   lint          —— clippy / fmt，告警即失败
+#   cargo-test    —— 非 root 的全部 Rust target
+#   root          —— 以 root 重跑全部 target：loop/mount/文件系统工具类用例
+#                    在 runner 用户下会静默跳过，必须用 euid 0 再跑一遍
+#   equivalence   —— 旧基线二进制对照（G7）：从 main-latest release 取旧版
+#   qemu          —— 真实内核套件：QEMU 来宾里以 root 驱动 loop/挂载/LVM/mkfs
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   lint:
@@ -49,3 +60,92 @@ jobs:
           fetch-depth: 0
       - run: python3 plan/instruments/footprint.py
       - run: python3 plan/instruments/commits.py
+
+  root:
+    # 需要 losetup/mount 建真实文件系统的用例以 euid 0 为前置；runner 用户下
+    # 这些用例会静默跳过而 CI 仍是绿的，这一条以 root 重跑全部 target。
+    name: cargo test（Linux, root 特权用例）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
+      - name: 安装外部工具依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends e2fsprogs
+      - name: 以 root 运行全部 target
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            cargo test --all-targets -- --test-threads=1
+
+  equivalence:
+    # G7：旧基线二进制是行为 oracle。新版取自 main-latest release 资产，
+    # 对照前由 tests/equivalence.rs 的 legacy 适配层做新→旧命令行翻译。
+    # 旧版 add 需要 loop 设备，故以 root 运行。
+    name: 等价对照（旧基线二进制）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
+      - name: 下载旧基线二进制（main-latest）
+        run: |
+          mkdir -p /tmp/baseline
+          url=https://github.com/GuangYu-yu/DiskEdit/releases/download/main-latest/DiskEdit_linux_amd64_GNU.tar.gz
+          curl -fsSL -o /tmp/baseline/base.tgz "$url"
+          tar xzf /tmp/baseline/base.tgz -C /tmp/baseline
+          chmod +x /tmp/baseline/DiskEdit
+          /tmp/baseline/DiskEdit --version
+      - name: 以 root 运行等价对照
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            "DISKEDIT_BASELINE=/tmp/baseline/DiskEdit" \
+            cargo test --test equivalence -- --test-threads=1
+
+  qemu:
+    # 真实内核套件：宿主没有 CAP_SYS_ADMIN，分区扫描/挂载/device-mapper 无法在
+    # 进程内测；把同一份二进制放进 QEMU 来宾，在真内核上验证。
+    # 依赖：qemu-system-x86、debootstrap、e2fsprogs，以及 /boot 中与 /lib/modules
+    # 配对的内核（来宾无 initramfs，内核需内建 virtio 与 ext4，或改用自备内核并
+    # 设 DISKEDIT_QEMU_KERNEL）。
+    name: 真实内核套件（QEMU）
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: rebuild
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rebuild
+      - name: 安装 QEMU 与来宾构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 debootstrap e2fsprogs
+      - name: 运行真实内核套件
+        run: |
+          export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+          sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
+            "DISKEDIT_QEMU=1" \
+            cargo test --test qemu_suite -- --nocapture --test-threads=1
