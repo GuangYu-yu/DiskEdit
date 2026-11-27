@@ -131,8 +131,10 @@ fn collect_all(dir: &Path, found: &mut Vec<PathBuf>) {
         let entry = entry.expect("目录项可读");
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("target") {
-                continue;
+            // 只查本仓库的编辑残留：构建产物与 git 内部目录不属于本项目的编辑面。
+            match path.file_name().and_then(|name| name.to_str()) {
+                Some("target") | Some(".git") => continue,
+                _ => {}
             }
             collect_all(&path, found);
         } else {
