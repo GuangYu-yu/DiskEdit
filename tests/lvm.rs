@@ -4,6 +4,9 @@
 //! 假装扩了文件系统。夹具在分区 1 起点的扇区 1/2 写入 LVM2 PV 标签，让内容识别
 //! 落到 `lvm2_pv`。
 
+// 整个套件都要求能写目标的宿主：PV 扩缩必然写 PV 元数据与分区表。
+#![cfg(target_os = "linux")]
+
 mod fixtures;
 
 const SECTOR: usize = 512;

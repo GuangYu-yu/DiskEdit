@@ -41,6 +41,7 @@ fn run_argv(argv: &[&str]) -> (i32, String, String) {
 }
 
 /// 把空白或占用镜像复制成一次用例的私有目标。
+#[cfg(target_os = "linux")]
 fn copy_fixture(name: &str, destination: &str) {
     std::fs::copy(
         std::path::Path::new(fixtures::S2_BASE).join(name),
@@ -50,6 +51,7 @@ fn copy_fixture(name: &str, destination: &str) {
 }
 
 // covers: B10, B12
+#[cfg(target_os = "linux")]
 #[test]
 fn new_writes_a_readable_table_and_refuses_to_clobber() {
     fixtures::prepare();
@@ -99,6 +101,7 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
 }
 
 // covers: B11
+#[cfg(target_os = "linux")]
 #[test]
 fn new_refuses_a_target_below_the_gpt_minimum() {
     fixtures::prepare();
@@ -122,6 +125,7 @@ fn new_refuses_a_target_below_the_gpt_minimum() {
 }
 
 // covers: B25
+#[cfg(target_os = "linux")]
 #[test]
 fn new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one() {
     fixtures::prepare();
@@ -156,6 +160,7 @@ fn new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one() {
 
 // covers: B26
 // covers: B12
+#[cfg(target_os = "linux")]
 #[test]
 fn add_delete_and_set_rewrite_both_copies() {
     fixtures::prepare();
@@ -269,6 +274,7 @@ fn add_delete_and_set_rewrite_both_copies() {
 }
 
 /// 在一张镜像的指定绝对扇区写入可辨认的标记字节。
+#[cfg(target_os = "linux")]
 fn stamp_at(image: &str, sector: u64, marker: &[u8]) {
     let mut bytes = std::fs::read(image).expect("读取镜像");
     let offset = sector as usize * 512;
@@ -277,6 +283,7 @@ fn stamp_at(image: &str, sector: u64, marker: &[u8]) {
 }
 
 /// 读回镜像指定绝对扇区的若干字节。
+#[cfg(target_os = "linux")]
 fn read_at(image: &str, sector: u64, len: usize) -> Vec<u8> {
     let bytes = std::fs::read(image).expect("读取镜像");
     let offset = sector as usize * 512;
@@ -284,6 +291,7 @@ fn read_at(image: &str, sector: u64, len: usize) -> Vec<u8> {
 }
 
 // covers: B14, B21, D8, R0033
+#[cfg(target_os = "linux")]
 #[test]
 fn move_and_copy_relocate_data_and_keep_type_guids() {
     fixtures::prepare();
@@ -378,6 +386,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
 
 // covers: B13, B26, R0059, R0203, R0209
 // covers: B13, R0209
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
     fixtures::prepare();
@@ -506,6 +515,7 @@ fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
 }
 
 // covers: R0347, R0365, R0438, R0439, R0440, R0441, R0442, R0443
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
     fixtures::prepare();
@@ -562,6 +572,7 @@ fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
 }
 
 // covers: R0341, R0342, R0348, R0349
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
     fixtures::prepare();
@@ -604,6 +615,7 @@ fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
 }
 
 // covers: R0329, R0372, R0373, R0394, R0395, R0444, R0452
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
     fixtures::prepare();
@@ -655,6 +667,7 @@ fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
 }
 
 // covers: B15, D23, R0064, R0094
+#[cfg(target_os = "linux")]
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {
     fixtures::prepare();
@@ -684,10 +697,38 @@ fn filesystem_commands_refuse_without_touching_the_target() {
     );
 }
 
+/// 用例命令行对应的入口名：`records` 的子命令用空格拼接，其余取第一个词。
+fn entry_name(argv: &[&'static str]) -> &'static str {
+    match argv {
+        ["records", subcommand, ..] => {
+            // `records list` 等入口名在声明表里是两段；这里只借用静态串，不拼接。
+            match *subcommand {
+                "list" => "records list",
+                "verify" => "records verify",
+                "show" => "records show",
+                other => other,
+            }
+        }
+        [first, ..] => first,
+        [] => "",
+    }
+}
+
 #[test]
 fn every_case_matches_its_observable_result() {
     fixtures::prepare();
+    let mut not_executed: Vec<&str> = Vec::new();
+    let mut executed = 0usize;
     for case in CASES {
+        // 写命令需要能写目标的宿主，判断取自命令面声明。被跳过的用例不执行、
+        // 不计通过，并在下面按名字打印。
+        if !diskedit::platform::host_writes()
+            && diskedit::app::cli::declare::is_write_entry(entry_name(case.argv))
+        {
+            not_executed.push(case.name);
+            continue;
+        }
+        executed += 1;
         let (code, stdout, stderr) = run(case);
         assert_eq!(code, i32::from(case.exit), "{} 的退出码不符", case.name);
         if !case.stdout.is_empty() {
@@ -707,9 +748,33 @@ fn every_case_matches_its_observable_result() {
             );
         }
     }
+    assert_eq!(
+        executed + not_executed.len(),
+        CASES.len(),
+        "执行数与跳过数必须覆盖全部用例"
+    );
+    assert!(executed > 0, "至少应有只读用例在本宿主上执行");
+    if diskedit::platform::host_writes() {
+        assert!(
+            not_executed.is_empty(),
+            "可写宿主上不得跳过任何用例：{not_executed:?}"
+        );
+    } else {
+        assert!(
+            !not_executed.is_empty(),
+            "宿主持久化能力声明为不可写，却没有写用例；用例表与能力声明不一致"
+        );
+        eprintln!(
+            "not executed on {}: {} write cases ({})",
+            diskedit::platform::host_display_name(),
+            not_executed.len(),
+            not_executed.join(", ")
+        );
+    }
 }
 
 /// 以指定的环境变量运行二进制；用于把记录根目录隔离到夹具内。
+#[cfg(target_os = "linux")]
 fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_diskedit"));
     command.args(argv);
@@ -729,6 +794,7 @@ fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
 // covers: R0302
 // covers: R0851, R0853, R0855, R0857, R0859
 // covers: D22
+#[cfg(target_os = "linux")]
 #[test]
 fn undo_refuses_a_target_without_a_record() {
     fixtures::prepare();
@@ -793,11 +859,12 @@ fn layout_reports_an_empty_table_without_crashing() {
     assert_eq!(
         std::fs::read(path).expect("读取夹具"),
         before,
-        "info 改动了目标"
+        "layout 改动了目标"
     );
 }
 
 /// 读 GPT 主分区项数组里第 `index` 个条目的 PARTUUID（从 1 计）。
+#[cfg(target_os = "linux")]
 fn entry_partuuid(bytes: &[u8], index: usize) -> [u8; 16] {
     let table =
         u64::from_le_bytes(bytes[512 + 72..512 + 80].try_into().expect("表头完整")) as usize * 512;
@@ -809,6 +876,7 @@ fn entry_partuuid(bytes: &[u8], index: usize) -> [u8; 16] {
 
 // 复制出的分区必须有自己的 PARTUUID（sfdisk 还原式复制会撞 UUID）；同一目标重复复制
 // 到同一槽位必须得到同一个值（派生不含随机源）。
+#[cfg(target_os = "linux")]
 #[test]
 fn a_copied_partition_gets_its_own_deterministic_partuuid() {
     fixtures::prepare();
@@ -832,6 +900,7 @@ fn a_copied_partition_gets_its_own_deterministic_partuuid() {
 }
 
 // covers: R0358, R0359, R0360
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
     let (code, _stdout, stderr) =
@@ -986,6 +1055,7 @@ fn a_write_refuses_when_the_record_cannot_be_decoded() {
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
 // covers: R0674
+#[cfg(target_os = "linux")]
 #[test]
 fn resize_allow_move_relocates_the_blocking_partition() {
     fixtures::prepare();
@@ -1033,6 +1103,7 @@ fn resize_allow_move_relocates_the_blocking_partition() {
     );
 }
 // covers: R0445, R0446, R0447, R0448, R0449, R0450
+#[cfg(target_os = "linux")]
 #[test]
 fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
     // 造一个"文件系统即整盘"的现场需要 mke2fs；没有它的宿主跳过（由发版环境验证）。
@@ -1082,6 +1153,7 @@ fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
 /// entering nested PMBR."，并在 PMBR 写 0x80 + 0x01/0xFF 两条记录）。本实现不采纳这条
 /// 隐式决定：`set flag boot` 落在 GPT 的 ESP 类型 GUID 上，legacy active 与 GPT 旗标
 /// 分开建模，保护 MBR 保持规范形态。处置理由见 incident-classes.tsv SA1-015。
+#[cfg(target_os = "linux")]
 #[test]
 fn a_gpt_boot_flag_becomes_the_esp_type_and_leaves_the_protective_mbr_alone() {
     fixtures::prepare();
@@ -1114,6 +1186,7 @@ fn a_gpt_boot_flag_becomes_the_esp_type_and_leaves_the_protective_mbr_alone() {
 }
 
 /// 一份带两个分区的 GPT，返回镜像路径与已写入的字节。
+#[cfg(target_os = "linux")]
 fn two_partition_gpt(image: &str) {
     std::fs::write(image, vec![0u8; 32 * 1024 * 1024]).expect("镜像可写");
     let (code, _, stderr) = run_argv(&["new", image, "--yes"]);
@@ -1127,6 +1200,7 @@ fn two_partition_gpt(image: &str) {
 /// 混合 MBR（GPT 的 PMBR 里带一条 legacy 条目）在 gdisk 里被识别并保留；本实现只读
 /// 时接受原样，任何表写都把 PMBR 收敛为规范的单一 0xEE 全覆盖记录。处置理由见
 /// incident-classes.tsv SA3-002。
+#[cfg(target_os = "linux")]
 #[test]
 fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
     fixtures::prepare();
@@ -1187,6 +1261,7 @@ fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
 /// 盘上已有的重复 PARTUUID：gdisk 用专家命令 `f` 显式重随机化；本实现读取时保留，
 /// 任何表写只改用户点名的条目，不静默改写身份数据（同 D8 原则）。处置理由见
 /// incident-classes.tsv SA3-001。
+#[cfg(target_os = "linux")]
 #[test]
 fn duplicate_partuuids_are_read_and_preserved_not_rewritten() {
     fixtures::prepare();

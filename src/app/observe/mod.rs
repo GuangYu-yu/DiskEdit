@@ -183,6 +183,58 @@ pub enum Command {
     Add(AddRequest),
 }
 
+impl Command {
+    /// 入口名，与 [`crate::app::cli::declare::COMMANDS`] 的 `name` 逐字一致。
+    ///
+    /// 入口名取自命令面声明，这里只把枚举变体映射到那张表；两个方向覆盖的
+    /// 入口是否一致由 `tests/inventory.rs` 核对。
+    pub fn entry_name(&self) -> &'static str {
+        match self {
+            Self::Layout { .. } => "layout",
+            Self::RecordsList { .. } => "records list",
+            Self::RecordsVerify { .. } => "records verify",
+            Self::RecordsShow => "records show",
+            Self::Resize(_) => "resize",
+            Self::Move(_) => "move",
+            Self::Copy(_) => "copy",
+            Self::Delete { .. } => "delete",
+            Self::Set(_) => "set",
+            Self::Check { .. } => "check",
+            Self::Mkfs { .. } => "mkfs",
+            Self::Undo => "undo",
+            Self::Replay => "replay",
+            Self::Release { .. } => "release",
+            Self::New { .. } => "new",
+            Self::Add(_) => "add",
+        }
+    }
+
+    /// 这一形态是否只预览、不写盘。
+    ///
+    /// 只有显式 `--dry-run` 的形态是预览；其余写命令即便没有 `--yes` 也仍会写，
+    /// 不能因此被当成只读。
+    pub fn is_dry_run(&self) -> bool {
+        match self {
+            Self::Resize(request) => request.dry_run,
+            Self::Add(request) => request.dry_run,
+            Self::Layout { .. }
+            | Self::RecordsList { .. }
+            | Self::RecordsVerify { .. }
+            | Self::RecordsShow
+            | Self::Move(_)
+            | Self::Copy(_)
+            | Self::Delete { .. }
+            | Self::Set(_)
+            | Self::Check { .. }
+            | Self::Mkfs { .. }
+            | Self::Undo
+            | Self::Replay
+            | Self::Release { .. }
+            | Self::New { .. } => false,
+        }
+    }
+}
+
 /// `resize` 的 SIZE 写法。
 ///
 /// 增量与百分比保留原始形态，判定层在锁下用当前分区字节数解析，锁前算出的绝对值

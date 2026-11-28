@@ -12,7 +12,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Requirements
 
-- **Linux.** Writing is supported on Linux only. Elsewhere the dispatch gate refuses any command whose primitives are missing — [docs/en/capability-matrix.md](docs/en/capability-matrix.md) has the per-command answer.
+- **Linux to write.** Writing is supported on Linux only: elsewhere the dispatch gate refuses a write before the target is opened, while read-only entries are admitted and run where the host has a backend for them — [docs/en/capability-matrix.md](docs/en/capability-matrix.md) has the per-command answer.
 - **Rust** with edition 2024 support (1.85 or newer) to build.
 - **root** for filesystem-layer commands: they map the partition through `losetup`. Table writes need root only for block devices, never for image files.
 

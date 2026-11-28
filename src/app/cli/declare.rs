@@ -10,13 +10,35 @@ pub enum Group {
     LowLevel,
 }
 
-/// 确认门：写命令在解析期必须拿到 `--yes`。
+/// 命令对目标的影响：会不会产生持久状态。
+///
+/// 确认、平台能力和生成的命令参考都读同一个字段，不另设"哪些命令会写"的
+/// 清单。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Confirmation {
-    /// 解析期必须有 `--yes`。
-    Required,
-    /// 不接受 `--yes`。
-    None,
+pub enum Effect {
+    /// 不产生持久状态：既不写目标字节，也不建、改、删恢复记录。
+    ReadOnly,
+    /// 会写目标字节或恢复记录；执行前必须由用户确认。
+    Write,
+}
+
+impl Effect {
+    pub fn is_write(self) -> bool {
+        matches!(self, Self::Write)
+    }
+
+    /// 写入前必须拿到 `--yes`；`--dry-run` 形态由解析器按形态放宽。
+    pub fn needs_confirmation(self) -> bool {
+        self.is_write()
+    }
+
+    /// 导出到命令面 JSON 的稳定文本。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Write => "write",
+        }
+    }
 }
 
 /// 一个形态对目标后缀的要求。
@@ -85,7 +107,7 @@ pub struct CommandDef {
     pub summary: &'static str,
     pub variants: &'static [Variant],
     pub common_options: &'static [&'static str],
-    pub confirmation: Confirmation,
+    pub effect: Effect,
 }
 
 impl CommandDef {
@@ -118,7 +140,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--sector-size"],
-        confirmation: Confirmation::None,
+        effect: Effect::ReadOnly,
     },
     CommandDef {
         name: "records list",
@@ -132,7 +154,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias"],
-        confirmation: Confirmation::None,
+        effect: Effect::ReadOnly,
     },
     CommandDef {
         name: "records verify",
@@ -146,7 +168,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias"],
-        confirmation: Confirmation::None,
+        effect: Effect::ReadOnly,
     },
     CommandDef {
         name: "records show",
@@ -154,7 +176,7 @@ pub const COMMANDS: &[CommandDef] = &[
         summary: "show the recovery record site of a target",
         variants: &[variant("<TARGET>", &[], &[], TargetSuffix::Whole, true)],
         common_options: &["--alias"],
-        confirmation: Confirmation::None,
+        effect: Effect::ReadOnly,
     },
     CommandDef {
         name: "undo",
@@ -168,7 +190,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "replay",
@@ -182,7 +204,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "release",
@@ -196,7 +218,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "resize",
@@ -240,7 +262,7 @@ pub const COMMANDS: &[CommandDef] = &[
             ),
         ],
         common_options: &["--no-fs", "--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "move",
@@ -254,7 +276,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "copy",
@@ -268,7 +290,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "delete",
@@ -282,7 +304,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "set",
@@ -341,7 +363,7 @@ pub const COMMANDS: &[CommandDef] = &[
             ),
         ],
         common_options: &["--alias", "--random", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "check",
@@ -355,7 +377,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--sector-size"],
-        confirmation: Confirmation::None,
+        effect: Effect::ReadOnly,
     },
     CommandDef {
         name: "mkfs",
@@ -369,7 +391,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "new",
@@ -383,7 +405,7 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
     CommandDef {
         name: "add",
@@ -404,13 +426,29 @@ pub const COMMANDS: &[CommandDef] = &[
             true,
         )],
         common_options: &["--alias", "--sector-size", "--yes"],
-        confirmation: Confirmation::Required,
+        effect: Effect::Write,
     },
 ];
 
 /// 按名字查声明；`records` 的子命令用空格拼接。
 pub fn find(name: &str) -> Option<&'static CommandDef> {
     COMMANDS.iter().find(|command| command.name == name)
+}
+
+/// 某个入口会不会写；未声明的名字按写处理。
+///
+/// 这是唯一安全的缺省方向：名字对不上时宁可按写处理，让命令要求确认并检查
+/// 宿主能力，也不放行一次来源不明的写入。
+pub fn effect_of(name: &str) -> Effect {
+    find(name).map_or(Effect::Write, |command| command.effect)
+}
+
+/// 某个入口是否已声明为写命令；未声明的名字返回假。
+///
+/// 与 [`effect_of`] 的方向相反，用于判断某个入口是否需要能写目标的宿主；
+/// 未声明的名字（帮助、未知子命令）不算写命令。
+pub fn is_write_entry(name: &str) -> bool {
+    find(name).is_some_and(|command| command.effect.is_write())
 }
 
 /// 全部入口名，按声明顺序。
@@ -420,7 +458,7 @@ pub fn declared_entries() -> impl Iterator<Item = &'static str> {
 
 /// 命令面 JSON：供门禁与旧版逐项对照。
 ///
-/// 结构固定为 `{"commands":[{"name","confirmation","common_options","variants":[...]}]}`；
+/// 结构固定为 `{"commands":[{"name","effect","common_options","variants":[...]}]}`；
 /// 每个形态带 `syntax`、`options`、`selectors`、`target`、`default` 与
 /// `syntax_only_options`。
 pub fn surface_json() -> String {
@@ -466,7 +504,7 @@ pub fn surface_json() -> String {
 
             serde_json::json!({
                 "name": command.name,
-                "confirmation": confirmation_name(command.confirmation),
+                "effect": command.effect.as_str(),
                 "common_options": common,
                 "variants": variants,
             })
@@ -482,13 +520,6 @@ fn target_name(target: TargetSuffix) -> &'static str {
         TargetSuffix::Any => "Any",
         TargetSuffix::Whole => "Whole",
         TargetSuffix::Partition => "Partition",
-    }
-}
-
-fn confirmation_name(confirmation: Confirmation) -> &'static str {
-    match confirmation {
-        Confirmation::Required => "Required",
-        Confirmation::None => "None",
     }
 }
 

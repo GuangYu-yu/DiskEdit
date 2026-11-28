@@ -4,7 +4,7 @@ README 只保留"它是什么、怎么用"。本文件记录行为约束：能�
 
 ## 平台能力闸门
 
-每条命令的结果、闸门评估的目标形态以及进程级退出时打印的文本都由[能力矩阵](capability-matrix.md#runtime-gate)生成；本节只说明检查的顺序。闸门在几何计算、锁获取与任何伴生文件创建之前运行，也在影响确认闸门之前运行。缺 `--yes` 的用法检查更早：它在参数解析内、分派之前运行，并以用法错误退出。闸门只遍历平台报告为可打开的目标形态；不在该集合中的目标形态不由这个闸门评估。
+每条命令的结果、闸门评估的目标形态以及进程级退出时打印的文本都由[能力矩阵](capability-matrix.md#runtime-gate)生成；本节只说明检查的顺序。闸门在几何计算、锁获取与任何伴生文件创建之前运行，也在影响确认闸门之前运行。缺 `--yes` 的用法检查更早：它在参数解析内、分派之前运行，并以用法错误退出。闸门对每条命令只回答一个问题：命令声明的效果是否为 `write`，以及本宿主是否被列在可写宿主中。写命令在打开目标之前、锁文件存在之前、任何记录目录建立之前就以不支持状态拒绝，拒绝文案点名能写的宿主。`--dry-run` 形态保留声明的效果但不写盘，因此闸门放行，预览仍照常检查。
 
 ## 执行放置
 
@@ -40,7 +40,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 设备身份边界
 
-块设备的恢复记录位于 `<state_root>/recovery/<identity-hash>/record.bin`——目录名是按顺序拼接身份字段（设备类别、稳定身份字符串、载体 `file_id`）后取 sha256 的前 16 字节，小写十六进制；分区目标的稳定身份字符串是载体的稳定字符串加上分区号，因此分区节点与整盘节点各有自己的记录目录。锁不按目标派生：整盘的锁位于 `<state_root>/<disk key>.lock`，两者共用一个锁。状态根默认为 `/var/lib/diskedit`；在 Linux 上，当 euid 不为 0 时忽略 `DISKEDIT_STATE_DIR`；其他平台没有块设备目标，使用镜像侧状态目录。稳定身份取 `wwid` → `device/wwid` → `device/serial` 中第一个非空的原始文本（最后一项仅在两次读取一致时采用）。`dm/uuid` 与 `md/uuid` 不参与记录身份：两者描述的都是用户态创建后才存在的映射或已组装阵列，重启之后、记录正待续跑之时无从重读。dm、md 目标的记录身份因此来自 `--alias NAME`（记录键 `declared:<NAME>`）；只有 major:minor 的目标、不可读的目标、两次读取不一致的目标，以及未给名字的 dm/md 目标为 `Unusable`——没有记录目录，写命令以退出码 6 拒绝。当 sysfs 拓扑（节点、`partition` 属性、父设备）无法读取时，工具同样拒绝，不会退回到由调用方路径构造的 `{devname}-{capacity}`。容量不参与分区身份。镜像身份由路径派生：它标识"该路径"，而不是"该文件"。在 Linux 上，realpath 只合并符号链接与路径写法，**不合并硬链接**：同一 inode 的两个硬链接名派生出两个记录目录（`<image_state_root>/images` 下两个不同的 `<key-hash>` 目录），经名字 A 中断的任务经名字 B 不可见，也无法从 B 续跑或撤销——此类任务必须在同一名字下完成。锁有两层：**锁文件**（块设备：整盘为 `<state_root>/<disk key>.lock`，与其分区共享；镜像：`<image_state_root>/images/<key-hash>/record.lock`，当不存在按用户的状态根时为 `<image>.diskedit/record.lock`；loop：backing 文件旁的兄弟锁文件；disk key 在存在 device-id 时为该值，否则为 sysfs 父节点名加上以扇区计的容量）与 **inode 级第二凭据**（仅 Unix：对 `data_path` 新打开的句柄加锁——镜像为数据文件，块设备为设备节点）。后者把同一 inode 的别名路径收敛到一把锁；整盘与其分区由共享的锁文件收敛。非 Unix 平台只承诺锁文件；硬链接、符号链接与 junction 别名各自获取自己的锁、各有各的场景，经别名并发使用不在支持边界内（`std::fs::File::try_lock` 在 Windows 上是强制性的整文件锁，不能代替）。
+块设备的恢复记录位于 `<state_root>/recovery/<identity-hash>/record.bin`——目录名是按顺序拼接身份字段（设备类别、稳定身份字符串、载体 `file_id`）后取 sha256 的前 16 字节，小写十六进制；分区目标的稳定身份字符串是载体的稳定字符串加上分区号，因此分区节点与整盘节点各有自己的记录目录。锁不按目标派生：整盘的锁位于 `<state_root>/<disk key>.lock`，两者共用一个锁。状态根在设置了 `$XDG_STATE_HOME` 时为 `$XDG_STATE_HOME/diskedit`，否则 Unix 为 `~/.local/state/diskedit`、Windows 为 `%LOCALAPPDATA%\diskedit`；没有块设备目标的宿主同样使用镜像侧状态目录。稳定身份取 `wwid` → `device/wwid` → `device/serial` 中第一个非空的原始文本（最后一项仅在两次读取一致时采用）。`dm/uuid` 与 `md/uuid` 不参与记录身份：两者描述的都是用户态创建后才存在的映射或已组装阵列，重启之后、记录正待续跑之时无从重读。dm、md 目标的记录身份因此来自 `--alias NAME`（记录键 `declared:<NAME>`）；只有 major:minor 的目标、不可读的目标、两次读取不一致的目标，以及未给名字的 dm/md 目标为 `Unusable`——没有记录目录，写命令以退出码 6 拒绝。当 sysfs 拓扑（节点、`partition` 属性、父设备）无法读取时，工具同样拒绝，不会退回到由调用方路径构造的 `{devname}-{capacity}`。容量不参与分区身份。镜像身份是文件对象本身，而不是它的名字：Unix 上取 `(st_dev, st_ino, len)` 的 sha256，Windows 上取 `(卷序列号, 文件索引, len)` 的 sha256。同一 inode 的两个名字（硬链接）因此共用一个记录目录；而在同一路径替换或重建文件会得到新的身份。经硬链接的一个名字中断的任务，可经另一个名字续跑。锁有两层：**锁文件**（块设备：整盘为 `<state_root>/<disk key>.lock`，与其分区共享；镜像：`<image_state_root>/images/<key-hash>/record.lock`，当不存在按用户的状态根时为 `<image>.diskedit/record.lock`；loop：backing 文件旁的兄弟锁文件；disk key 在存在 device-id 时为该值，否则为 sysfs 父节点名加上以扇区计的容量）与 **inode 级第二凭据**（仅 Unix：对 `data_path` 新打开的句柄加锁——镜像为数据文件，块设备为设备节点）。后者把同一 inode 的别名路径收敛到一把锁；整盘与其分区由共享的锁文件收敛。非 Unix 平台只承诺锁文件；硬链接、符号链接与 junction 别名各自获取自己的锁、各有各的场景，经别名并发使用不在支持边界内（`std::fs::File::try_lock` 在 Windows 上是强制性的整文件锁，不能代替）。
 
 ## 恢复场景的身份检查
 
@@ -52,7 +52,7 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 
 ## 恢复记录的位置
 
-恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DREC`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。非 Linux 是保留的移植位：它只用 `symlink_metadata` 回答存在性，从不读取内容，因此那里的普通文件按"不可读"拒绝——在该平台上本次构建可以拒绝，但无法读取记录。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
+恢复记录是其位置上的一类普通文件（镜像为 `<image_state_root>/images/<key-hash>/record`，块设备为 `<state_root>/recovery/<identity-hash>/record`；镜像侧的 `<image>.diskedit/record.lock` 在不存在按用户的状态根时只是锁，其中不含记录）。该位置上是什么由一次探测回答：不存在、可解码、已损坏（部分写入或 CRC 不匹配）、无法识别的格式（magic 不是 `DREC`）、不是恢复文件（符号链接 / 目录 / 非普通文件），或不可读。在 Linux 上，路径以父目录为锚点，用连续的 `openat(O_NOFOLLOW|O_DIRECTORY)` 解析，最后一级用 `O_NOFOLLOW`：任一级为符号链接、非目录，或最后一级为非普通文件，都算"不是恢复文件"。其他平台用 `symlink_metadata` 探测，只读取普通文件：最后一级是符号链接、目录或其他对象时一律报告为"不是恢复文件"。删除与重命名作用于该路径条目本身（父目录 fd 加相对名字），不跟随链接、不改变链接目标；原子替换是同目录内的重命名。当条目不是恢复文件，或删除失败时，场景被视为仍然存在，工具不会报告其已清理。
 
 ## 本版行为变更
 
@@ -62,11 +62,8 @@ bundle 目录包含 `manifest.json`、`kernel` 与 `initramfs`。清单声明 `s
 - **符号链接不是记录。** 记录位置在路径任何一级是符号链接时都报告为"不是恢复文件"；工具不会穿过它读取、替换、删除或改名。
 - **自相矛盾的备份头按损坏处理。** GPT 备份头的反向指针与副本位置不一致时，报告为损坏，而不是当作"没有表"。
 - **其他版本的记录按外来格式处理。** 记录格式标记为 `DREC`；标记为其他值的记录一律报告为外来记录，不会被读取。
+- **写目标需要能写的宿主。** 声明效果为 `write` 的命令在可写宿主之外以不支持状态拒绝，且发生在打开目标之前；只读入口照常运行，`--dry-run` 预览仍可用。
 - **不可逆步骤不能撤销。** 记录里出现不可逆步骤时，`undo` 拒绝把目标回滚；`replay` 仍可只恢复记录中的分区表区间。
-
-## Windows 上的目录项持久性
-
-删除或重命名恢复文件之后，工具不宣称目录项已到达磁盘；它只打印 `note: removed <path>; persistence of the directory entry was not verified on this platform`（重命名同理）。该平台对目录项不提供掉电持久性保证，因此这条提示不得读作"已经持久化"。
 
 ## 续跑边界
 

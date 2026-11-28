@@ -5,7 +5,7 @@
 //! 文件系统能力读 `diskedit_core::fs::catalog`，退出码读
 //! [`exit`](crate::app::report::exit)；本文件只负责排版，不新增事实。
 
-use crate::app::cli::declare::{self, Confirmation, Group, TargetSuffix};
+use crate::app::cli::declare::{self, Effect, Group, TargetSuffix};
 use crate::app::report::exit;
 use diskedit_core::fs::{ContentKind, Program, Support, Verb, catalog};
 
@@ -134,13 +134,15 @@ pub fn i18n_catalogue(pairs: &[(&str, &str, &str, &str)]) -> String {
 
 /// 生成物与 `COMMANDS` 的一致性约束；生成器与用例共用。
 pub fn check_consistency() {
-    let declared: Vec<&str> = declare::COMMANDS
-        .iter()
-        .map(|command| command.name)
-        .collect();
-    let listed: Vec<&str> = ACCESS.iter().map(|(name, _)| *name).collect();
-    assert_eq!(declared, listed, "runtime gate 表与命令声明不同步");
     for command in declare::COMMANDS {
+        // 写命令必须同时声明 `--yes`：确认门接受这个选项，且参考里要能看出它。
+        if command.effect.is_write() {
+            assert!(
+                command.accepts("--yes"),
+                "写命令 {} 没有声明 --yes；确认门无法成立",
+                command.name
+            );
+        }
         for variant in command.variants {
             for option in variant.options {
                 assert!(
@@ -164,35 +166,6 @@ const HEADER: &str = "Generated from `app/cli/declare.rs`, `app/report/exit.rs` 
                       `diskedit_core::fs::catalog` by `docsgen`.\nRegenerate with \
                       `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.\nCI compares the \
                       working tree with the generator output. Do not edit by hand.\n\n";
-
-/// 运行时门禁的分类；与 [`declare::COMMANDS`] 一一对应，顺序一致。
-enum Access {
-    /// 只读命令：镜像、块设备、其他平台都运行。
-    ReadOnly,
-    /// 写命令：镜像与 root 下的块设备可写，其他平台拒绝（6）。
-    Write,
-    /// 会写文件系统但可只读运行：镜像与块设备都可运行，其他平台只读运行。
-    Filesystem,
-}
-
-const ACCESS: &[(&str, Access)] = &[
-    ("layout", Access::ReadOnly),
-    ("records list", Access::ReadOnly),
-    ("records verify", Access::ReadOnly),
-    ("records show", Access::ReadOnly),
-    ("undo", Access::Write),
-    ("replay", Access::Write),
-    ("release", Access::Write),
-    ("resize", Access::Write),
-    ("move", Access::Write),
-    ("copy", Access::Write),
-    ("delete", Access::Write),
-    ("set", Access::Write),
-    ("check", Access::Filesystem),
-    ("mkfs", Access::Write),
-    ("new", Access::Write),
-    ("add", Access::Write),
-];
 
 /// 选项的展示值与说明；顺序即文档顺序，生成前会按声明核对完整性。
 const OPTIONS: &[(&str, &str, &str)] = &[
@@ -333,9 +306,9 @@ fn reference() -> String {
                 TargetSuffix::Whole => "no partition suffix",
                 TargetSuffix::Partition => "`:N` or `:last` required",
             };
-            let confirm = match command.confirmation {
-                Confirmation::Required => "required (`--yes`)",
-                Confirmation::None => "none",
+            let confirm = match command.effect {
+                Effect::Write => "required (`--yes`)",
+                Effect::ReadOnly => "none",
             };
             out.push_str(&format!(
                 "| {suffix} | {confirm} | {} |\n",
@@ -406,19 +379,23 @@ fn capability_matrix() -> String {
         .map(|program| format!("`{program:?}`"))
         .collect();
     out.push_str(&programs.join(", "));
-    out.push_str(
-        "\n\n## Runtime gate\n\nWriting is supported on Linux only. Elsewhere the dispatch gate \
-         refuses any\ncommand that would write; read-only entries still run. Image files never \
-         need\nroot for table writes; block devices do.\n\n| command | image file | block device | \
-         other platforms |\n|---|---|---|---|\n",
-    );
-    for (name, access) in ACCESS {
-        let (image, block, other) = match access {
-            Access::ReadOnly => ("yes", "yes", "yes"),
-            Access::Write => ("yes", "yes (root)", "refused (6)"),
-            Access::Filesystem => ("yes", "yes", "yes"),
+    let writable = crate::platform::WRITING_HOSTS.join(", ");
+    out.push_str(&format!(
+        "\n\n## Runtime gate\n\nWriting is supported on {writable} only. Elsewhere the dispatch \
+         gate refuses\nany command whose effect is to write; read-only entries are admitted and run\nwhere the \
+         host has a backend for them. Image files never need root for table writes;\nblock \
+         devices do.\n\n| command | image file | block device | other platforms \
+         |\n|---|---|---|---|\n"
+    ));
+    for command in declare::COMMANDS {
+        let (image, block, other) = match command.effect {
+            Effect::ReadOnly => ("yes", "yes", "yes"),
+            Effect::Write => ("yes", "yes (root)", "refused (6)"),
         };
-        out.push_str(&format!("| `{name}` | {image} | {block} | {other} |\n"));
+        out.push_str(&format!(
+            "| `{}` | {image} | {block} | {other} |\n",
+            command.name
+        ));
     }
     out
 }

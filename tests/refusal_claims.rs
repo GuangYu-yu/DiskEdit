@@ -1,7 +1,7 @@
 //! 旧版拒绝点的簇级认领：按旧文件成簇，用库的公开入口复现同一拒绝。
 //!
-//! 每条用例断言具体错误形态，不依赖实现细节；`// covers: R*` 与
-//! `plan/baseline/refusal-map.tsv` 的认领行一一对应。
+//! 每条用例断言具体错误形态，不依赖实现细节；`// covers: R*` 标注它认领的
+//! 旧版拒绝点，其余接口由 `tests/case_runner.rs` 从命令行入口覆盖。
 
 use diskedit_core::table::edit::{
     add_mbr, delete_mbr, mbr_last_live, resize_mbr, set_mbr_hidden, set_mbr_type,

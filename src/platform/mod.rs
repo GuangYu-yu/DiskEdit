@@ -34,7 +34,6 @@ pub use windows::WindowsPlatform;
 pub fn host() -> LinuxPlatform {
     LinuxPlatform
 }
-
 #[cfg(target_os = "macos")]
 pub fn host() -> MacOsPlatform {
     MacOsPlatform
@@ -65,7 +64,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的打开端口尚未接入"
+                    " has no target-opening backend in this build"
                 )))
             }
 
@@ -75,7 +74,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::TargetHandle>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的打开端口尚未接入"
+                    " has no target-opening backend in this build"
                 )))
             }
 
@@ -93,7 +92,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<diskedit_core::fingerprint::Fingerprint> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的身份端口尚未接入"
+                    " has no target identity backend in this build"
                 )))
             }
 
@@ -103,7 +102,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::Occupancy> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的占用端口尚未接入"
+                    " has no occupancy backend in this build"
                 )))
             }
 
@@ -122,7 +121,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Vec<std::path::PathBuf>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的记录目录端口尚未接入"
+                    " has no record-directory backend in this build"
                 )))
             }
 
@@ -132,7 +131,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::RecordEntry> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的记录读取端口尚未接入"
+                    " has no record-reading backend in this build"
                 )))
             }
 
@@ -143,7 +142,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的记录写入端口尚未接入"
+                    " has no record-writing backend in this build"
                 )))
             }
 
@@ -153,7 +152,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的记录删除端口尚未接入"
+                    " has no record-removal backend in this build"
                 )))
             }
 
@@ -164,7 +163,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的记录改名端口尚未接入"
+                    " has no record-rename backend in this build"
                 )))
             }
 
@@ -175,7 +174,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::ToolRun> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 没有外部工具端口"
+                    " has no external-tool backend"
                 )))
             }
 
@@ -195,7 +194,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<$crate::platform::LoopBinding> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 没有 loop 设备"
+                    " has no loop devices"
                 )))
             }
 
@@ -206,14 +205,14 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的分区设备端口尚未接入"
+                    " has no partition-device backend in this build"
                 )))
             }
 
             fn entropy(&self, _len: usize) -> $crate::platform::PlatformResult<Vec<u8>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的随机源尚未接入"
+                    " has no entropy backend in this build"
                 )))
             }
 
@@ -223,7 +222,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的目录端口尚未接入"
+                    " has no directory backend in this build"
                 )))
             }
 
@@ -233,7 +232,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<()> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的目录端口尚未接入"
+                    " has no directory backend in this build"
                 )))
             }
 
@@ -243,7 +242,7 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<std::path::PathBuf> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的临时目录端口尚未接入"
+                    " has no temporary-directory backend in this build"
                 )))
             }
 
@@ -253,17 +252,38 @@ macro_rules! unsupported_platform {
             ) -> $crate::platform::PlatformResult<Box<dyn $crate::platform::StateLock>> {
                 Err($crate::platform::PlatformError::not_supported(concat!(
                     $os,
-                    " 的状态锁尚未接入"
+                    " has no state-lock backend in this build"
                 )))
             }
         }
     };
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) use unsupported_platform;
+unsupported_platform!(UnsupportedPlatform, "this host");
 
-unsupported_platform!(UnsupportedPlatform, "当前宿主");
+/// 会写目标的宿主家族。
+///
+/// 运行期的能力判断与生成的命令参考都读它。新增宿主时先在这里加上名字，
+/// 再实现端口；端口不自行声明能写。
+pub const WRITING_HOSTS: &[&str] = &["Linux"];
+
+/// 当前构建的宿主名，与 [`WRITING_HOSTS`] 同一命名空间。
+pub const fn host_display_name() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "Linux"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else {
+        "other"
+    }
+}
+
+/// 本构建能否写目标字节与恢复记录。
+pub fn host_writes() -> bool {
+    WRITING_HOSTS.contains(&host_display_name())
+}
 
 /// 端口操作失败。
 #[derive(Debug)]
@@ -559,6 +579,14 @@ pub trait Platform: Send + Sync {
 
     /// 目标的宿主形态；只读元数据，不打开文件。
     fn path_kind(&self, path: &Path) -> TargetKind;
+
+    /// 本宿主能否写目标字节与恢复记录。
+    ///
+    /// 只由 [`WRITING_HOSTS`] 派生；端口不另作声明，注入的测试端口可以覆盖它来
+    /// 模拟不同宿主。
+    fn supports_writes(&self) -> bool {
+        host_writes()
+    }
 
     /// 本宿主能否对目标所在的块设备执行分区表与视图操作（BLKPG/BLKRRPART、挂载）。
     ///

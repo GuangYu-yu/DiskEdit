@@ -136,11 +136,6 @@ pub struct RecoverSnapshot {
 pub fn capture(platform: &dyn Platform, request: &Request) -> Result<Snapshot, CaptureError> {
     let target = open_target(platform, request)?;
     let handle = platform.open_target_read_only(&target.path)?;
-    if handle.kind() == TargetKind::Other {
-        return Err(CaptureError::Unreadable {
-            why: "the target is neither a regular file nor a block device".to_owned(),
-        });
-    }
     let sector_size = handle
         .resolved_sector_size()
         .or(request.sector_size())
@@ -224,6 +219,14 @@ pub(crate) fn open_target(
     // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
     // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
     let fingerprint = platform.identity(path)?;
+    // 目标形态由端口探一次，之后不再靠"打开是否成功"推断：目录在有的宿主上能
+    // 只读打开、在别的宿主上打开即失败，两种结果不该给出不同的退出码。这条
+    // 判定放在身份探测之后：目标不存在时先报打开失败，而不是"形态不认识"。
+    if platform.path_kind(path) == TargetKind::Other {
+        return Err(CaptureError::Unreadable {
+            why: "the target is neither a regular file nor a block device".to_owned(),
+        });
+    }
     let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
     // `--alias` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
     // 在打开目标之前先判这一条，因此目标不存在时也报用法错误而不是拒绝。

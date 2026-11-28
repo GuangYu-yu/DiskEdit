@@ -6,6 +6,7 @@
 
 mod fixtures;
 
+#[cfg(target_os = "linux")]
 use diskedit_core::table::gpt::header::GptHeader;
 
 const SECTOR: usize = 512;
@@ -29,15 +30,18 @@ fn extended_image(name: &str) -> String {
     path
 }
 
+#[cfg(target_os = "linux")]
 fn read_header(bytes: &[u8], lba: usize) -> GptHeader {
     GptHeader::parse(&bytes[lba * SECTOR..(lba + 1) * SECTOR]).expect("头部可解析")
 }
 
+#[cfg(target_os = "linux")]
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("偏移在界内"))
 }
 
 // covers: R0005, R0006, R0007, R0008, R0009, R0010, R0011
+#[cfg(target_os = "linux")]
 #[test]
 fn a_grown_container_is_repaired_in_the_same_table_write() {
     let path = extended_image("grown-delete.img");

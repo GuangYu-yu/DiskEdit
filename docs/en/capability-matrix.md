@@ -39,9 +39,10 @@ External programs the catalogue refers to, by identity:
 
 ## Runtime gate
 
-Writing is supported on Linux only. Elsewhere the dispatch gate refuses any
-command that would write; read-only entries still run. Image files never need
-root for table writes; block devices do.
+Writing is supported on Linux only. Elsewhere the dispatch gate refuses
+any command whose effect is to write; read-only entries are admitted and run
+where the host has a backend for them. Image files never need root for table writes;
+block devices do.
 
 | command | image file | block device | other platforms |
 |---|---|---|---|

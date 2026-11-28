@@ -201,6 +201,10 @@ impl Platform for Memory {
     fn filesystem_ready(&self, _path: &Path) -> bool {
         self.kind == TargetKind::BlockDevice
     }
+    /// 这个假端口模拟一台可写宿主；平台能力门只应被它放过，而不是被宿主决定。
+    fn supports_writes(&self) -> bool {
+        true
+    }
     fn is_partition_node(&self, _path: &Path) -> bool {
         false
     }

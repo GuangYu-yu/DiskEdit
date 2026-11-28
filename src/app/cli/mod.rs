@@ -56,6 +56,23 @@ pub fn dispatch_with(platform: &dyn Platform, args: impl IntoIterator<Item = OsS
 
 /// 执行一条已解析的请求。
 fn run(platform: &dyn Platform, request: &observe::Request) -> u8 {
+    // 平台能力门：写命令在碰目标之前就被拦下。
+    //
+    // 判定只读 [`declare`] 的 effect 与端口的 `supports_writes`，不看命令名，
+    // 也不在别处另写一份"哪些命令会写"的清单。`--dry-run` 形态不写盘，照常运行。
+    let command = request.command();
+    if declare::effect_of(command.entry_name()).is_write()
+        && !command.is_dry_run()
+        && !platform.supports_writes()
+    {
+        eprintln!(
+            "unsupported: writing a target needs a {} host; this host can inspect images but \
+             cannot write them",
+            platform::WRITING_HOSTS.join(" or ")
+        );
+        return exit::UNSUPPORTED;
+    }
+
     let decision = match request.command() {
         Command::RecordsList { root: Some(root) } => return scan_root(platform, root, request),
         Command::RecordsList { root: None } if request.target_spec().is_none() => {

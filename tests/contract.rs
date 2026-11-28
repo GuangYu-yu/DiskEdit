@@ -55,8 +55,8 @@ fn exported_surface_has_the_documented_shape() {
     for command in commands {
         assert!(command["name"].is_string());
         assert!(matches!(
-            command["confirmation"].as_str(),
-            Some("Required" | "None")
+            command["effect"].as_str(),
+            Some("read-only" | "write")
         ));
         assert!(command["common_options"].is_array());
         let variants = command["variants"].as_array().expect("variants 应为数组");

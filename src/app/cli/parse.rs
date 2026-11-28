@@ -27,6 +27,21 @@ impl UsageError {
     }
 }
 
+/// 确认门：写命令在解析期必须拿到 `--yes`。
+///
+/// "哪些命令需要确认"只由命令面声明的 effect 回答；`--dry-run` 形态不写盘，由
+/// 调用方把 `dry_run` 传进来放宽。解析器各自声明可接受的选项，但不得另行决定
+/// 何时需要确认——那样每加一条写命令都要记得补一处。
+fn confirm_gate(tokens: &Tokens, name: &str, dry_run: bool) -> Result<(), UsageError> {
+    if !dry_run
+        && crate::app::cli::declare::effect_of(name).needs_confirmation()
+        && !tokens.has("--yes")
+    {
+        return Err(UsageError::new(format!("`{name}` needs --yes")));
+    }
+    Ok(())
+}
+
 /// 解析一条只读命令。
 pub fn parse(args: &[String]) -> Result<Request, UsageError> {
     let Some(command) = args.first() else {
@@ -147,9 +162,7 @@ fn parse_check(args: &[String]) -> Result<Request, UsageError> {
 
 fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(args, &["--label", "--alias", "--sector-size"], &["--yes"])?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`mkfs` needs --yes"));
-    }
+    confirm_gate(&tokens, "mkfs", false)?;
     if tokens.positionals.len() != 2 {
         return Err(UsageError::new("mkfs needs <TARGET>:N <FS>"));
     }
@@ -174,9 +187,7 @@ fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
 /// `undo`/`replay`/`release`：三个恢复入口，各自回滚、回放或放弃记录。
 fn parse_undo(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`undo` needs --yes"));
-    }
+    confirm_gate(&tokens, "undo", false)?;
     let target = one_target(&tokens, "undo")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
@@ -191,9 +202,7 @@ fn parse_undo(args: &[String]) -> Result<Request, UsageError> {
 
 fn parse_replay(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`replay` needs --yes"));
-    }
+    confirm_gate(&tokens, "replay", false)?;
     let target = one_target(&tokens, "replay")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
@@ -212,9 +221,7 @@ fn parse_release(args: &[String]) -> Result<Request, UsageError> {
         &["--alias", "--sector-size"],
         &["--yes", "--discard-replay"],
     )?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`release` needs --yes"));
-    }
+    confirm_gate(&tokens, "release", false)?;
     let target = one_target(&tokens, "release")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
@@ -259,9 +266,7 @@ fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
         return parse_resize_fs_only(&tokens);
     }
     let dry_run = tokens.has("--dry-run");
-    if !dry_run && !tokens.has("--yes") {
-        return Err(UsageError::new("`resize` needs --yes"));
-    }
+    confirm_gate(&tokens, "resize", dry_run)?;
     if tokens.positionals.is_empty() || tokens.positionals.len() > 2 {
         return Err(UsageError::new(
             "resize needs <TARGET>[:N] <SIZE>, or <TARGET>:N --end LBA / --grow-to-end",
@@ -336,9 +341,7 @@ fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
 /// `resize --fs-only`：只动文件系统。离线形态 `<TARGET>:N`（长满分区），或
 /// 挂载点在线形态 `<MOUNTPOINT> [BYTES]`；两者都不接受分区几何旗标。
 fn parse_resize_fs_only(tokens: &Tokens) -> Result<Request, UsageError> {
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`resize` needs --yes"));
-    }
+    confirm_gate(tokens, "resize", false)?;
     for flag in [
         "--align",
         "--allow-move",
@@ -437,9 +440,7 @@ fn parse_new(args: &[String]) -> Result<Request, UsageError> {
         &["--table", "--alias", "--sector-size"],
         &["--yes", "--overwrite-data"],
     )?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`new` needs --yes"));
-    }
+    confirm_gate(&tokens, "new", false)?;
     let target = one_target(&tokens, "new")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
@@ -480,9 +481,7 @@ fn parse_add(args: &[String]) -> Result<Request, UsageError> {
         &["--yes", "--dry-run"],
     )?;
     let dry_run = tokens.has("--dry-run");
-    if !dry_run && !tokens.has("--yes") {
-        return Err(UsageError::new("`add` needs --yes"));
-    }
+    confirm_gate(&tokens, "add", dry_run)?;
     if tokens.positionals.len() != 2 {
         return Err(UsageError::new("add needs <TARGET> <SIZE>"));
     }
@@ -530,9 +529,7 @@ fn parse_add(args: &[String]) -> Result<Request, UsageError> {
 
 fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`delete` needs --yes"));
-    }
+    confirm_gate(&tokens, "delete", false)?;
     let target = one_target(&tokens, "delete")?;
     let Some(partition) = target.partition else {
         return Err(UsageError::new(
@@ -547,9 +544,7 @@ fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
 
 fn parse_set(args: &[String]) -> Result<Request, UsageError> {
     let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes", "--random"])?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`set` needs --yes"));
-    }
+    confirm_gate(&tokens, "set", false)?;
     if tokens.positionals.len() < 2 {
         return Err(UsageError::new(
             "set needs <TARGET>:N <PROPERTY> [VALUE] [on|off]",
@@ -619,9 +614,7 @@ fn parse_move(args: &[String]) -> Result<Request, UsageError> {
         &["--align", "--start", "--chunk", "--alias", "--sector-size"],
         &["--yes"],
     )?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`move` needs --yes"));
-    }
+    confirm_gate(&tokens, "move", false)?;
     let target = one_target(&tokens, "move")?;
     let Some(partition) = target.partition else {
         return Err(UsageError::new(
@@ -656,9 +649,7 @@ fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
         ],
         &["--yes", "--keep-partuuid"],
     )?;
-    if !tokens.has("--yes") {
-        return Err(UsageError::new("`copy` needs --yes"));
-    }
+    confirm_gate(&tokens, "copy", false)?;
     let target = one_target(&tokens, "copy")?;
     let Some(partition) = target.partition else {
         return Err(UsageError::new(
