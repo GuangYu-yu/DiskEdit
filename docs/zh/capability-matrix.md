@@ -2,7 +2,7 @@
 重新生成英文原版：`DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`。
 CI 把工作树与生成器输出逐字比对；本文件只维护中文译文，英文事实以生成器和 `docs/en/capability-matrix.md` 为准。
 
-# diskedit 能力矩阵
+# DiskEdit 能力矩阵
 
 本工具可识别的每一种内容各占一行。单元格给出文件系统档案表报告的支持类别；
 每类能力执行的步骤序列同样由该表声明。

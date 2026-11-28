@@ -297,7 +297,7 @@ mod cli {
     }
 
     fn run(state: &Path, args: &[&str]) -> (i32, String, String) {
-        let output = Command::new(env!("CARGO_BIN_EXE_diskedit"))
+        let output = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
             .args(args)
             .env("XDG_STATE_HOME", state)
             .output()

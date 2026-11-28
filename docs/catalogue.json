@@ -7,7 +7,7 @@
       "en": "docs/en/reference.md",
       "zh": "docs/zh/reference.md",
       "sections": [
-        { "en": "# diskedit command reference", "zh": "# diskedit 命令参考", "paragraphs": 1 },
+        { "en": "# DiskEdit command reference", "zh": "# DiskEdit 命令参考", "paragraphs": 1 },
         { "en": "## Commands", "zh": "## 命令", "paragraphs": 0 },
         { "en": "### `layout`", "zh": "### `layout`", "paragraphs": 3 },
         { "en": "### `records list`", "zh": "### `records list`", "paragraphs": 3 },
@@ -33,7 +33,7 @@
       "en": "docs/en/capability-matrix.md",
       "zh": "docs/zh/capability-matrix.md",
       "sections": [
-        { "en": "# diskedit capability matrix", "zh": "# diskedit 能力矩阵", "paragraphs": 2 },
+        { "en": "# DiskEdit capability matrix", "zh": "# DiskEdit 能力矩阵", "paragraphs": 2 },
         { "en": "## Programs", "zh": "## 程序", "paragraphs": 2 },
         { "en": "## Runtime gate", "zh": "## Runtime gate", "paragraphs": 2 }
       ]
@@ -42,7 +42,7 @@
       "en": "docs/en/exit-codes.md",
       "zh": "docs/zh/exit-codes.md",
       "sections": [
-        { "en": "# diskedit exit status", "zh": "# diskedit 退出状态", "paragraphs": 2 }
+        { "en": "# DiskEdit exit status", "zh": "# DiskEdit 退出状态", "paragraphs": 2 }
       ]
     },
     {

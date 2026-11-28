@@ -2,7 +2,7 @@ Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
-# diskedit capability matrix
+# DiskEdit capability matrix
 
 One row per content kind the tool identifies. A cell is the support class
 reported by the filesystem catalogue; the steps each class runs are declared

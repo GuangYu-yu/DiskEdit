@@ -203,7 +203,7 @@ const OPTIONS: &[(&str, &str, &str)] = &[
     (
         "--discard-replay",
         "—",
-        "confirm giving up a range `diskedit replay` could still replay",
+        "confirm giving up a range `DiskEdit replay` could still replay",
     ),
     (
         "--dry-run",
@@ -291,14 +291,17 @@ const OPTIONS: &[(&str, &str, &str)] = &[
     ("--yes", "—", "acknowledge a write before it starts"),
 ];
 
+/// 生成物与帮助里出现的可执行文件名；与 `Cargo.toml` 的 bin 名一致。
+pub const PROGRAM: &str = "DiskEdit";
+
 fn reference() -> String {
     check_consistency();
     let mut out = String::from(HEADER);
-    out.push_str(
-        "# diskedit command reference\n\nWrite commands on a block device without a WWN, EUI or \
+    out.push_str(&format!(
+        "# {PROGRAM} command reference\n\nWrite commands on a block device without a WWN, EUI or \
          repeatable serial\n(nbd, rbd, dm, md) need `--alias NAME`; images and devices with \
-         an\nidentity of their own reject the flag.\n",
-    );
+         an\nidentity of their own reject the flag.\n"
+    ));
     for (group, heading) in [
         (Group::Everyday, "## Commands"),
         (Group::LowLevel, "## Low-level"),
@@ -313,7 +316,7 @@ fn reference() -> String {
                 command.name, command.summary
             ));
             for variant in command.variants {
-                out.push_str(&format!("diskedit {} {}\n", command.name, variant.syntax));
+                out.push_str(&format!("{PROGRAM} {} {}\n", command.name, variant.syntax));
             }
             out.push_str("```\n\n| property | value | options |\n|---|---|---|\n");
             let suffix = match command.variants[0].target {
@@ -352,12 +355,12 @@ fn options_of(command: &declare::CommandDef) -> String {
 
 fn capability_matrix() -> String {
     let mut out = String::from(HEADER);
-    out.push_str(
-        "# diskedit capability matrix\n\nOne row per content kind the tool identifies. A cell is \
+    out.push_str(&format!(
+        "# {PROGRAM} capability matrix\n\nOne row per content kind the tool identifies. A cell is \
          the support class\nreported by the filesystem catalogue; the steps each class runs are \
          declared\nthere as well.\n\n| content | grow | shrink | attributes | check | mkfs \
-         |\n|---|---|---|---|---|---|\n",
-    );
+         |\n|---|---|---|---|---|---|\n"
+    ));
     for kind in ContentKind::ALL {
         let profile = catalog::profile(kind);
         let cells: Vec<&str> = [
@@ -409,10 +412,10 @@ fn capability_matrix() -> String {
 
 fn exit_codes() -> String {
     let mut out = String::from(HEADER);
-    out.push_str(
-        "# diskedit exit status\n\nSeven values; the mapping lives in \
-         `app/report/exit.rs`.\n\n| code | meaning |\n|---|---|\n",
-    );
+    out.push_str(&format!(
+        "# {PROGRAM} exit status\n\nSeven values; the mapping lives in \
+         `app/report/exit.rs`.\n\n| code | meaning |\n|---|---|\n"
+    ));
     for (code, meaning) in [
         (
             exit::SUCCESS,

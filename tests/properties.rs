@@ -154,7 +154,12 @@ fn generated_reference_mentions_every_declared_syntax() {
         .1;
     for command in diskedit::app::cli::declare::COMMANDS {
         for variant in command.variants {
-            let syntax = format!("diskedit {} {}", command.name, variant.syntax);
+            let syntax = format!(
+                "{} {} {}",
+                diskedit::docsgen::PROGRAM,
+                command.name,
+                variant.syntax
+            );
             assert!(
                 reference.contains(&syntax),
                 "参考文档缺少声明过的调用形态 {syntax}"

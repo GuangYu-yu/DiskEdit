@@ -683,7 +683,7 @@ fn prepare_rootfs(cache: &Path, release: &str) -> PathBuf {
 
 /// 把被测二进制与两份来宾脚本放进 rootfs。
 fn stage_guest(rootfs: &Path) {
-    let binary = Path::new(env!("CARGO_BIN_EXE_diskedit"));
+    let binary = Path::new(env!("CARGO_BIN_EXE_DiskEdit"));
     let root = rootfs.join("root");
     std::fs::create_dir_all(&root).expect("创建 /root");
     std::fs::copy(binary, root.join("diskedit")).expect("复制二进制");

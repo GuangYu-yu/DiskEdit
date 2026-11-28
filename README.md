@@ -42,23 +42,23 @@ The binary is `target/release/diskedit`.
 
 ```bash
 truncate -s 8G disk.img
-diskedit new disk.img --table gpt --yes
-diskedit add disk.img 4G --yes
-sudo diskedit mkfs disk.img:1 ext4 --yes
-diskedit layout disk.img --json | jq .
+DiskEdit new disk.img --table gpt --yes
+DiskEdit add disk.img 4G --yes
+sudo DiskEdit mkfs disk.img:1 ext4 --yes
+DiskEdit layout disk.img --json | jq .
 ```
 
-More examples, as printed by `diskedit help`:
+More examples, as printed by `DiskEdit help`:
 
 ```bash
-diskedit layout /dev/sdb --json
-diskedit add /dev/sdb 10G --dry-run
-diskedit resize /dev/sdb:1 +2G --yes
-diskedit resize disk.img grow --allow-move --chunk 4 --yes
-diskedit undo /dev/sdb --yes
+DiskEdit layout /dev/sdb --json
+DiskEdit add /dev/sdb 10G --dry-run
+DiskEdit resize /dev/sdb:1 +2G --yes
+DiskEdit resize disk.img grow --allow-move --chunk 4 --yes
+DiskEdit undo /dev/sdb --yes
 ```
 
-`<TARGET>` is an image path or a block device; `:N` addresses partition N (1-based) and `:last` the last partition a command can act on. `diskedit help <CMD>` prints the full help for one command.
+`<TARGET>` is an image path or a block device; `:N` addresses partition N (1-based) and `:last` the last partition a command can act on. `DiskEdit help <CMD>` prints the full help for one command.
 
 `SIZE` accepts an absolute value (`10G`), an increment (`+2G`), a percentage (`+10%`) or the keyword `grow`. Sizes use 1024-based units, and a size that does not land on a sector boundary is truncated (and the truncation reported).
 
@@ -67,19 +67,19 @@ diskedit undo /dev/sdb --yes
 The target is edited in place; no new whole-disk copy is made. A relayout is a series of independent commands: each one asks for its own confirmation, keeps its own record, and leaves the steps that already succeeded applied if a later one fails. An unfinished step resumes from its record.
 
 - **Grow the container first.** The capacity of a raw image is the size of the file, so enlarge it with `truncate -s 20G disk.img` before touching the partitions inside. Extending a GPT disk leaves the backup header at the old end; the next table command relocates it as part of its plan.
-- **Growth.** `diskedit resize disk.img:1 +2G --yes`; `resize ... grow` fills the contiguous free space to the right, and `--grow-to-end` pins the end at `last_usable_lba`. A blocker in the way is moved only with `--allow-move`, after the plan is printed.
-- **Shrink.** `diskedit resize disk.img:1 -500M --yes` shrinks the filesystem offline and then the entry, on GPT and on MBR primary partitions.
-- **Moves.** `diskedit move disk.img:2 --start <LBA> --yes` relocates a partition together with its data and resumes from its record. MBR partitions cannot be moved.
+- **Growth.** `DiskEdit resize disk.img:1 +2G --yes`; `resize ... grow` fills the contiguous free space to the right, and `--grow-to-end` pins the end at `last_usable_lba`. A blocker in the way is moved only with `--allow-move`, after the plan is printed.
+- **Shrink.** `DiskEdit resize disk.img:1 -500M --yes` shrinks the filesystem offline and then the entry, on GPT and on MBR primary partitions.
+- **Moves.** `DiskEdit move disk.img:2 --start <LBA> --yes` relocates a partition together with its data and resumes from its record. MBR partitions cannot be moved.
 - **Handing space from A to B** (GPT only — MBR has no relocation, so the hole cannot be passed on): shrink A to open the hole, move B into it, then let B grow into the space it vacated:
 
   ```bash
-  diskedit resize disk.img:1 -2G --yes
-  diskedit move disk.img:2 --start <LBA just past A> --yes
-  diskedit resize disk.img:2 grow --yes
+  DiskEdit resize disk.img:1 -2G --yes
+  DiskEdit move disk.img:2 --start <LBA just past A> --yes
+  DiskEdit resize disk.img:2 grow --yes
   ```
 
-- **`--delete`.** `diskedit delete disk.img:2 --yes` removes the entry and leaves the following partitions where they are; the hole is reclaimed with the recipe above. A partition the command does not name keeps both its data and its position.
-- **Extra empty partition.** `diskedit add disk.img <SIZE> --yes` appends an entry; `resize` never creates one.
+- **`--delete`.** `DiskEdit delete disk.img:2 --yes` removes the entry and leaves the following partitions where they are; the hole is reclaimed with the recipe above. A partition the command does not name keeps both its data and its position.
+- **Extra empty partition.** `DiskEdit add disk.img <SIZE> --yes` appends an entry; `resize` never creates one.
 - **Preview.** `--dry-run` prints the ranges, the filesystem step and any relocation plan, writes nothing and does not require `--yes`.
 - **Start alignment and the NTFS boot sector.** Whenever `move` — or a resize that relocates the partition — shifts an NTFS partition to a new start LBA, the hidden-sectors field at offset 0x1c of its VBR is rewritten to the new LBA, with a warning when the start no longer fits the 32-bit field. `resize` keeps the start where it is; `move :1 --start align` places the partition on the next 1 MiB boundary. A neighbour in the way is refused as a range overlap rather than relocated; MBR partitions cannot be moved at all.
 - **No force switch.** A shrink is refused before any table write when the filesystem cannot report a size below the request (the ext pre-check asks `resize2fs -P` for the minimum).

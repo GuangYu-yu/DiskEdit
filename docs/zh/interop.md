@@ -95,7 +95,7 @@ bundle 是一个目录，包含 `manifest.json`、`kernel` 与 `initramfs`：
 
 ## 对损坏卷强制 NTFS resize
 
-没有一个能总是跳过文件系统步骤的模式：`resize --end` 与 `resize --grow-to-end` 会执行与尺寸变化匹配的文件系统步骤（变大则增长，变小则缩小），除非给出 `--no-fs`。`--no-fs` 本身在缩小时被拒绝（新的末端会切进尚未缩小的元数据），在结束一个已扩展但文件系统步骤仍待办的分区时也被拒绝。`diskedit replay` 是独立的纯表恢复路径：它回放一次数据已经搬移完成的 `move` 所记录的表区域，不恢复这些区域里的数据。因此手动执行 `ntfsresize --force` 之后再跑一次普通的 `resize --end` 会再次运行 `ntfsresize`；要保留文件系统不动时传 `--no-fs`。本工具以 `ntfsresize -f -f`（增长，先做一次 `--no-action` 演练）和 `ntfsresize -f -f -s <bytes>`（缩小）调用它，所以卷的 dirty 标记本身不会阻止该步骤。
+没有一个能总是跳过文件系统步骤的模式：`resize --end` 与 `resize --grow-to-end` 会执行与尺寸变化匹配的文件系统步骤（变大则增长，变小则缩小），除非给出 `--no-fs`。`--no-fs` 本身在缩小时被拒绝（新的末端会切进尚未缩小的元数据），在结束一个已扩展但文件系统步骤仍待办的分区时也被拒绝。`DiskEdit replay` 是独立的纯表恢复路径：它回放一次数据已经搬移完成的 `move` 所记录的表区域，不恢复这些区域里的数据。因此手动执行 `ntfsresize --force` 之后再跑一次普通的 `resize --end` 会再次运行 `ntfsresize`；要保留文件系统不动时传 `--no-fs`。本工具以 `ntfsresize -f -f`（增长，先做一次 `--no-action` 演练）和 `ntfsresize -f -f -s <bytes>`（缩小）调用它，所以卷的 dirty 标记本身不会阻止该步骤。
 
 这组组合是否安全尚未运行；按未验证对待。`--force` 绕过一致性检查的守卫，并不修复文件系统损坏。强制 `ntfsresize` 之后，卷会被标记为需要检查：Windows 可能请求或安排一次检查，应先运行 `chkdsk` 并核对卷，再正常使用。
 

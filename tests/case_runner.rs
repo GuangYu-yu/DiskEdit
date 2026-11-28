@@ -14,7 +14,7 @@ use cases::{CASES, Case};
 use sha2::{Digest, Sha256};
 
 fn run(case: &Case) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(case.argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 {} 失败: {error}", case.name));
@@ -29,7 +29,7 @@ fn run(case: &Case) -> (i32, String, String) {
 }
 
 fn run_argv(argv: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 {argv:?} 失败: {error}"));
@@ -764,7 +764,7 @@ fn every_case_matches_its_observable_result() {
 /// 以指定的环境变量运行二进制；用于把记录根目录隔离到夹具内。
 #[cfg(target_os = "linux")]
 fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_diskedit"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_DiskEdit"));
     command.args(argv);
     for (key, value) in env {
         command.env(key, value);

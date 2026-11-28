@@ -223,7 +223,7 @@ fn every_write_command_demands_confirmation() {
             .copied()
             .filter(|argument| *argument != "--yes")
             .collect();
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
             .args(&without_yes)
             .output()
             .unwrap_or_else(|error| panic!("运行 {without_yes:?} 失败: {error}"));

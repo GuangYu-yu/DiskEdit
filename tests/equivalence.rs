@@ -579,7 +579,7 @@ fn both_binaries_agree_on_layout_json_fields() {
         return;
     };
     let baseline = std::path::PathBuf::from(baseline);
-    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_DiskEdit"));
     fixtures::prepare();
     let cases: &[&[&str]] = &[
         &["layout", "target/fixtures/s1/gpt.img", "--json"],
@@ -638,7 +638,7 @@ fn both_binaries_agree_on_write_scenarios() {
         return;
     };
     let baseline = std::path::PathBuf::from(baseline);
-    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_DiskEdit"));
     fixtures::prepare();
     let cases: &[(&str, &str, &[&str])] = &[
         ("new gpt", "blank.img", &["new", "--yes"]),
@@ -691,7 +691,7 @@ fn both_binaries_agree_on_table_edits() {
         return;
     };
     let baseline = std::path::PathBuf::from(baseline);
-    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_DiskEdit"));
     fixtures::prepare();
     let cases: &[(&str, &str, &[&str])] = &[
         ("add gpt", "gpt.img", &["add", "{T}", "1M", "--yes"]),
@@ -771,7 +771,7 @@ fn both_binaries_agree_on_every_scenario() {
         return;
     };
     let baseline = std::path::PathBuf::from(baseline);
-    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_diskedit"));
+    let candidate = std::path::PathBuf::from(env!("CARGO_BIN_EXE_DiskEdit"));
     fixtures::prepare();
 
     for scenario in SCENARIOS {

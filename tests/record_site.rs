@@ -198,7 +198,7 @@ mod linux {
 
     /// 跑一次 `records list --root`，返回退出码与标准错误。
     fn list_root(root: &std::path::Path) -> (i32, String) {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
             .args(["records", "list", "--root"])
             .arg(root)
             .output()

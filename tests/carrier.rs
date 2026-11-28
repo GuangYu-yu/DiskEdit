@@ -137,7 +137,7 @@ fn image() -> PathBuf {
         std::process::id()
     ));
     std::fs::write(&path, vec![0u8; 64 << 20]).expect("镜像可写");
-    let binary = env!("CARGO_BIN_EXE_diskedit");
+    let binary = env!("CARGO_BIN_EXE_DiskEdit");
     run(&[binary, "new", path.to_str().unwrap(), "--yes"]);
     run(&[
         binary,

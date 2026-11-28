@@ -12,14 +12,14 @@ version = "0.1.0"
 edition = "2024"
 description = "Edit disk images / whole disks as byte-addressable files: partition tables (GPT/MBR), FS identification, mkfs/resize via external tools, partition relocation with resumable checkpoints"
 license = "MIT"
-default-run = "diskedit"
+default-run = "DiskEdit"
 
 [lib]
 name = "diskedit"
 path = "src/lib.rs"
 
 [[bin]]
-name = "diskedit"
+name = "DiskEdit"
 path = "src/main.rs"
 
 [dependencies]

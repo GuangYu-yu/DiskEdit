@@ -30,7 +30,7 @@ fn pv_image(name: &str) -> String {
 }
 
 fn run(args: &[&str]) -> (i32, String) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
         .output()
         .expect("运行 diskedit");
@@ -46,7 +46,7 @@ fn run(args: &[&str]) -> (i32, String) {
 
 /// 以受控的 `PATH` 运行：空路径让全部外部程序都不可用，与宿主是否装了 lvm2 无关。
 fn run_without_tools(args: &[&str]) -> (i32, String) {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(args)
         .env("PATH", "/nonexistent")
         .output()

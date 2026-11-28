@@ -5,7 +5,7 @@
 use std::process::Command;
 
 fn run(argv: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(argv)
         .output()
         .unwrap_or_else(|error| panic!("运行 diskedit {argv:?} 失败: {error}"))

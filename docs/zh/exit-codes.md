@@ -2,7 +2,7 @@
 重新生成英文原版：`DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`。
 CI 把工作树与生成器输出逐字比对；本文件只维护中文译文，英文事实以生成器和 `docs/en/exit-codes.md` 为准。
 
-# diskedit 退出状态
+# DiskEdit 退出状态
 
 七个值；映射只在 `app/report/exit.rs` 一处产生。
 

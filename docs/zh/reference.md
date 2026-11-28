@@ -2,7 +2,7 @@
 重新生成英文原版：`DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`。
 CI 把工作树与生成器输出逐字比对；本文件只维护中文译文，英文事实以生成器和 `docs/en/reference.md` 为准。
 
-# diskedit 命令参考
+# DiskEdit 命令参考
 
 对不带 WWN、EUI 或可重复序列号的块设备（nbd、rbd、dm、md），写命令必须给出
 `--alias NAME`；镜像与自带身份的设备拒绝该旗标。
@@ -14,7 +14,7 @@ CI 把工作树与生成器输出逐字比对；本文件只维护中文译文�
 显示分区表与逐分区布局
 
 ```text
-diskedit layout <TARGET> [--sector-size N] [--json]
+DiskEdit layout <TARGET> [--sector-size N] [--json]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -26,7 +26,7 @@ diskedit layout <TARGET> [--sector-size N] [--json]
 列出记录目录条目
 
 ```text
-diskedit records list [TARGET] [--root ROOT]
+DiskEdit records list [TARGET] [--root ROOT]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -38,7 +38,7 @@ diskedit records list [TARGET] [--root ROOT]
 校验一条记录
 
 ```text
-diskedit records verify <TARGET> <ID>
+DiskEdit records verify <TARGET> <ID>
 ```
 
 | 属性 | 取值 | 选项 |
@@ -50,7 +50,7 @@ diskedit records verify <TARGET> <ID>
 显示目标的恢复记录现场
 
 ```text
-diskedit records show <TARGET>
+DiskEdit records show <TARGET>
 ```
 
 | 属性 | 取值 | 选项 |
@@ -62,7 +62,7 @@ diskedit records show <TARGET>
 回滚记录中的写入并删除恢复记录
 
 ```text
-diskedit undo <TARGET> --yes
+DiskEdit undo <TARGET> --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -74,7 +74,7 @@ diskedit undo <TARGET> --yes
 补完已搬移作业的表区回放
 
 ```text
-diskedit replay <TARGET> --yes
+DiskEdit replay <TARGET> --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -86,7 +86,7 @@ diskedit replay <TARGET> --yes
 放弃恢复记录并保留它所描述的写入
 
 ```text
-diskedit release <TARGET> [--discard-replay] --yes
+DiskEdit release <TARGET> [--discard-replay] --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -98,11 +98,11 @@ diskedit release <TARGET> [--discard-replay] --yes
 改变分区大小
 
 ```text
-diskedit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
-diskedit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes
-diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
-diskedit resize <TARGET>:N --fs-only --yes
-diskedit resize <MOUNTPOINT> [BYTES] --fs-only --yes
+DiskEdit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --fs-only --yes
+DiskEdit resize <MOUNTPOINT> [BYTES] --fs-only --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -114,7 +114,7 @@ diskedit resize <MOUNTPOINT> [BYTES] --fs-only --yes
 平移一个分区
 
 ```text
-diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
+DiskEdit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -126,7 +126,7 @@ diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 复制分区到新位置并新增分区
 
 ```text
-diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
+DiskEdit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -138,7 +138,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 删除一个分区
 
 ```text
-diskedit delete <TARGET>:N --yes
+DiskEdit delete <TARGET>:N --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -150,11 +150,11 @@ diskedit delete <TARGET>:N --yes
 修改分区或文件系统属性
 
 ```text
-diskedit set <TARGET>:N name S --yes
-diskedit set <TARGET>:N label S --yes
-diskedit set <TARGET>:N uuid [U] --yes [--random]
-diskedit set <TARGET>:N flag F on|off --yes
-diskedit set <TARGET>:N type GUID|0xXX --yes
+DiskEdit set <TARGET>:N name S --yes
+DiskEdit set <TARGET>:N label S --yes
+DiskEdit set <TARGET>:N uuid [U] --yes [--random]
+DiskEdit set <TARGET>:N flag F on|off --yes
+DiskEdit set <TARGET>:N type GUID|0xXX --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -166,7 +166,7 @@ diskedit set <TARGET>:N type GUID|0xXX --yes
 检查一个分区的文件系统
 
 ```text
-diskedit check <TARGET>:N
+DiskEdit check <TARGET>:N
 ```
 
 | 属性 | 取值 | 选项 |
@@ -178,7 +178,7 @@ diskedit check <TARGET>:N
 在分区上建卷
 
 ```text
-diskedit mkfs <TARGET>:N <FS> --yes [--label S]
+DiskEdit mkfs <TARGET>:N <FS> --yes [--label S]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -192,7 +192,7 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 新建分区表
 
 ```text
-diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
+DiskEdit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 ```
 
 | 属性 | 取值 | 选项 |
@@ -204,7 +204,7 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 新增一个分区
 
 ```text
-diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] [--dry-run] --yes
+DiskEdit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] [--dry-run] --yes
 ```
 
 | 属性 | 取值 | 选项 |
@@ -219,7 +219,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--alias` | `NAME` | 为不带 WWN、EUI 或可重复序列号的目标（nbd、rbd、dm、md）命名 |
 | `--allow-move` | — | 打印计划后搬移挡路的分区 |
 | `--chunk` | `MiB` | 恢复粒度，单位 MiB，1..=64；新任务默认 4 |
-| `--discard-replay` | — | 确认放弃 `diskedit replay` 仍可回放的区间 |
+| `--discard-replay` | — | 确认放弃 `DiskEdit replay` 仍可回放的区间 |
 | `--dry-run` | — | 打印计划并在第一次写入前停止；不需要 --yes |
 | `--end` | `LBA` | 就地扩容或收缩的新结束 LBA |
 | `--fs-only` | — | 只动文件系统：离线把文件系统长满分区，或经挂载点在线扩容 |

@@ -2,7 +2,7 @@ Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
-# diskedit command reference
+# DiskEdit command reference
 
 Write commands on a block device without a WWN, EUI or repeatable serial
 (nbd, rbd, dm, md) need `--alias NAME`; images and devices with an
@@ -15,7 +15,7 @@ identity of their own reject the flag.
 show the partition table and per-partition layout
 
 ```text
-diskedit layout <TARGET> [--sector-size N] [--json]
+DiskEdit layout <TARGET> [--sector-size N] [--json]
 ```
 
 | property | value | options |
@@ -27,7 +27,7 @@ diskedit layout <TARGET> [--sector-size N] [--json]
 list recovery record directory entries
 
 ```text
-diskedit records list [TARGET] [--root ROOT]
+DiskEdit records list [TARGET] [--root ROOT]
 ```
 
 | property | value | options |
@@ -39,7 +39,7 @@ diskedit records list [TARGET] [--root ROOT]
 verify one recovery record
 
 ```text
-diskedit records verify <TARGET> <ID>
+DiskEdit records verify <TARGET> <ID>
 ```
 
 | property | value | options |
@@ -51,7 +51,7 @@ diskedit records verify <TARGET> <ID>
 show the recovery record site of a target
 
 ```text
-diskedit records show <TARGET>
+DiskEdit records show <TARGET>
 ```
 
 | property | value | options |
@@ -63,7 +63,7 @@ diskedit records show <TARGET>
 roll back the recorded write and remove the recovery record
 
 ```text
-diskedit undo <TARGET> --yes
+DiskEdit undo <TARGET> --yes
 ```
 
 | property | value | options |
@@ -75,7 +75,7 @@ diskedit undo <TARGET> --yes
 replay the recorded table regions of a completed move
 
 ```text
-diskedit replay <TARGET> --yes
+DiskEdit replay <TARGET> --yes
 ```
 
 | property | value | options |
@@ -87,7 +87,7 @@ diskedit replay <TARGET> --yes
 give up a recovery record and keep the writes it describes
 
 ```text
-diskedit release <TARGET> [--discard-replay] --yes
+DiskEdit release <TARGET> [--discard-replay] --yes
 ```
 
 | property | value | options |
@@ -99,11 +99,11 @@ diskedit release <TARGET> [--discard-replay] --yes
 resize a partition and its filesystem
 
 ```text
-diskedit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
-diskedit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes
-diskedit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
-diskedit resize <TARGET>:N --fs-only --yes
-diskedit resize <MOUNTPOINT> [BYTES] --fs-only --yes
+DiskEdit resize <TARGET>[:N] <SIZE> [--allow-move] [--chunk N] [--grow-lv] [--lv NAME] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --end LBA [--align A] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --grow-to-end [--align A] [--no-fs] --yes
+DiskEdit resize <TARGET>:N --fs-only --yes
+DiskEdit resize <MOUNTPOINT> [BYTES] --fs-only --yes
 ```
 
 | property | value | options |
@@ -115,7 +115,7 @@ diskedit resize <MOUNTPOINT> [BYTES] --fs-only --yes
 relocate a partition
 
 ```text
-diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
+DiskEdit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 ```
 
 | property | value | options |
@@ -127,7 +127,7 @@ diskedit move <TARGET>:N --start <LBA|end|align> [--chunk N] --yes [--align A]
 copy a partition to a new location and add its entry
 
 ```text
-diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
+DiskEdit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name S] [--keep-partuuid]
 ```
 
 | property | value | options |
@@ -139,7 +139,7 @@ diskedit copy <TARGET>:N --start <LBA|end> [--chunk N] --yes [--align A] [--name
 delete a partition entry
 
 ```text
-diskedit delete <TARGET>:N --yes
+DiskEdit delete <TARGET>:N --yes
 ```
 
 | property | value | options |
@@ -151,11 +151,11 @@ diskedit delete <TARGET>:N --yes
 set a partition or filesystem attribute
 
 ```text
-diskedit set <TARGET>:N name S --yes
-diskedit set <TARGET>:N label S --yes
-diskedit set <TARGET>:N uuid [U] --yes [--random]
-diskedit set <TARGET>:N flag F on|off --yes
-diskedit set <TARGET>:N type GUID|0xXX --yes
+DiskEdit set <TARGET>:N name S --yes
+DiskEdit set <TARGET>:N label S --yes
+DiskEdit set <TARGET>:N uuid [U] --yes [--random]
+DiskEdit set <TARGET>:N flag F on|off --yes
+DiskEdit set <TARGET>:N type GUID|0xXX --yes
 ```
 
 | property | value | options |
@@ -167,7 +167,7 @@ diskedit set <TARGET>:N type GUID|0xXX --yes
 check the filesystem in a partition
 
 ```text
-diskedit check <TARGET>:N
+DiskEdit check <TARGET>:N
 ```
 
 | property | value | options |
@@ -179,7 +179,7 @@ diskedit check <TARGET>:N
 create a filesystem in a partition
 
 ```text
-diskedit mkfs <TARGET>:N <FS> --yes [--label S]
+DiskEdit mkfs <TARGET>:N <FS> --yes [--label S]
 ```
 
 | property | value | options |
@@ -193,7 +193,7 @@ diskedit mkfs <TARGET>:N <FS> --yes [--label S]
 create a fresh partition table
 
 ```text
-diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
+DiskEdit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 ```
 
 | property | value | options |
@@ -205,7 +205,7 @@ diskedit new <TARGET> [--table gpt|mbr] --yes [--overwrite-data]
 add a partition
 
 ```text
-diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] [--dry-run] --yes
+DiskEdit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S] [--type-guid G] [--dry-run] --yes
 ```
 
 | property | value | options |
@@ -220,7 +220,7 @@ diskedit add <TARGET> SIZE [--start LBA] [--align A] [--part-number N] [--name S
 | `--align` | `A` | placement alignment: mib|none |
 | `--allow-move` | — | relocate blocking partitions after printing the plan |
 | `--chunk` | `MiB` | resume granularity in MiB, 1..=64; default 4 for new jobs |
-| `--discard-replay` | — | confirm giving up a range `diskedit replay` could still replay |
+| `--discard-replay` | — | confirm giving up a range `DiskEdit replay` could still replay |
 | `--dry-run` | — | print the plan and stop before the first write; no --yes needed |
 | `--end` | `LBA` | new end LBA for in-place resizing |
 | `--fs-only` | — | resize only the filesystem: grow it into its partition, or through a mountpoint |

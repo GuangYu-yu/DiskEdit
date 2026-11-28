@@ -2,7 +2,7 @@ Generated from `app/cli/declare.rs`, `app/report/exit.rs` and `diskedit_core::fs
 Regenerate with `DISKEDIT_WRITE_DOCS=1 cargo test --test generated_docs`.
 CI compares the working tree with the generator output. Do not edit by hand.
 
-# diskedit exit status
+# DiskEdit exit status
 
 Seven values; the mapping lives in `app/report/exit.rs`.
 

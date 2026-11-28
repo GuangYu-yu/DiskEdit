@@ -22,10 +22,10 @@ jobs:
       - id: set
         run: |
           arr=()
-          arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"diskedit"}')
-          arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"diskedit"}')
-          arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"diskedit"}')
-          arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"diskedit"}')
+          arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
           echo "include=[$(IFS=,; echo "${arr[*]}")]" >> $GITHUB_OUTPUT
 
   release:

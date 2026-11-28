@@ -44,7 +44,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
 #[test]
 fn a_grown_container_is_repaired_in_the_same_table_write() {
     let path = extended_image("grown-delete.img");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["delete", &format!("{path}:2"), "--yes"])
         .output()
         .expect("运行 delete");
@@ -85,7 +85,7 @@ fn a_grown_container_is_repaired_in_the_same_table_write() {
     assert_eq!(&bytes[2 * SECTOR + 128..2 * SECTOR + 144], &[0u8; 16]);
 
     // 修复后的表按新容器读回是合法的 GPT。
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["layout", &path, "--json"])
         .output()
         .expect("运行 layout");
@@ -100,7 +100,7 @@ fn a_grown_container_is_repaired_in_the_same_table_write() {
 fn a_stale_backup_and_protective_mbr_are_reported_before_the_write() {
     // 判定期就能看见需要修复：同一镜像的 `check`/`layout` 不允许把损坏说成没有表。
     let path = extended_image("grown-layout.img");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_diskedit"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_DiskEdit"))
         .args(["layout", &path, "--json"])
         .output()
         .expect("运行 layout");

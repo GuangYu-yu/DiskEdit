@@ -42,23 +42,23 @@ cargo build --release
 
 ```bash
 truncate -s 8G disk.img
-diskedit new disk.img --table gpt --yes
-diskedit add disk.img 4G --yes
-sudo diskedit mkfs disk.img:1 ext4 --yes
-diskedit layout disk.img --json | jq .
+DiskEdit new disk.img --table gpt --yes
+DiskEdit add disk.img 4G --yes
+sudo DiskEdit mkfs disk.img:1 ext4 --yes
+DiskEdit layout disk.img --json | jq .
 ```
 
-`diskedit help` 给出的示例：
+`DiskEdit help` 给出的示例：
 
 ```bash
-diskedit layout /dev/sdb --json
-diskedit add /dev/sdb 10G --dry-run
-diskedit resize /dev/sdb:1 +2G --yes
-diskedit resize disk.img grow --allow-move --chunk 4 --yes
-diskedit undo /dev/sdb --yes
+DiskEdit layout /dev/sdb --json
+DiskEdit add /dev/sdb 10G --dry-run
+DiskEdit resize /dev/sdb:1 +2G --yes
+DiskEdit resize disk.img grow --allow-move --chunk 4 --yes
+DiskEdit undo /dev/sdb --yes
 ```
 
-`<TARGET>` 为镜像路径或块设备；`:N` 寻址第 N 个分区（1 起），`:last` 指最后一个可操作分区。`diskedit help <CMD>` 查看单命令详助。
+`<TARGET>` 为镜像路径或块设备；`:N` 寻址第 N 个分区（1 起），`:last` 指最后一个可操作分区。`DiskEdit help <CMD>` 查看单命令详助。
 
 `SIZE` 接受绝对值（`10G`）、增量（`+2G`）、百分比（`+10%`）与关键字 `grow`。单位按 1024 进制；不落在扇区边界上的尺寸会被截断，并报告截断。
 
@@ -67,19 +67,19 @@ diskedit undo /dev/sdb --yes
 目标被原地编辑，不生成新的整盘副本。重排由若干独立命令组成，每条命令各自确认、各自留记录；中途失败时，已完成的步骤保持已应用状态，未完成的可沿记录续跑。
 
 - **先扩容器，再动分区。** raw 镜像的容量由文件本身决定：先用 `truncate -s 20G disk.img` 把文件放大，再调整其中的分区。扩展后的 GPT 备份头仍停在旧末端；下一条写表命令会把它随计划一起搬到新末端。
-- **增长。** `diskedit resize disk.img:1 +2G --yes`；`resize ... grow` 吃满右侧连续空闲，`--grow-to-end` 把末端钉在 `last_usable_lba`。挡路的分区只有给出 `--allow-move` 才会搬移，且先打印计划。
-- **收缩。** `diskedit resize disk.img:1 -500M --yes` 先离线缩文件系统、再收分区条目，GPT 与 MBR 主分区都支持。
-- **搬移。** `diskedit move disk.img:2 --start <LBA> --yes` 把分区与数据一起搬到新起点，可沿其记录续跑。MBR 没有搬移能力。
+- **增长。** `DiskEdit resize disk.img:1 +2G --yes`；`resize ... grow` 吃满右侧连续空闲，`--grow-to-end` 把末端钉在 `last_usable_lba`。挡路的分区只有给出 `--allow-move` 才会搬移，且先打印计划。
+- **收缩。** `DiskEdit resize disk.img:1 -500M --yes` 先离线缩文件系统、再收分区条目，GPT 与 MBR 主分区都支持。
+- **搬移。** `DiskEdit move disk.img:2 --start <LBA> --yes` 把分区与数据一起搬到新起点，可沿其记录续跑。MBR 没有搬移能力。
 - **把 A 的空间交给 B**（仅 GPT——MBR 没有搬移能力，空洞无法转交）：先缩 A 腾出空洞，把 B 搬进去，再让 B 向右吃满它腾出的位置：
 
   ```bash
-  diskedit resize disk.img:1 -2G --yes
-  diskedit move disk.img:2 --start <紧接 A 之后的 LBA> --yes
-  diskedit resize disk.img:2 grow --yes
+  DiskEdit resize disk.img:1 -2G --yes
+  DiskEdit move disk.img:2 --start <紧接 A 之后的 LBA> --yes
+  DiskEdit resize disk.img:2 grow --yes
   ```
 
-- **`--delete`。** `diskedit delete disk.img:2 --yes` 删掉条目，其后的分区留在原位；空洞用上面的配方回收。命令没有点到的分区，数据与位置都保持原样。
-- **追加空分区。** `diskedit add disk.img <SIZE> --yes` 追加条目；`resize` 从不创建条目。
+- **`--delete`。** `DiskEdit delete disk.img:2 --yes` 删掉条目，其后的分区留在原位；空洞用上面的配方回收。命令没有点到的分区，数据与位置都保持原样。
+- **追加空分区。** `DiskEdit add disk.img <SIZE> --yes` 追加条目；`resize` 从不创建条目。
 - **预览。** `--dry-run` 打印区间、文件系统步骤与可能的搬移计划，不写盘，也不需要 `--yes`。
 - **起点对齐与 NTFS 引导扇区。** `move`（或因搬移而改变起点的 `resize`）把 NTFS 分区换到新起始 LBA 时，会把 VBR 偏移 0x1c 处的 hidden sectors 字段改写成新 LBA；起点超出 32 位字段时会给出警告。`resize` 保持原起点；`move :1 --start align` 把分区放到下一个 1 MiB 边界。右侧有邻居挡路时按范围重叠拒绝，不会替用户搬移邻居；MBR 分区没有搬移能力。
 - **没有强制开关。** 文件系统无法报告出小于请求的尺寸时，收缩会在任何写表之前被拒绝（ext 的预查用 `resize2fs -P` 取最小尺寸）。
