@@ -803,6 +803,7 @@ fn undo_refuses_a_partition_selector() {
 
 #[test]
 fn read_only_layout_emits_one_structured_json_document() {
+    fixtures::prepare();
     // 只读命令统一输出本实现的结构化 JSON：单个对象、字段集稳定。
     let (code, stdout, _) = run_argv(&["layout", "target/fixtures/s1/gpt.img", "--json"]);
     assert_eq!(code, 0);
@@ -819,6 +820,7 @@ fn read_only_layout_emits_one_structured_json_document() {
 // 只读命令不得改动目标任何一个字节（parted NEWS：只读操作曾改写混合 MBR）。
 #[test]
 fn read_only_commands_leave_the_target_bytes_unchanged() {
+    fixtures::prepare();
     let path = "target/fixtures/s1/gpt.img";
     let before = std::fs::read(path).expect("读取夹具");
     let (code, _stdout, stderr) = run_argv(&["layout", path, "--json"]);
@@ -833,6 +835,7 @@ fn read_only_commands_leave_the_target_bytes_unchanged() {
 // 无盘标的目标只报告空表，不崩溃、不写盘（parted disk_set 曾在无盘标时崩溃）。
 #[test]
 fn layout_reports_an_empty_table_without_crashing() {
+    fixtures::prepare();
     let path = "target/fixtures/s1/empty.img";
     let before = std::fs::read(path).expect("读取夹具");
     let (code, stdout, stderr) = run_argv(&["layout", path, "--json"]);
@@ -885,6 +888,7 @@ fn a_copied_partition_gets_its_own_deterministic_partuuid() {
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
+    fixtures::prepare();
     let (code, _stdout, stderr) =
         run_argv(&["resize", "target/fixtures/s1/empty.img", "32M", "--yes"]);
     assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
@@ -901,6 +905,7 @@ fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
 
 #[test]
 fn check_reports_the_reason_it_cannot_act() {
+    fixtures::prepare();
     // 检查器的失败原因必须可见：既给结论，也给成因与下一步。
     let (code, _stdout, stderr) = run_argv(&["check", "target/fixtures/s1/gpt.img:1"]);
     assert_eq!(code, 6, "未识别内容应不支持：{stderr}");

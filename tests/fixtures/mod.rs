@@ -36,6 +36,8 @@ pub const STATE_HOME: &str = "target/fixtures/state";
 static PREPARE_ONCE: Once = Once::new();
 
 /// 建好全部夹具，返回基准目录。
+///
+/// 使用夹具的用例先调用它：本进程只生成一次，未调用就可能读到尚未落盘的镜像。
 pub fn prepare() -> PathBuf {
     PREPARE_ONCE.call_once(prepare_inner);
     PathBuf::from(BASE)
