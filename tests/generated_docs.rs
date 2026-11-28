@@ -32,6 +32,16 @@ fn generated_docs_match_their_sources() {
     let write = std::env::var_os("DISKEDIT_WRITE_DOCS").is_some_and(|value| value == "1");
     let mut expected = diskedit::docsgen::files();
 
+    // 先把生成物落盘，再读回文件计算双语对账表：否则对账表描述的是上一版内容，
+    // 一次写模式运行后仍与新版不一致。
+    if write {
+        for (relative, text) in &expected {
+            let path = root().join(relative);
+            std::fs::write(&path, text)
+                .unwrap_or_else(|error| panic!("写入 {} 失败: {error}", path.display()));
+        }
+    }
+
     // 双语逐段对账表：英文与中文一侧的任何增删段都会让这里失败。
     let texts: Vec<(String, String, String, String)> = BILINGUAL
         .iter()
@@ -49,11 +59,12 @@ fn generated_docs_match_their_sources() {
     ));
 
     for (relative, expected) in expected {
-        let path = root().join(relative);
-        if write {
+        if write && relative == diskedit::docsgen::I18N_CATALOGUE {
+            let path = root().join(relative);
             std::fs::write(&path, &expected)
                 .unwrap_or_else(|error| panic!("写入 {} 失败: {error}", path.display()));
         }
+        let path = root().join(relative);
         let actual = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("读取 {} 失败: {error}", path.display()));
         assert_eq!(
