@@ -7,11 +7,14 @@
 use diskedit_core::region::Region;
 
 use super::ExecError;
-use crate::app::decide::digest::FNV_OFFSET_BASIS;
+use crate::app::decide::digest::{FNV_OFFSET_BASIS, FNV_PRIME};
 use crate::platform::TargetHandle;
 
 /// 128 位区域摘要。
 pub type Digest = [u8; 16];
+
+/// 右通道的混入乘数：黄金比例在 2^64 下的取整。
+const MIX: u64 = 0x9e37_79b9_7f4a_7c15;
 
 /// 增量摘要器。
 #[derive(Clone, Debug)]
@@ -31,7 +34,7 @@ impl Hasher {
     pub const fn new() -> Self {
         Self {
             left: FNV_OFFSET_BASIS,
-            right: 0x9e3779b97f4a7c15,
+            right: MIX,
             fed: 0,
         }
     }
@@ -39,12 +42,12 @@ impl Hasher {
     pub fn update(&mut self, bytes: &[u8]) {
         for byte in bytes {
             self.left ^= u64::from(*byte);
-            self.left = self.left.wrapping_mul(0x100000001b3);
+            self.left = self.left.wrapping_mul(FNV_PRIME);
             self.right = self
                 .right
                 .rotate_left(7)
                 .wrapping_add(u64::from(*byte))
-                .wrapping_mul(0x9e3779b97f4a7c15);
+                .wrapping_mul(MIX);
             self.fed = self.fed.wrapping_add(1);
         }
     }

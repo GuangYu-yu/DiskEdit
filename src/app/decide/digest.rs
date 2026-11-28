@@ -11,6 +11,9 @@ use crate::app::observe::{ContentProperty, RecoverMode, TableFormat};
 /// FNV-1a 64 位的偏移基值；计划摘要与区域摘要都从同一个种子开始。
 pub(crate) const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
+/// FNV-1a 64 位的乘法素数；计划摘要与区域摘要共用同一条通道。
+pub(crate) const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
 /// 计算摘要。
 pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
     let mut lanes = [Lane::new(FNV_OFFSET_BASIS); 4];
@@ -81,7 +84,7 @@ impl Lane {
 
     fn feed(&mut self, byte: u8) {
         self.0 ^= u64::from(byte);
-        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        self.0 = self.0.wrapping_mul(FNV_PRIME);
     }
 
     const fn finish(self) -> u64 {
