@@ -22,10 +22,10 @@ jobs:
       - id: set
         run: |
           arr=()
-          arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
-          arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"DiskEdit"}')
-          arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
-          arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"DiskEdit"}')
+          arr+=('{"os":"Linux","arch":"AMD64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest","bin":"diskedit"}')
+          arr+=('{"os":"Linux","arch":"ARM64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-latest","bin":"diskedit"}')
+          arr+=('{"os":"Linux","arch":"AMD64_GNU","target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"diskedit"}')
+          arr+=('{"os":"Linux","arch":"ARM64_GNU","target":"aarch64-unknown-linux-gnu","runner":"ubuntu-latest","bin":"diskedit"}')
           echo "include=[$(IFS=,; echo "${arr[*]}")]" >> $GITHUB_OUTPUT
 
   release:
@@ -42,11 +42,14 @@ jobs:
         with:
           targets: ${{ matrix.entry.target }}
       - uses: Swatinem/rust-cache@v2
-      - name: 安装 musl 工具链（ARM64 musl 需要）
-        if: matrix.entry.target == 'aarch64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools musl-dev
-      - name: 构建 release（静态链接）
-        run: cargo build --release --target ${{ matrix.entry.target }}
+      - name: 安装 Zig（交叉链接器）
+        uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - name: 构建 release
+        run: |
+          cargo install --locked cargo-zigbuild
+          cargo zigbuild --release --target ${{ matrix.entry.target }}
       - name: 打包
         run: |
           mkdir -p dist
