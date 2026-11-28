@@ -336,12 +336,12 @@ pub fn new_mbr_lba0(lba0: &[u8], sector_size: u64) -> Vec<u8> {
     out
 }
 
-/// 保护 MBR 的 SizeInLBA 与容器口径的关系。
+/// 保护 MBR 的 `SizeInLBA` 不是本容器规范值时的两种情形。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PmbrIssue {
     /// 值小于规范值：容器扩容后的旧值。
     Stale,
-    /// 值等于 512 字节口径的规范值。
+    /// 值等于按 512 字节逻辑扇区算出的规范值。
     Compat512,
 }
 
@@ -352,7 +352,7 @@ pub enum PmbrSize {
     NeedsRepair {
         cause: PmbrIssue,
     },
-    /// 值大于两种口径：可能是更大盘的截断副本，拒绝自动修复。
+    /// 值比两个合法取值都大：可能是更大盘的截断副本，拒绝自动修复。
     Inconsistent,
 }
 

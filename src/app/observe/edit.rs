@@ -29,7 +29,7 @@ pub enum TableFacts {
         entries: Vec<PartitionEntry>,
         sector_size: u64,
         total_bytes: u64,
-        /// 解析出的副本状态；非 `Valid` 时写路径先在同一个表写里收敛它。
+        /// 解析出的副本状态；非 `Valid` 时写路径先在同一个表写里修复它。
         state: GptState,
         /// 保护 MBR 的 SizeInLBA 结论。
         pmbr: PmbrSize,

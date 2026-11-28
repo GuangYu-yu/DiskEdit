@@ -41,7 +41,7 @@ pub enum TableError {
     },
     /// MBR 引导签名缺失。
     MbrSignatureMissing,
-    /// 扩展链在给定上限内未收敛。
+    /// 扩展链超过给定上限仍未结束。
     ExtendedChainTooLong { max: usize },
     /// 扩展链出现环或回指自身。
     ExtendedChainLoop { lba: u64 },

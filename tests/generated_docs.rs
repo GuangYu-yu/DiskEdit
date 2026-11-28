@@ -1,4 +1,4 @@
-//! 生成物守卫：参考、能力矩阵、退出码与双语对账表必须与生成器逐字一致。
+//! 生成物守卫：参考、能力矩阵、退出码与双语对照表必须与生成器逐字一致。
 //!
 //! 手改生成物，或改了命令声明/目录却没有重新生成，这里都会失败。
 
@@ -15,7 +15,7 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|error| panic!("读取 {} 失败: {error}", path.display()))
 }
 
-/// 双语对账覆盖的文档：英文（生成或手写）与中文译本。
+/// 双语对照覆盖的文档：英文（生成或手写）与中文译本。
 const BILINGUAL: &[(&str, &str)] = &[
     ("docs/en/reference.md", "docs/zh/reference.md"),
     (
@@ -32,7 +32,7 @@ fn generated_docs_match_their_sources() {
     let write = std::env::var_os("DISKEDIT_WRITE_DOCS").is_some_and(|value| value == "1");
     let mut expected = diskedit::docsgen::files();
 
-    // 先把生成物落盘，再读回文件计算双语对账表：否则对账表描述的是上一版内容，
+    // 先把生成物落盘，再读回文件计算双语对照表：否则对照表描述的是上一版内容，
     // 一次写模式运行后仍与新版不一致。
     if write {
         for (relative, text) in &expected {
@@ -42,7 +42,7 @@ fn generated_docs_match_their_sources() {
         }
     }
 
-    // 双语逐段对账表：英文与中文一侧的任何增删段都会让这里失败。
+    // 双语逐段对照表：英文与中文一侧的任何增删段都会让这里失败。
     let texts: Vec<(String, String, String, String)> = BILINGUAL
         .iter()
         .map(|(en, zh)| (en.to_string(), read(en), zh.to_string(), read(zh)))
@@ -74,7 +74,7 @@ fn generated_docs_match_their_sources() {
     }
 }
 
-/// 双语目录只放 Markdown：机器可读的对账表固定放 `docs/catalogue.json`。
+/// 双语目录只放 Markdown：机器可读的对照表固定放 `docs/catalogue.json`。
 /// 任何把 JSON/其他产物塞进 `docs/en`、`docs/zh` 的行为都会被这条挡下。
 #[test]
 fn bilingual_docs_hold_only_markdown() {
@@ -87,7 +87,7 @@ fn bilingual_docs_hold_only_markdown() {
             assert_eq!(
                 path.extension().and_then(|extension| extension.to_str()),
                 Some("md"),
-                "{} 只允许 Markdown，发现 {}（对账表放 docs/catalogue.json）",
+                "{} 只允许 Markdown，发现 {}（对照表放 docs/catalogue.json）",
                 language,
                 path.display()
             );
@@ -96,7 +96,7 @@ fn bilingual_docs_hold_only_markdown() {
     let catalogue = root().join(diskedit::docsgen::I18N_CATALOGUE);
     assert!(
         catalogue.is_file(),
-        "双语对账表应位于 docs/ 下：{}",
+        "双语对照表应位于 docs/ 下：{}",
         catalogue.display()
     );
 }

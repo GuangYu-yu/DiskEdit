@@ -428,7 +428,7 @@ pub fn new_entry(
 
 /// 自动放置：第一个按 `unit` 对齐且完整容纳 `sectors` 的空洞。
 ///
-/// `unit == 1` 表示不额外对齐。空洞两端都按 `unit` 收敛到可用范围内。
+/// `unit == 1` 表示不额外对齐。空洞两端都按 `unit` 调整到可用范围内。
 pub fn first_fit(
     used: &[(u64, u64)],
     first: u64,

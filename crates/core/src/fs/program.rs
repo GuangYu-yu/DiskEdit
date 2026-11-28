@@ -75,7 +75,7 @@ pub enum Program {
 }
 
 impl Program {
-    /// 全部程序，用于名称唯一性与可执行名对账。
+    /// 全部程序，用于名称唯一性检查与可执行名核对。
     pub const ALL: [Program; 39] = [
         Program::E2fsck,
         Program::Resize2fs,

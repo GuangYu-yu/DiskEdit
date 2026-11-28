@@ -52,7 +52,7 @@ pub fn relocation_overlaps(shift_lba: u64, copy_lba: u64) -> bool {
 
 /// 由拷贝长度、扇区大小、位移与请求块字节数求出块布局。
 ///
-/// 自重叠时单块收敛到不超过位移；结果块为零（请求块为零、或自重叠位移为零）
+/// 自重叠时单块限制到不超过位移；结果块为零（请求块为零、或自重叠位移为零）
 /// 或字节换算溢出时返回 `None`，调用方按参数或几何错误拒绝，不拿零当除数。
 pub fn layout(copy_lba: u64, sector_size: u64, shift: i64, chunk_bytes: u64) -> Option<Layout> {
     if copy_lba == 0 {
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn self_overlap_clamps_the_chunk_to_the_shift() {
-        // 位移 100 扇区，请求块 250 扇区：自重叠时单块收敛到 100。
+        // 位移 100 扇区，请求块 250 扇区：自重叠时单块缩到 100。
         let layout = layout(1000, SS, 100, 250 * SS).expect("布局");
         assert_eq!(layout.chunk_lba, 100);
         assert_eq!(layout.count, 10);

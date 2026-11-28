@@ -73,7 +73,7 @@ fn execute(
             )
         })?;
     let (segment_size, stamp, segments) = table_parts(table)?;
-    // 搬移也要写表：在写任何目标字节（包括数据步）之前按计划口径重探占用。
+    // 搬移也要写表：在写任何目标字节（包括数据步）之前按计划记录的占用范围重探占用。
     super::table::occupancy_unchanged(platform, target, plan).map_err(|error| (error, false))?;
     let data = data_step(plan, segment_size)?;
     let data_index = plan

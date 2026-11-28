@@ -1,7 +1,7 @@
 //! 命令面声明：16 个入口、各自的调用形态与选项白名单。
 //!
 //! 帮助、用法校验与导出到 `target/command-surface.json` 的命令面都读这同一张表；
-//! 声明与实现不一致时，门禁的对照会直接暴露。声明只写数据，不含任何目标事实。
+//! 声明与实现不一致时，守卫用例会直接失败。声明只写数据，不含任何目标事实。
 
 /// 命令在顶层帮助里的分组。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -521,7 +521,7 @@ pub fn declared_entries() -> impl Iterator<Item = &'static str> {
     COMMANDS.iter().map(|command| command.name)
 }
 
-/// 命令面 JSON：供门禁逐项核对命令声明。
+/// 命令面 JSON：供守卫用例逐项核对命令声明。
 ///
 /// 结构固定为 `{"commands":[{"name","effect","common_options","variants":[...]}]}`；
 /// 每个形态带 `syntax`、`options`、`selectors`、`target`、`default` 与

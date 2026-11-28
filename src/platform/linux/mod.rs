@@ -928,7 +928,7 @@ fn image_occupancy(path: &Path) -> PlatformResult<Occupancy> {
 
 /// 与 [`image_occupancy`] 相同，但只为 DM 栈持有的 loop 不算占用。
 ///
-/// 这是 LVM2 PV 收尾的口径：pvresize 只改 PV 元数据，持有该分区的 dm 栈不解析
+/// 这是 LVM2 PV 收尾的占用判定：pvresize 只改 PV 元数据，持有该分区的 dm 栈不解析
 /// 这部分字节。其余持有者（未挂载的 md、另一个 loop 等）与挂载仍按占用拒绝。
 fn image_occupancy_allow_dm(path: &Path) -> PlatformResult<Occupancy> {
     image_occupancy_in(Path::new(SYSFS), path, true)

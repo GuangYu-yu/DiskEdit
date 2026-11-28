@@ -53,7 +53,7 @@ pub struct OccupancySnapshot {
 pub enum OccupancyScope {
     /// 目标本身（整盘或镜像）。
     Target,
-    /// 目标本身，按 LVM 收尾口径：DM 栈持有的 loop 不算占用。
+    /// 目标本身，按 LVM 收尾的占用判定：DM 栈持有的 loop 不算占用。
     TargetLvm,
     /// 目标本身优先；其结论为空闲时取该分区的设备节点（PV 的分区级持有者）。
     TargetThenPartition { number: u32 },

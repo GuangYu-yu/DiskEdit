@@ -500,7 +500,7 @@ fn resolve_end(resize: &ResizeRequest, context: EndContext) -> Result<u64, Refus
     Ok(end)
 }
 
-/// SIZE → 目标字节数（绝对口径）。
+/// SIZE → 目标字节数（绝对值，不是增量）。
 fn resolve_bytes(size: SizeSpec, current: u64) -> Result<u64, Refusal> {
     match size {
         SizeSpec::Grow => Ok(current),
@@ -1676,7 +1676,7 @@ fn record_path(snapshot: &ResizeSnapshot) -> String {
 
 /// 本次观察得到的占用现场。
 ///
-/// 整目标结论在 PV 路径上先按分区设备（DM 持有者）探到，口径随目标形态记录；
+/// 整目标结论在 PV 路径上先按分区设备（DM 持有者）探到，占用范围随目标形态记录；
 /// 设备形态下所选分区的挂载与 swap 一并带上，执行层据此逐项比对。
 fn occupancy_snapshot(snapshot: &ResizeSnapshot) -> OccupancySnapshot {
     let selected = snapshot.selected.as_ref();

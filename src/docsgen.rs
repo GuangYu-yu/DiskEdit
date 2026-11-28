@@ -1,7 +1,7 @@
 //! 文档生成器：参考、能力矩阵、退出码与程序清单的唯一来源。
 //!
 //! 生成物入库，`tests/generated_docs.rs` 逐字比对；手改生成物或用 `DISKEDIT_WRITE_DOCS=1`
-//! 重新生成后未提交，都会让门禁变红。命令面读 [`declare`](crate::app::cli::declare)，
+//! 重新生成后未提交，都会让守卫用例失败。命令面读 [`declare`](crate::app::cli::declare)，
 //! 文件系统能力读 `diskedit_core::fs::catalog`，退出码读
 //! [`exit`](crate::app::report::exit)；本文件只负责排版，不新增事实。
 
@@ -18,9 +18,9 @@ pub fn files() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// 双语逐段对账表的入库文件名（相对仓库根）。
+/// 双语逐段对照表的入库文件名（相对仓库根）。
 ///
-/// 双语目录（`docs/en`、`docs/zh`）只放 Markdown；对账契约单独放 `docs/` 下，
+/// 双语目录（`docs/en`、`docs/zh`）只放 Markdown；对照表单独放 `docs/` 下，
 /// 由本函数生成、`tests/generated_docs.rs` 逐字比对——任何一侧增删段都会红。
 pub const I18N_CATALOGUE: &str = "docs/catalogue.json";
 
@@ -69,7 +69,7 @@ fn json_escape(text: &str) -> String {
     out
 }
 
-/// 生成双语对账表：英文生成物与中文译本的每一段一一对应，段序与段落数一致。
+/// 生成双语对照表：英文生成物与中文译本的每一段一一对应，段序与段落数一致。
 ///
 /// `pairs` 是 `(英文路径, 英文正文, 中文路径, 中文正文)`。不对齐即 panic——
 /// 生成器本身就是守卫，失败消息指出缺哪一段，写盘不会发生。

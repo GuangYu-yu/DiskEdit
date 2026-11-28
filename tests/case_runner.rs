@@ -1179,7 +1179,7 @@ fn two_partition_gpt(image: &str) {
 }
 
 /// 混合 MBR（GPT 的 PMBR 里带一条 legacy 条目）在 gdisk 里被识别并保留；本实现只读
-/// 时接受原样，任何表写都把 PMBR 收敛为规范的单一 0xEE 全覆盖记录。
+/// 时接受原样，任何表写都把 PMBR 重写为规范的单一 0xEE 全覆盖记录。
 #[cfg(target_os = "linux")]
 #[test]
 fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
@@ -1221,7 +1221,7 @@ fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
     let (code, _, stderr) = run_argv(&["set", &format!("{image}:1"), "name", "hybrid", "--yes"]);
     assert_eq!(code, 0, "表写应成功：{stderr}");
     let after = std::fs::read(&image).expect("读取镜像");
-    assert_eq!(after[446 + 4], 0xEE, "表写应把保护 MBR 收敛为 0xEE");
+    assert_eq!(after[446 + 4], 0xEE, "表写应把保护 MBR 重写为 0xEE");
     assert_eq!(
         &after[446 + 8..446 + 12],
         &1u32.to_le_bytes(),

@@ -103,7 +103,7 @@ pub fn preserved_type_guids(
     Ok(())
 }
 
-/// 修复动作：判定该用哪种方式把损坏的表收敛成双副本自洽的规范形态。
+/// 修复动作：判定该用哪种方式把损坏的表重写为双副本一致的规范形态。
 ///
 /// 动作本身即状态，不用布尔旗标；需要重算的 `last_usable_lba` 在判定期算好后随
 /// 动作携带，写路径不再重新推导。
@@ -116,7 +116,7 @@ pub enum RepairAction {
         new_backup_lba: u64,
         new_last_usable: u64,
     },
-    /// 备份副本自洽，仅保护 MBR 的 SizeInLBA 不是本容器的口径。
+    /// 备份副本自洽，仅保护 MBR 的 SizeInLBA 不是本容器的规范值。
     RepairProtectiveMbr,
     /// 两者都需处理。
     RelocateAndRepair {
@@ -175,7 +175,7 @@ impl RepairAction {
 /// 修复判定不能进行的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepairError {
-    /// 保护 MBR 的 SizeInLBA 大于两种口径：可能是更大盘的截断副本。
+    /// 保护 MBR 的 SizeInLBA 比两个合法取值都大：可能是更大盘的截断副本。
     ProtectiveMbrInconsistent,
     /// 容器容不下备份数组与备份头。
     ContainerTooSmall,
@@ -206,9 +206,9 @@ impl fmt::Display for RepairError {
 }
 
 /// 判定需要哪种修复，不写盘。两条轴：备份副本是否需要搬到容器末端（`state`）、
-/// 保护 MBR 是否需要按本容器口径规范化（`pmbr`）。
+/// 保护 MBR 是否需要按本容器的大小规范化（`pmbr`）。
 ///
-/// 只有 `PmbrSize::Inconsistent` 拒绝自动修复：值大于两种口径，可能是更大盘的
+/// 只有 `PmbrSize::Inconsistent` 拒绝自动修复：值比两个合法取值都大，可能是更大盘的
 /// 截断副本，此时"按本容器重写"会抹掉线人线索。主副本不可读时可用区上界取
 /// `min(备份头的 last_usable, 容器末端减跨度)`，不让重定位静默抬高它；备份缺失
 /// 或两副本分歧时以主头为权威，保持它的 `last_usable` 不变。

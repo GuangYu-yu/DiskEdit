@@ -86,7 +86,7 @@ pub enum Refusal {
     TargetTooSmall { why: String },
     /// 目标表区已有数据，覆盖需要显式旗标。
     TableOccupied { probe: String, regions: String },
-    /// 保护 MBR 的 SizeInLBA 大于两种口径，拒绝自动修复。
+    /// 保护 MBR 的 SizeInLBA 比两个合法取值都大，拒绝自动修复。
     PmbrInconsistent { why: String },
     /// 记录文件存在但无法解码。
     RecordUnreadable { path: String },

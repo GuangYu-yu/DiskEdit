@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  # 发布前跑与 tests.yml 完全相同的全量门禁（lint / root / 等价对照 / QEMU）。
+  # 发布前复用 tests.yml 跑同一套全量检查（lint / root / 等价对照 / QEMU）。
   test:
     uses: ./.github/workflows/tests.yml
 

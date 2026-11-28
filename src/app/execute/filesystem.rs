@@ -1735,7 +1735,7 @@ fn uuid_from_output(kind: ContentKind, text: &str) -> Option<String> {
     (!value.is_empty()).then(|| normalize_uuid(value))
 }
 
-/// UUID 的比较口径：去掉分隔符与大括号、转小写。写入期望值与回读值都经它。
+/// UUID 的比较方式：去掉分隔符与大括号、转小写。写入期望值与回读值都经它。
 fn normalize_uuid(text: &str) -> String {
     text.chars()
         .filter(|c| !matches!(c, '-' | '{' | '}'))

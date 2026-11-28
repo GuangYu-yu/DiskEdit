@@ -228,7 +228,7 @@ fn execute_via_carrier(
 ///
 /// 计划不携带占用现场时没有可比对的项（不适用，例如纯文件系统计划）。占用读不
 /// 出来同样拒绝：不能证明目标空闲时不能写表。搬移/复制在自己的写表步之前也调用
-/// 这里，两条写路径共用同一份判据与探测口径。
+/// 这里，两条写路径共用同一份判据与探测范围。
 pub(super) fn occupancy_unchanged(
     platform: &dyn Platform,
     target: &Path,
@@ -281,7 +281,7 @@ pub(super) fn occupancy_unchanged(
     Ok(())
 }
 
-/// 按计划记录的口径重新探测整目标占用。
+/// 按计划记录的占用范围重新探测整目标占用。
 fn reprobe(
     platform: &dyn Platform,
     target: &Path,
