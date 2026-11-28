@@ -39,7 +39,7 @@ impl Mint {
         Self(())
     }
 
-    /// 令牌用它留下“由铸币者签发”的痕迹；真正防伪靠构造函数私有。
+    /// 把铸造权烙进令牌类型；令牌因此只可能出自持有 `Mint` 的模块。
     pub(crate) const fn brand(&self) -> std::marker::PhantomData<Self> {
         std::marker::PhantomData
     }

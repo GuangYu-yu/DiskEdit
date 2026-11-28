@@ -136,8 +136,8 @@ pub fn recover(bytes: &[u8], expected: RecoveryExpectation) -> RecoveryPlan {
     }
     // 身份与长度在同一条恢复路径上核对：长度代次为零、或与当前目标总字节数重算
     // 出的代次不等，都不能按记录里的偏移回放。
-    let geometry = length_generation(expected.total_bytes);
-    if body.length_generation == 0 || geometry != body.length_generation {
+    let current = length_generation(expected.total_bytes);
+    if body.length_generation == 0 || current != body.length_generation {
         return needs_manual(ManualReason::GenerationMismatch);
     }
     if available == declared && crate::table::crc32(payload) != header.payload_crc {
