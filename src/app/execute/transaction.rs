@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::record::{
-    self, Frame, FrameKind, Preimage, RecordBody, frame::PREIMAGE_DIGEST_BYTES, geometry_generation,
+    self, Frame, FrameKind, Preimage, RecordBody, frame::PREIMAGE_DIGEST_BYTES, length_generation,
 };
 use diskedit_core::region::Region;
 
@@ -25,15 +25,13 @@ pub(crate) use relocate_session::{Commit, Session as RelocateSession};
 /// 记录目录里的锁文件名。
 pub const LOCK_FILE: &str = "record.lock";
 
-/// 写入令牌的铸造权。
-///
-/// 元组字段私有，模块外无法构造；持有者才能铸造 [`Recorded`]。
-///
-/// [`Recorded`]: super::token::Recorded
-/// 铸造写令牌的凭据。
+/// 写入令牌的铸造权：持有者才能铸造 [`Recorded`]。
 ///
 /// 构造函数只在 `transaction` 模块内可见（`relocate_session` 作为子模块也能用），
-/// 因此模块之外的代码，哪怕是 crate 内其他模块，也拿不到 `Mint`，无法伪造令牌。
+/// 元组字段私有，模块之外的代码——哪怕是 crate 内其他模块——都拿不到 `Mint`，
+/// 因此无法伪造令牌。
+///
+/// [`Recorded`]: super::token::Recorded
 pub struct Mint(());
 
 impl Mint {
@@ -65,8 +63,8 @@ pub struct RecordSession<'a> {
     minted: Vec<u64>,
     /// 本次事务绑定的目标身份，同时用于记录载荷与目录定位。
     bound: Fingerprint,
-    /// 本次事务看到的目标总字节数展开出的几何代次。
-    geometry: u64,
+    /// 本次事务看到的目标总字节数展开出的长度代次。
+    generation: u64,
     /// 已有的未终结记录所绑定的摘要。
     pending: Option<[u8; 32]>,
     /// 复用的记录已有这么多帧。
@@ -127,7 +125,7 @@ impl<'a> RecordSession<'a> {
             session: SessionId::next(),
             minted: Vec::new(),
             bound: identity,
-            geometry: geometry_generation(total_bytes),
+            generation: length_generation(total_bytes),
             pending,
             sequence,
             registered: false,
@@ -156,7 +154,7 @@ impl<'a> RecordSession<'a> {
         }
         let body = RecordBody {
             target: self.identity(),
-            legacy_generation: self.geometry,
+            length_generation: self.generation,
             plan_digest,
         };
         let frames = [
@@ -213,7 +211,7 @@ impl<'a> RecordSession<'a> {
         }
         let body = RecordBody {
             target: self.identity(),
-            legacy_generation: self.geometry,
+            length_generation: self.generation,
             plan_digest,
         };
         let frames = [Frame {

@@ -40,6 +40,18 @@ const RETIRED_FACE_TOKENS: &[&str] = &[
     "diskedit inspect",
 ];
 
+/// 记录层与决定层的旧符号：改名后不得以原名重新出现。
+///
+/// 记录载荷按字节位置编解码，字段改名不改变格式；这里守的是"同一事实只有一处
+/// 名字"，以及"只凭身份就能构造恢复期望"这条已删除的入口。
+const RETIRED_IDENTIFIERS: &[&str] = &[
+    "legacy_generation",
+    "LegacyGeneration",
+    "geometry_generation",
+    "fsops",
+    "impl From<Fingerprint> for RecoveryExpectation",
+];
+
 #[test]
 fn retired_paths_are_absent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -106,6 +118,57 @@ fn cli_sources_have_no_retired_face_tokens() {
                 file.display()
             );
         }
+    }
+}
+
+#[test]
+fn retired_identifiers_are_absent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for relative in ["src", "crates/core/src", "tests"] {
+        collect(&root.join(relative), &mut files, "rs");
+    }
+    assert!(!files.is_empty());
+    for file in files {
+        // 本文件承载禁词清单本身。
+        if file.file_name().and_then(|name| name.to_str()) == Some("residue.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|error| panic!("读 {} 失败: {error}", file.display()));
+        for token in RETIRED_IDENTIFIERS {
+            assert!(
+                !text.contains(token),
+                "{} 含有旧符号 `{token}`——同一事实只留一个名字",
+                file.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn readmes_name_the_binary_the_manifest_builds() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml 可读");
+    let bin = manifest
+        .split("[[bin]]")
+        .nth(1)
+        .and_then(|section| {
+            section.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("name = ")
+                    .map(|value| value.trim_matches('"').to_owned())
+            })
+        })
+        .expect("Cargo.toml 必须显式声明 [[bin]] name");
+    let expected = format!("target/release/{bin}");
+    for readme in ["README.md", "README.zh-CN.md"] {
+        let text = std::fs::read_to_string(root.join(readme))
+            .unwrap_or_else(|error| panic!("读 {readme} 失败: {error}"));
+        assert!(
+            text.contains(&expected),
+            "{readme} 必须写明产物 `{expected}`，与 [[bin]] 的 name 一致"
+        );
     }
 }
 

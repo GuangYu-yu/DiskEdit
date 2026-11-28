@@ -16,7 +16,7 @@ use crate::app::observe::{
 };
 use crate::platform::Occupancy;
 
-use super::filesystem as fsops;
+use super::filesystem;
 use super::report::{Report, ResizePreview};
 use super::step::{
     Displacement, Step, StepKind, TableSegment, lba_bytes, sectors_floor, span_bytes, span_sectors,
@@ -1871,14 +1871,14 @@ pub fn decide_filesystem(snapshot: &FilesystemSnapshot, request: &Request) -> De
 /// 离线形态只扩容：文件系统末尾之前的分区空间此刻已经属于分区，工具把文件系统
 /// 长满即可。
 fn fs_offline(snapshot: &FilesystemSnapshot) -> Decision {
-    if let Some(refusal) = fsops::admission(snapshot, "resize") {
+    if let Some(refusal) = filesystem::admission(snapshot, "resize") {
         return Decision::Refuse(refusal);
     }
-    let partition = match fsops::selected(snapshot) {
+    let partition = match filesystem::selected(snapshot) {
         Ok(partition) => partition,
         Err(refusal) => return Decision::Refuse(refusal),
     };
-    let identity = match fsops::identity(snapshot) {
+    let identity = match filesystem::identity(snapshot) {
         Ok(identity) => identity,
         Err(refusal) => return Decision::Refuse(refusal),
     };
@@ -1939,9 +1939,9 @@ fn fs_offline(snapshot: &FilesystemSnapshot) -> Decision {
             filesystem,
             bytes: partition.bytes,
         },
-        vec![fsops::region(partition)],
+        vec![filesystem::region(partition)],
     );
-    fsops::finish(
+    filesystem::finish(
         snapshot,
         Plan::write(vec![step], identity),
         format!(
@@ -2023,7 +2023,7 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
     if let Some((program, _)) = snapshot.tools.iter().find(|(_, available)| !available) {
         return Decision::Refuse(Refusal::ToolMissing { program: *program });
     }
-    let Ok(identity) = fsops::identity(snapshot) else {
+    let Ok(identity) = filesystem::identity(snapshot) else {
         return Decision::Refuse(Refusal::IdentityUnprovable {
             why: "the target gives no comparable identity".to_owned(),
         });
@@ -2037,9 +2037,9 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
             filesystem,
             bytes: selected.bytes,
         },
-        vec![fsops::region(selected)],
+        vec![filesystem::region(selected)],
     );
-    fsops::finish(
+    filesystem::finish(
         snapshot,
         Plan::external(vec![step], identity),
         format!("resized the filesystem on partition #{number} through its mounted volume"),

@@ -7,8 +7,8 @@
 use super::BODY_LEN;
 use super::codec::decode_body;
 use super::frame::{Frame, FrameError, FrameKind};
-use super::geometry_generation;
 use super::header::{HEADER_LEN, HeaderError, RecordHeader};
+use super::length_generation;
 use crate::fingerprint::Fingerprint;
 
 /// 恢复结论。
@@ -48,8 +48,8 @@ pub enum ManualReason {
     PayloadCrc,
     /// 记录自称属于别的目标。
     DifferentTarget,
-    /// 记录声明的几何代次与当前目标不符，或为零。
-    LegacyGeneration,
+    /// 记录声明的长度代次与当前目标不符，或为零。
+    GenerationMismatch,
     /// 帧前缀自身不自洽。
     Frames(String),
 }
@@ -70,8 +70,8 @@ impl std::fmt::Display for ManualReason {
             Self::BodyCrc => f.write_str("record payload prefix CRC mismatch"),
             Self::PayloadCrc => f.write_str("record payload CRC mismatch"),
             Self::DifferentTarget => f.write_str("record targets a different device"),
-            Self::LegacyGeneration => {
-                f.write_str("record's geometry generation does not match the target")
+            Self::GenerationMismatch => {
+                f.write_str("record's length generation does not match the target")
             }
             Self::Frames(why) => f.write_str(why),
         }
@@ -80,38 +80,26 @@ impl std::fmt::Display for ManualReason {
 
 /// 恢复期对当前目标的期望：身份指纹与总字节数。
 ///
-/// 只有身份而没有几何证据时（由 [`Fingerprint`] 转换得到），几何核对无从成立，
-/// 记录按需要人工处理拒绝，而不是跳过核对。
+/// 两项都必须在场：只凭身份无法证明记录里的字节偏移仍落在目标内，因此不提供
+/// 只有身份的构造入口。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecoveryExpectation {
     identity: Fingerprint,
-    /// 目标总字节数；`None` 表示调用方没有几何证据。
-    total_bytes: Option<u64>,
+    /// 目标总字节数。
+    total_bytes: u64,
 }
 
 impl RecoveryExpectation {
-    /// 身份与几何都已知的目标。
     pub const fn new(identity: Fingerprint, total_bytes: u64) -> Self {
         Self {
             identity,
-            total_bytes: Some(total_bytes),
-        }
-    }
-}
-
-impl From<Fingerprint> for RecoveryExpectation {
-    /// 只有身份：没有几何证据，几何核对只能拒绝。
-    fn from(identity: Fingerprint) -> Self {
-        Self {
-            identity,
-            total_bytes: None,
+            total_bytes,
         }
     }
 }
 
 /// 由记录字节与当前目标推出恢复结论。
-pub fn recover(bytes: &[u8], expected: impl Into<RecoveryExpectation>) -> RecoveryPlan {
-    let expected = expected.into();
+pub fn recover(bytes: &[u8], expected: RecoveryExpectation) -> RecoveryPlan {
     if bytes.is_empty() {
         return RecoveryPlan::Absent;
     }
@@ -146,11 +134,11 @@ pub fn recover(bytes: &[u8], expected: impl Into<RecoveryExpectation>) -> Recove
     if !body.target.matches(expected.identity) {
         return needs_manual(ManualReason::DifferentTarget);
     }
-    // 身份与几何在同一条恢复路径上核对：没有几何证据、几何代次为零、或与当前
-    // 目标总字节数重算出的代次不等，都不能按记录里的偏移回放。
-    let geometry = expected.total_bytes.map(geometry_generation);
-    if body.legacy_generation == 0 || geometry != Some(body.legacy_generation) {
-        return needs_manual(ManualReason::LegacyGeneration);
+    // 身份与长度在同一条恢复路径上核对：长度代次为零、或与当前目标总字节数重算
+    // 出的代次不等，都不能按记录里的偏移回放。
+    let geometry = length_generation(expected.total_bytes);
+    if body.length_generation == 0 || geometry != body.length_generation {
+        return needs_manual(ManualReason::GenerationMismatch);
     }
     if available == declared && crate::table::crc32(payload) != header.payload_crc {
         return needs_manual(ManualReason::PayloadCrc);
@@ -214,7 +202,7 @@ mod tests {
     use super::*;
     use crate::record::RecordBody;
     use crate::record::frame::Preimage;
-    use crate::record::{encode, frame, geometry_generation};
+    use crate::record::{encode, frame, length_generation};
 
     const TARGET: Fingerprint = Fingerprint::strong([0x42; 32]);
     /// 恢复期看到的目标总字节数。
@@ -227,14 +215,14 @@ mod tests {
     fn body() -> RecordBody {
         RecordBody {
             target: TARGET,
-            legacy_generation: geometry_generation(TOTAL),
+            length_generation: length_generation(TOTAL),
             plan_digest: [0x11; 32],
         }
     }
 
     fn body_with_generation(generation: u64) -> RecordBody {
         RecordBody {
-            legacy_generation: generation,
+            length_generation: generation,
             ..body()
         }
     }
@@ -270,39 +258,27 @@ mod tests {
 
     #[test]
     fn a_generation_that_is_zero_or_differs_from_the_target_is_not_replayed() {
-        // 零代次是没有几何证据的保留值，非零但不等于当前目标重算值的代次同样不成立：
+        // 零代次是没有长度证据的保留值，非零但不等于当前目标重算值的代次同样不成立：
         // 两者都按需要人工处理拒绝，而不是照常回滚或重放。
         let bytes = encode(&body_with_generation(0), &all_frames()).expect("编码应成立");
         assert!(matches!(
             recover(&bytes, expectation(TARGET)),
             RecoveryPlan::NeedsManual {
-                why: ManualReason::LegacyGeneration
+                why: ManualReason::GenerationMismatch
             }
         ));
         let bytes = encode(&body_with_generation(3), &all_frames()).expect("编码应成立");
         assert!(matches!(
             recover(&bytes, expectation(TARGET)),
             RecoveryPlan::NeedsManual {
-                why: ManualReason::LegacyGeneration
+                why: ManualReason::GenerationMismatch
             }
         ));
     }
 
     #[test]
     fn empty_bytes_is_absent() {
-        assert_eq!(recover(&[], TARGET), RecoveryPlan::Absent);
-    }
-
-    #[test]
-    fn a_record_without_geometry_evidence_is_refused() {
-        // 只有身份、没有总字节数时，几何核对无从成立：记录不能回放。
-        let bytes = bytes_with(&all_frames());
-        assert!(matches!(
-            recover(&bytes, TARGET),
-            RecoveryPlan::NeedsManual {
-                why: ManualReason::LegacyGeneration
-            }
-        ));
+        assert_eq!(recover(&[], expectation(TARGET)), RecoveryPlan::Absent);
     }
 
     #[test]
@@ -380,7 +356,7 @@ mod tests {
 
     #[test]
     fn the_target_and_generation_checks_apply_to_every_state() {
-        // 四态各自成立时，目标指纹与几何代次的核对仍然独立生效：它们不是
+        // 四态各自成立时，目标指纹与长度代次的核对仍然独立生效：它们不是
         // "看到终态就跳过"的旁路。
         let cases: Vec<(Vec<Frame>, RecoveryPlan)> = vec![
             (Vec::new(), RecoveryPlan::RollBack { frames: Vec::new() }),
@@ -419,7 +395,7 @@ mod tests {
                     recover(&generation, expectation(TARGET)),
                     RecoveryPlan::NeedsManual { .. }
                 ),
-                "几何代次不符时必须拒绝"
+                "长度代次不符时必须拒绝"
             );
         }
     }

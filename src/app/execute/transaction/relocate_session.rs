@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{self, Frame, FrameKind, RecordBody, geometry_generation};
+use diskedit_core::record::{self, Frame, FrameKind, RecordBody, length_generation};
 use diskedit_core::region::Region;
 
 use super::{LOCK_FILE, Mint, preimage};
@@ -130,7 +130,7 @@ impl<'a> Session<'a> {
                 .frames
                 .iter()
                 .any(|frame| frame.kind == FrameKind::Preimage);
-            // 续跑保留盘上记录的载荷前缀：几何代次以记录写下时为准。
+            // 续跑保留盘上记录的载荷前缀：长度代次以记录写下时为准。
             let body = decoded.body;
             let frames = decoded.frames;
             return Ok((
@@ -151,7 +151,7 @@ impl<'a> Session<'a> {
 
         let body = RecordBody {
             target: identity,
-            legacy_generation: geometry_generation(total_bytes),
+            length_generation: length_generation(total_bytes),
             plan_digest,
         };
         let intent = Frame {

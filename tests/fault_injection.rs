@@ -791,7 +791,7 @@ fn a_pending_record_for_another_target_is_not_adopted() {
     let record = diskedit_core::record::encode(
         &diskedit_core::record::RecordBody {
             target: Fingerprint::strong([0x99; 32]),
-            legacy_generation: 0,
+            length_generation: 0,
             plan_digest: plan.request_digest(),
         },
         &[diskedit_core::record::Frame {
@@ -855,7 +855,7 @@ fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
     let record = diskedit_core::record::encode(
         &diskedit_core::record::RecordBody {
             target: IDENTITY,
-            legacy_generation: 0,
+            length_generation: 0,
             plan_digest: plan.digest(),
         },
         &[

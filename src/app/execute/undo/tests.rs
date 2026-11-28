@@ -48,7 +48,7 @@ impl Memory {
         self.files.lock().unwrap().get(path).cloned()
     }
 
-    /// 目标当前总字节数对应的几何代次下编码的记录。
+    /// 目标当前总字节数对应的长度代次下编码的记录。
     fn record_bytes(&self, frames: &[Frame]) -> Vec<u8> {
         let total_bytes = self.target.lock().unwrap().len() as u64;
         encode(&body(total_bytes), frames).expect("记录可编码")
@@ -224,7 +224,7 @@ fn record_path() -> PathBuf {
 fn body(total_bytes: u64) -> RecordBody {
     RecordBody {
         target: IDENTITY,
-        legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
+        length_generation: diskedit_core::record::length_generation(total_bytes),
         plan_digest: [0x11; 32],
     }
 }

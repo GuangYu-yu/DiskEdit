@@ -261,7 +261,7 @@ mod tests {
     fn body(total_bytes: u64) -> RecordBody {
         RecordBody {
             target: TARGET,
-            legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
+            length_generation: diskedit_core::record::length_generation(total_bytes),
             plan_digest: [0x11; 32],
         }
     }

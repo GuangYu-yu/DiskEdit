@@ -33,7 +33,7 @@ pub fn id_of(record: &DecodedRecord) -> String {
 
 use crate::fingerprint::Fingerprint;
 
-/// 记录载荷固定前缀的字节数：指纹、几何代次、计划摘要、前缀 CRC。
+/// 记录载荷固定前缀的字节数：指纹、长度代次、计划摘要、前缀 CRC。
 pub const BODY_LEN: usize = 32 + 8 + 32 + 4;
 
 /// 载荷声明长度上限，字节。
@@ -43,18 +43,19 @@ pub const MAX_PAYLOAD_BYTES: u32 = 16 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordBody {
     pub target: Fingerprint,
-    /// 几何代次：目标总字节数经 [`geometry_generation`] 展开的值。零表示记录不带
-    /// 几何证据，读到即按需要人工处理。
-    pub legacy_generation: u64,
+    /// 长度代次：目标总字节数经 [`length_generation`] 展开的值。零表示记录不带
+    /// 长度证据，读到即按需要人工处理。
+    pub length_generation: u64,
     pub plan_digest: [u8; 32],
 }
 
-/// 目标总字节数的几何代次。
+/// 目标总字节数的长度代次。
 ///
 /// 固定的 FNV-1a 把总字节数展开成 `u64` 后置最低位：结果恒为奇数，零保留给不
-/// 携带几何证据的记录。写入端存这个值，恢复端按当前目标长度重算并要求相等；
-/// 长度变了代次就变。
-pub fn geometry_generation(total_bytes: u64) -> u64 {
+/// 携带长度证据的记录。写入端存这个值，恢复端按当前目标长度重算并要求相等；
+/// 长度变了代次就变。它只覆盖容量：字节偏移的可用范围由长度决定，扇区尺寸不
+/// 参与比较。
+pub fn length_generation(total_bytes: u64) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = OFFSET;
@@ -73,7 +74,7 @@ mod tests {
         DecodedRecord {
             body: RecordBody {
                 target: Fingerprint::strong([0x11; 32]),
-                legacy_generation: 0,
+                length_generation: 0,
                 plan_digest,
             },
             frames: Vec::new(),

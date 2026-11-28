@@ -43,7 +43,7 @@ fn request(command: Command) -> Request {
 fn body(target: Fingerprint) -> RecordBody {
     RecordBody {
         target,
-        legacy_generation: 0,
+        length_generation: 0,
         plan_digest: [0x11; 32],
     }
 }
@@ -263,7 +263,7 @@ mod cli {
     fn body(target: Fingerprint) -> RecordBody {
         RecordBody {
             target,
-            legacy_generation: 0,
+            length_generation: 0,
             plan_digest: [0x11; 32],
         }
     }

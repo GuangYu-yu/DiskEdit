@@ -174,7 +174,7 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedRecord, RecordError> {
 pub fn encode_body(body: &RecordBody, out: &mut Vec<u8>) {
     let start = out.len();
     out.extend_from_slice(&body.target.bytes());
-    out.extend_from_slice(&body.legacy_generation.to_le_bytes());
+    out.extend_from_slice(&body.length_generation.to_le_bytes());
     out.extend_from_slice(&body.plan_digest);
     let crc = crc32(&out[start..]);
     out.extend_from_slice(&crc.to_le_bytes());
@@ -204,7 +204,7 @@ pub fn decode_body(payload: &[u8]) -> Result<RecordBody, RecordError> {
     plan_digest.copy_from_slice(&payload[40..72]);
     Ok(RecordBody {
         target: Fingerprint::strong(fingerprint),
-        legacy_generation: u64::from_le_bytes([
+        length_generation: u64::from_le_bytes([
             payload[32],
             payload[33],
             payload[34],
@@ -238,7 +238,7 @@ mod tests {
     fn body() -> RecordBody {
         RecordBody {
             target: Fingerprint::strong([0x42; 32]),
-            legacy_generation: 0,
+            length_generation: 0,
             plan_digest: [0x7e; 32],
         }
     }

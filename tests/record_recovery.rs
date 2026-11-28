@@ -20,7 +20,7 @@ use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::record::{
     Frame, FrameKind, ManualReason, RecordBody, RecoveryExpectation, RecoveryPlan, decode, encode,
-    geometry_generation, recover,
+    length_generation, recover,
 };
 use diskedit_core::region::Region;
 use diskedit_core::table::relocate::layout;
@@ -432,14 +432,14 @@ fn first_written_record() -> Vec<u8> {
 }
 
 #[test]
-fn a_written_record_carries_the_geometry_generation_of_the_target() {
+fn a_written_record_carries_the_length_generation_of_the_target() {
     let record = first_written_record();
     let decoded = decode(&record).expect("记录应可解码");
-    assert_ne!(decoded.body.legacy_generation, 0, "写入端不得留下零代次");
+    assert_ne!(decoded.body.length_generation, 0, "写入端不得留下零代次");
     assert_eq!(
-        decoded.body.legacy_generation,
-        geometry_generation(TOTAL),
-        "记录里的几何代次必须等于按目标总字节数算出的值"
+        decoded.body.length_generation,
+        length_generation(TOTAL),
+        "记录里的长度代次必须等于按目标总字节数算出的值"
     );
 }
 
@@ -457,7 +457,7 @@ fn a_record_whose_target_length_changed_is_refused() {
     let RecoveryPlan::NeedsManual { why } = plan else {
         panic!("长度改动后必须拒绝，实际：{plan:?}");
     };
-    assert_eq!(why, ManualReason::LegacyGeneration);
+    assert_eq!(why, ManualReason::GenerationMismatch);
 }
 
 #[test]
@@ -472,10 +472,10 @@ fn a_record_for_another_target_with_the_same_geometry_is_refused_by_identity() {
 }
 
 #[test]
-fn a_record_without_a_geometry_generation_is_not_replayed() {
+fn a_record_without_a_length_generation_is_not_replayed() {
     let body = RecordBody {
         target: IDENTITY,
-        legacy_generation: 0,
+        length_generation: 0,
         plan_digest: [0x11; 32],
     };
     let frames = [Frame {
@@ -495,5 +495,5 @@ fn a_record_without_a_geometry_generation_is_not_replayed() {
     let RecoveryPlan::NeedsManual { why } = plan else {
         panic!("代次为零的记录必须拒绝，实际：{plan:?}");
     };
-    assert_eq!(why, ManualReason::LegacyGeneration);
+    assert_eq!(why, ManualReason::GenerationMismatch);
 }

@@ -98,7 +98,9 @@ pub(crate) fn admit(plan: RecoveryPlan, discard_replay: bool, path: &str) -> Res
                 ),
             }),
             // 载荷前缀可读、目标身份已核对；能回放的区间数无从枚举。
-            ManualReason::PayloadCrc | ManualReason::Frames(_) | ManualReason::LegacyGeneration => {
+            ManualReason::PayloadCrc
+            | ManualReason::Frames(_)
+            | ManualReason::GenerationMismatch => {
                 if discard_replay {
                     Ok(())
                 } else {
@@ -183,7 +185,7 @@ mod tests {
     fn body(total_bytes: u64) -> RecordBody {
         RecordBody {
             target: TARGET,
-            legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
+            length_generation: diskedit_core::record::length_generation(total_bytes),
             plan_digest: [0x11; 32],
         }
     }
@@ -247,7 +249,7 @@ mod tests {
         // 记录自证属于别的载体：放弃也不能把它当作本目标的记录清掉。
         let other = RecordBody {
             target: Fingerprint::strong([0x99; 32]),
-            legacy_generation: 0,
+            length_generation: 0,
             plan_digest: [0x22; 32],
         };
         let frames = [frame(0, FrameKind::Intent, false, false, &[])];

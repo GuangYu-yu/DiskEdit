@@ -357,17 +357,28 @@ fn recovery_text_reports_the_possible_change_and_the_cause() {
 #[test]
 fn a_record_for_another_target_is_not_resumed() {
     use diskedit_core::fingerprint::Fingerprint;
-    use diskedit_core::record::{RecordBody, RecoveryPlan, encode, recover};
+    use diskedit_core::record::{
+        ManualReason, RecordBody, RecoveryExpectation, RecoveryPlan, encode, length_generation,
+        recover,
+    };
+    const TOTAL: u64 = 4 * 1024 * 1024;
     let body = RecordBody {
         target: Fingerprint::strong([0x11; 32]),
-        legacy_generation: 0,
+        length_generation: length_generation(TOTAL),
         plan_digest: [0u8; 32],
     };
     let bytes = encode(&body, &[]).expect("记录可编码");
-    let plan = recover(&bytes, Fingerprint::strong([0x22; 32]));
-    assert!(
-        matches!(plan, RecoveryPlan::NeedsManual { .. }),
-        "别人的记录不得续跑：{plan:?}"
+    let plan = recover(
+        &bytes,
+        RecoveryExpectation::new(Fingerprint::strong([0x22; 32]), TOTAL),
+    );
+    let RecoveryPlan::NeedsManual { why } = plan else {
+        panic!("别人的记录不得续跑：{plan:?}");
+    };
+    assert_eq!(
+        why,
+        ManualReason::DifferentTarget,
+        "身份不符必须归为别的目标，而不是笼统的人工处理"
     );
 }
 

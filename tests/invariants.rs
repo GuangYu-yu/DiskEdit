@@ -74,7 +74,7 @@ fn every_record_prefix_has_one_deterministic_recovery_plan() {
     let total_bytes = 4 * 1024 * 1024;
     let body = RecordBody {
         target,
-        legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
+        length_generation: diskedit_core::record::length_generation(total_bytes),
         plan_digest: [0x11; 32],
     };
     let frames = [

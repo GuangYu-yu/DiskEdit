@@ -45,10 +45,10 @@ jobs:
       - name: 安装 Zig（交叉链接器）
         uses: mlugg/setup-zig@v2
         with:
-          version: master
+          version: 0.17.0
       - name: 构建 release
         run: |
-          cargo install --locked cargo-zigbuild
+          cargo install --locked cargo-zigbuild --version 0.24.1
           cargo zigbuild --release --target ${{ matrix.entry.target }}
       - name: 打包
         run: |

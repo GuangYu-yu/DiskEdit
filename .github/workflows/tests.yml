@@ -7,7 +7,8 @@ name: 全量测试
 #   cargo-test    —— 非 root 的全部 Rust target
 #   root          —— 以 root 重跑全部 target：loop/mount/文件系统工具类用例
 #                    在 runner 用户下会静默跳过，必须用 euid 0 再跑一遍
-#   equivalence   —— 旧基线二进制对照（G7）：从 main-latest release 取旧版
+#   equivalence   —— 旧基线二进制对照（G7）：从 main-latest release 取旧版，
+#                    资产摘要固定；main-latest 被换成别的构建时这里直接失败
 #   qemu          —— 真实内核套件：QEMU 来宾里以 root 驱动 loop/挂载/LVM/mkfs
 on:
   workflow_dispatch:
@@ -23,7 +24,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo fmt --all --check
 
   cargo-test:
@@ -33,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --all-targets --all-features
 
   root:
     # 需要 losetup/mount 建真实文件系统的用例以 euid 0 为前置；runner 用户下
@@ -54,11 +55,13 @@ jobs:
           export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
           export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
           sudo env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" "RUSTUP_HOME=$RUSTUP_HOME" \
-            cargo test --workspace --all-targets -- --test-threads=1
+            cargo test --workspace --all-targets --all-features -- --test-threads=1
 
   equivalence:
-    # G7：旧基线二进制是行为 oracle。新版取自 main-latest release 资产，
-    # 对照前由 tests/equivalence.rs 的 legacy 适配层做新→旧命令行翻译。
+    # G7：旧基线二进制是行为 oracle。资产取自 main-latest release，摘要写死在
+    # 这里——main-latest 一旦被换成别的构建（例如把新实现发上去），对照会直接
+    # 失败而不是变成"新实现与自己比"。换基线是显式动作：改这里的两行。
+    # 新→旧命令行翻译由 tests/equivalence.rs 的 legacy 适配层完成。
     # 旧版 add 需要 loop 设备，故以 root 运行。
     name: 等价对照（旧基线二进制）
     runs-on: ubuntu-latest
@@ -67,11 +70,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: 下载旧基线二进制（main-latest）
+      - name: 下载旧基线二进制（main-latest，摘要固定）
         run: |
           mkdir -p /tmp/baseline
           url=https://github.com/GuangYu-yu/DiskEdit/releases/download/main-latest/DiskEdit_linux_amd64_GNU.tar.gz
+          digest=86a8c592a4ce942ea7f9d8408507f9084fd850a418cc90b82b23ec0fa3732003
           curl -fsSL -o /tmp/baseline/base.tgz "$url"
+          echo "$digest  /tmp/baseline/base.tgz" | sha256sum -c -
           tar xzf /tmp/baseline/base.tgz -C /tmp/baseline
           chmod +x /tmp/baseline/DiskEdit
           /tmp/baseline/DiskEdit --version

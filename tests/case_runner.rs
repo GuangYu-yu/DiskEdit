@@ -942,7 +942,7 @@ fn record_body(
 ) -> diskedit_core::record::RecordBody {
     diskedit_core::record::RecordBody {
         target,
-        legacy_generation: 0,
+        length_generation: 0,
         plan_digest: [0u8; 32],
     }
 }
