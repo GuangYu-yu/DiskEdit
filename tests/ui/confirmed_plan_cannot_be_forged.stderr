@@ -10,4 +10,4 @@ error: cannot construct `ConfirmedPlan` with struct literal syntax due to privat
 9 |         identity: Fingerprint::strong([0; 32]),
   |         -------------------------------------- private field
   |
-  = note: ...and other private field `request_digest` that was not provided
+  = note: ...and other private fields `request_digest` and `occupancy` that were not provided

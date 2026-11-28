@@ -237,7 +237,11 @@ impl Refusal {
             Self::IdentityChanged => {
                 "the target is not the object the plan was made for".to_owned()
             }
-            Self::PlanDigestMismatch => "the plan no longer matches its digest".to_owned(),
+            Self::PlanDigestMismatch => {
+                "the plan is not self-consistent: it is empty, repeats a step, or no longer matches \
+                 its digest"
+                    .to_owned()
+            }
             Self::OccupancyUnknown { why } => format!("usage of the target is unknown: {why}"),
             Self::Occupied { evidence } => format!("the target is in use: {evidence}"),
             Self::FactUnknown { what } => format!("a required fact is unknown: {what}"),

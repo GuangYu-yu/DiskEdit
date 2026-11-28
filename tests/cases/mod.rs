@@ -1,36 +1,6 @@
 //! 用例表：每条用例只描述输入与可观察结果，不复制实现细节。
 #![allow(dead_code)] // 不同测试二进制只消费其中一部分字段。
 
-// covers: R0046, R0049, R0050, R0052, R0054, R0055, R0057
-// covers: R0072, R0074, R0078, R0082, R0083, R0089, R0091, R0092
-// covers: R0130, R0131, R0132, R0133, R0134, R0135, R0136
-// covers: R0143, R0148, R0257, R0268, R0272, R0282, R0287
-// covers: R0155, R0157
-// covers: R0871, R0872
-// covers: R0108, R0109, R0110, R0112, R0113, R0114, R0115, R0116
-// covers: R0119, R0120, R0121, R0124, R0125, R0127, R0128, R0165
-// covers: R0166, R0167, R0168, R0170, R0171, R0172, R0173, R0174
-// covers: R0176, R0177, R0178, R0180, R0182, R0183, R0184, R0185
-// covers: R0187, R0188
-// covers: R0064, R0094, R0098
-// covers: R0060, R0061
-// covers: R0044, R0063, R0067, R0071, R0072, R0074, R0078, R0081
-// covers: R0082, R0083, R0085, R0086, R0088, R0089, R0091, R0092
-// covers: R0864, R0865
-// covers: R0861, R0096
-// covers: R0611, R0613, R0615, R0626, R0633, R0637
-// covers: R0645
-// covers: R0346, R0398, R0403, R0342, R0349, R0348, R0396, R0397
-// covers: R0401, R0402, R0417, R0418
-// covers: R0155, R0158, R0165, R0167, R0168, R0171, R0172, R0173
-// covers: R0174, R0176, R0177, R0178, R0180, R0187, R0192, R0203
-// covers: R0221
-// covers: R0542, R0584, R0586, R0870, R0958
-// covers: R0262, R0286, R0611, R0639
-// covers: R0069, R0075, R0076, R0077
-// covers: R0362, R0364, R0366, R0367, R0372, R0373, R0394, R0395
-// covers: R0374, R0375, R0376, R0383, R0414
-
 /// 一条命令行用例。
 pub struct Case {
     pub name: &'static str,
@@ -114,7 +84,6 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "unknown filesystem",
     },
-    // covers: D23
     Case {
         name: "resize --fs-only size only applies to the mountpoint form",
         argv: &[
@@ -212,7 +181,6 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "diskedit",
     },
-    // covers: D26
     Case {
         name: "add --dry-run previews the landing spot",
         argv: &["add", "target/fixtures/s1/gpt.img", "1M", "--dry-run"],
@@ -227,7 +195,6 @@ pub const CASES: &[Case] = &[
         stdout: "(dry run: no bytes were written)",
         stderr: "",
     },
-    // covers: D19
     Case {
         name: "layout rejects a non-power-of-two sector size",
         argv: &[
@@ -280,7 +247,6 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "refused:",
     },
-    // covers: D24
     Case {
         name: "records list --root needs a directory",
         argv: &["records", "list", "--root", "target/fixtures/s1/missing"],
@@ -666,7 +632,6 @@ pub const CASES: &[Case] = &[
         stdout: "",
         stderr: "unsupported:",
     },
-    // covers: D15
     Case {
         name: "set label on ext refuses an over-long label",
         argv: &[

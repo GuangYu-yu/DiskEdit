@@ -28,6 +28,45 @@ pub use refusal::Refusal;
 pub use report::Report;
 pub use step::{Access, PropertyValue, Step, StepKind};
 
+use crate::platform::{Occupancy, PartitionMount};
+
+/// 1 MiB 的字节数。
+pub(crate) const MIB: u64 = 1024 * 1024;
+
+/// 未给出 `--chunk` 时搬移/复制内容的块大小。
+pub(crate) const DEFAULT_CHUNK: u64 = 4 << 20;
+
+/// 计划期读到的一次占用现场。
+///
+/// `scope` 说明占用结论是按哪个对象探测的；`occupancy` 是当时的结论，其中
+/// [`Occupancy::Unknown`] 表示读不出，不是空闲。设备形态下另记所选分区的挂载与
+/// swap 现场，未涉及单个分区时为 `None`。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OccupancySnapshot {
+    pub scope: OccupancyScope,
+    pub occupancy: Occupancy,
+    pub partition: Option<PartitionUsage>,
+}
+
+/// 计划期占用结论的探测对象。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OccupancyScope {
+    /// 目标本身（整盘或镜像）。
+    Target,
+    /// 目标本身，按 LVM 收尾口径：DM 栈持有的 loop 不算占用。
+    TargetLvm,
+    /// 目标本身优先；其结论为空闲时取该分区的设备节点（PV 的分区级持有者）。
+    TargetThenPartition { number: u32 },
+}
+
+/// 计划期所选分区的挂载与 swap 现场。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartitionUsage {
+    pub number: u32,
+    pub mount: PartitionMount,
+    pub swap_active: bool,
+}
+
 /// 一次判定的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {

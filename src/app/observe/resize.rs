@@ -437,7 +437,7 @@ fn is_shrink_request(resize: &ResizeRequest, partition: &PartitionView) -> bool 
     }
 }
 
-/// 只读探针：最小块数 × 超级块块大小（与基线口径一致）。
+/// 只读探针：最小块数 × 超级块块大小。
 fn probe_min_bytes(
     platform: &dyn Platform,
     target: &TargetFacts,

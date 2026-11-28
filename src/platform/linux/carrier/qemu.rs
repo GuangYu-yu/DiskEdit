@@ -244,7 +244,6 @@ mod tests {
         )
     }
 
-    // covers: D7
     #[test]
     fn the_target_is_attached_as_virtio_blk_with_the_declared_sector() {
         let text = args(4096).join(" ");
@@ -258,7 +257,6 @@ mod tests {
         assert!(text.contains("diskedit.token=token"), "{text}");
     }
 
-    // covers: D7
     #[test]
     fn an_unsupported_sector_size_is_refused_before_launch() {
         assert!(check_sector(1024).is_err());
@@ -266,7 +264,6 @@ mod tests {
         assert!(check_sector(4096).is_ok());
     }
 
-    // covers: D7
     #[test]
     fn an_unknown_architecture_has_no_emulator() {
         assert!(emulator("riscv64").is_none());

@@ -276,8 +276,8 @@ pub fn record_paths(
     identity: diskedit_core::fingerprint::Fingerprint,
 ) -> Option<(PathBuf, PathBuf)> {
     let root = platform.state_root()?;
-    let directory = root.join("images").join(super::records::hex16(identity));
-    let file = directory.join(super::records::RECORD_FILE);
+    let directory = super::records::directory(&root, identity);
+    let file = super::records::record_file(&directory);
     Some((directory, file))
 }
 
@@ -295,14 +295,12 @@ mod tests {
         }
     }
 
-    // covers: I15
     #[test]
     fn a_record_that_cannot_be_read_is_not_reported_absent() {
         let state = record(None, Some("cannot read the record: permission denied"));
         assert_eq!(prior_state(&state), PriorState::Unreadable);
     }
 
-    // covers: I15
     #[test]
     fn a_target_with_no_record_file_is_absent() {
         let state = record(None, None);

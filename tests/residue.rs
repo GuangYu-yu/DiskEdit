@@ -1,8 +1,8 @@
-//! 残留检索：旧实现路径、临时标记与备份文件不得留在源码树里。
+//! 残留检索：不得留在源码树里的旧路径、临时标记与备份文件。
 
 use std::path::{Path, PathBuf};
 
-/// 已被纵切移出的旧路径；S9 之前不得以同名文件重新出现。
+/// 不得以同名文件重新出现的旧路径。
 const RETIRED: &[&str] = &[
     "src/app/carrier",
     "src/app/docsgen",
@@ -23,7 +23,7 @@ const MARKERS: &[&str] = &[
     "deprecated",
 ];
 
-/// 已改名的旧用法面 token；只对 CLI 源码（src/）做精确匹配。
+/// 不属于当前命令面的 token；只对 CLI 源码（src/）做精确匹配。
 ///
 /// 域概念词（recovery、identity、RecoverMode 等）不在禁词之列；`recover` 只禁
 /// 命令名字符串字面量与 `diskedit recover` 的消息引用，不禁纯核的 `recover`
@@ -90,7 +90,6 @@ fn no_backup_or_patch_files_are_left_behind() {
     }
 }
 
-// covers: D8
 #[test]
 fn cli_sources_have_no_retired_face_tokens() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

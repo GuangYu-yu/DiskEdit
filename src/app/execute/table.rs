@@ -8,12 +8,12 @@ use std::path::Path;
 
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
-use super::digest::read_region;
+use super::digest::{Digest, digest, read_region};
 use super::transaction::RecordSession;
 use super::{ExecError, FailureKind, Outcome, WriteChannel};
 use crate::app::decide::step::TableSegment;
-use crate::app::decide::{ConfirmedPlan, Step, StepKind};
-use crate::platform::{Platform, TargetHandle};
+use crate::app::decide::{ConfirmedPlan, OccupancyScope, Step, StepKind};
+use crate::platform::{Occupancy, Platform, PlatformResult, TargetHandle};
 
 /// 读原像与摘要时分段大小。
 const CHUNK: usize = 1 << 20;
@@ -49,6 +49,7 @@ pub(super) fn execute_plan(
             )
         })?;
     let (segment_size, stamp, segments) = table_parts(step)?;
+    occupancy_unchanged(platform, target, plan).map_err(|error| (error, false))?;
     match super::filesystem::ensure_block_capability(platform, target) {
         Ok(()) => {}
         Err(error @ ExecError::Unsupported(_)) if refresh => {
@@ -83,8 +84,8 @@ pub(super) fn execute_plan(
         ));
     }
 
-    let mut session =
-        RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
+    let mut session = RecordSession::prepare(platform, plan.identity(), handle.len())
+        .map_err(|error| (error, false))?;
     // 持锁后重探身份：计划指向的对象必须仍是当前对象。
     if !super::identity_still_matches(platform, target, plan.identity()) {
         return Err((
@@ -172,8 +173,8 @@ fn execute_via_carrier(
             false,
         ));
     }
-    let mut session =
-        RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
+    let mut session = RecordSession::prepare(platform, plan.identity(), handle.len())
+        .map_err(|error| (error, false))?;
     if !super::identity_still_matches(platform, target, plan.identity()) {
         return Err((
             ExecError::IdentityChanged("target identity changed after planning".to_owned()),
@@ -205,6 +206,12 @@ fn execute_via_carrier(
     if let Err(error) = carrier.write_disk(&request) {
         return Err((ExecError::from(error), true));
     }
+    // 来宾报成功不等于字节落到宿主目标：按已写分段逐区间回读，失败按已写待恢复。
+    let expected: Vec<(diskedit_core::region::Region, Digest)> = segments
+        .iter()
+        .map(|segment| (segment.region, digest(&segment.bytes)))
+        .collect();
+    super::write::verify_digests(handle.as_ref(), &expected).map_err(|error| (error, true))?;
     session.commit().map_err(|error| (error, true))?;
     match handle.refresh_partitions() {
         Ok(()) => Ok(Some(
@@ -214,6 +221,91 @@ fn execute_via_carrier(
         Err(error) => Ok(Some(format!(
             "the table is committed through the VM carrier but the host kernel view did not refresh: {error}"
         ))),
+    }
+}
+
+/// 写表前重探占用，并与计划期的快照逐项比对；任何差异都拒绝。
+///
+/// 计划不携带占用现场时没有可比对的项（不适用，例如纯文件系统计划）。占用读不
+/// 出来同样拒绝：不能证明目标空闲时不能写表。搬移/复制在自己的写表步之前也调用
+/// 这里，两条写路径共用同一份判据与探测口径。
+pub(super) fn occupancy_unchanged(
+    platform: &dyn Platform,
+    target: &Path,
+    plan: &ConfirmedPlan,
+) -> Result<(), ExecError> {
+    let Some(snapshot) = plan.occupancy() else {
+        return Ok(());
+    };
+    let observed = reprobe(platform, target, snapshot.scope.clone()).map_err(|error| {
+        ExecError::IdentityChanged(format!("the target's usage could not be probed: {error}"))
+    })?;
+    if observed != snapshot.occupancy {
+        return Err(ExecError::IdentityChanged(format!(
+            "the target's usage changed after planning: {}, now {}",
+            usage_summary(&snapshot.occupancy),
+            usage_summary(&observed)
+        )));
+    }
+    let Some(partition) = &snapshot.partition else {
+        return Ok(());
+    };
+    let mount = platform
+        .partition_mount(target, partition.number)
+        .map_err(|error| {
+            ExecError::IdentityChanged(format!(
+                "partition #{} usage could not be probed: {error}",
+                partition.number
+            ))
+        })?;
+    if mount != partition.mount {
+        return Err(ExecError::IdentityChanged(format!(
+            "partition #{} mount changed after planning",
+            partition.number
+        )));
+    }
+    let swap_active = platform
+        .swap_active(target, partition.number)
+        .map_err(|error| {
+            ExecError::IdentityChanged(format!(
+                "partition #{} swap usage could not be probed: {error}",
+                partition.number
+            ))
+        })?;
+    if swap_active != partition.swap_active {
+        return Err(ExecError::IdentityChanged(format!(
+            "partition #{} swap usage changed after planning",
+            partition.number
+        )));
+    }
+    Ok(())
+}
+
+/// 按计划记录的口径重新探测整目标占用。
+fn reprobe(
+    platform: &dyn Platform,
+    target: &Path,
+    scope: OccupancyScope,
+) -> PlatformResult<Occupancy> {
+    match scope {
+        OccupancyScope::Target => platform.occupancy(target),
+        OccupancyScope::TargetLvm => platform.occupancy_for_lvm(target),
+        OccupancyScope::TargetThenPartition { number } => {
+            let base = platform.occupancy_for_lvm(target)?;
+            if !matches!(base, Occupancy::Idle) {
+                return Ok(base);
+            }
+            let device = platform.partition_device(target, number)?;
+            platform.occupancy(&device)
+        }
+    }
+}
+
+fn usage_summary(occupancy: &Occupancy) -> String {
+    match occupancy {
+        Occupancy::Idle => "idle".to_owned(),
+        Occupancy::Used { evidence } => format!("in use ({evidence})"),
+        Occupancy::Unknown { why } => format!("unknown ({why})"),
     }
 }
 

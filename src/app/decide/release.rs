@@ -1,9 +1,10 @@
 //! `release` 的判定：放弃回滚，只产出外部状态计划，不写目标字节。
 //!
-//! 闸门与 `undo` 共用（B22）；记录分类按 B8 / D2 的口径：外来格式或损坏载荷
-//! 仍可放弃，但放弃可回放区间需要 `--discard-replay` 明说。
+//! 闸门与 `undo` 共用。放弃之前还要过四道准入：目标身份与记录声明的
+//! 身份一致、布局归属可确认、记录状态允许放弃、记录可完整解码。能确认是外来
+//! 布局的记录仍可显式释放；头部或载荷前缀读不出来时归属无从证明，拒绝动它。
 
-use diskedit_core::record::{Frame, RecoveryPlan};
+use diskedit_core::record::{Frame, ManualReason, RecoveryExpectation, RecoveryPlan};
 
 use crate::app::observe::{Command, RecoverMode, RecoverSnapshot, Request};
 
@@ -23,17 +24,24 @@ pub fn decide(snapshot: &RecoverSnapshot, request: &Request) -> Decision {
         Ok(identity) => identity,
         Err(refusal) => return Decision::Refuse(refusal),
     };
-    // 放弃对没有记录的目标是成功空操作。
+    // 只有确认没有记录时，放弃才是成功空操作。
+    let path = record_path(snapshot);
     let Some(bytes) = snapshot.record.bytes.as_deref() else {
-        return Decision::Unchanged {
-            note: format!(
-                "no recovery record on {} — nothing to release",
-                snapshot.target.display
-            ),
+        return match snapshot.record.unavailable.as_deref() {
+            Some(_) => Decision::Refuse(Refusal::RecordUnreadable { path }),
+            None => Decision::Unchanged {
+                note: format!(
+                    "no recovery record on {} — nothing to release",
+                    snapshot.target.display
+                ),
+            },
         };
     };
-    let plan = diskedit_core::record::recover(bytes, identity);
-    release(plan, discard_replay, identity, &record_path(snapshot))
+    let plan = diskedit_core::record::recover(
+        bytes,
+        RecoveryExpectation::new(identity, snapshot.target.bytes),
+    );
+    release(plan, discard_replay, identity, &path)
 }
 
 /// 放弃回滚：只建外部状态计划，目标字节不变。
@@ -43,35 +51,66 @@ fn release(
     identity: diskedit_core::fingerprint::Fingerprint,
     path: &str,
 ) -> Decision {
-    match &plan {
-        RecoveryPlan::Absent => Decision::Unchanged {
-            note: "no recovery record on the target — nothing to release".to_owned(),
-        },
-        RecoveryPlan::NeedsManual { why } if why.contains("different device") => {
-            Decision::Refuse(Refusal::RecoveryRefused {
-                why: format!("the record at {path} belongs to a different target: {why}"),
-            })
-        }
-        // 外来格式或损坏载荷仍可放弃：B8 只看对象与归属，不看载荷完好；
-        // D2 把旧版在途记录的处理权交给人的显式放弃。
-        RecoveryPlan::Foreign { .. } | RecoveryPlan::NeedsManual { .. } => {
-            external_release(identity, RecoverMode::Release { discard_replay })
-        }
+    match admit(plan, discard_replay, path) {
+        Ok(()) => external_release(identity, RecoverMode::Release { discard_replay }),
+        Err(refusal) => Decision::Refuse(refusal),
+    }
+}
+
+/// 释放的四道准入；判定层与执行层共用这一份判据。
+///
+/// - 身份：记录声明属于别的目标时拒绝，不替它清掉回滚凭据；
+/// - 归属：头部或载荷前缀读不出来时无法确认布局归属，拒绝；
+/// - 状态：仍能回放的区间、或已无法枚举的区间，需要显式 `--discard-replay`；
+/// - 解码：能确认是本实现的布局、只是载荷不完整时，按上述状态闸处理。
+pub(crate) fn admit(plan: RecoveryPlan, discard_replay: bool, path: &str) -> Result<(), Refusal> {
+    match plan {
+        // 记录文件为空：既没有可读的标识，也没有可读的目标身份。
+        RecoveryPlan::Absent => Err(Refusal::RecordDamaged {
+            why: format!("the record at {path} is empty — its layout and target cannot be read"),
+        }),
+        RecoveryPlan::Committed => Ok(()),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
-            let replayable = replayable_ranges(frames);
+            let replayable = replayable_ranges(&frames);
             if replayable > 0 && !discard_replay {
-                return Decision::Refuse(Refusal::RecoveryRefused {
+                return Err(Refusal::RecoveryRefused {
                     why: format!(
                         "the record still holds {replayable} replayable range(s); pass \
                          --discard-replay to give them up"
                     ),
                 });
             }
-            external_release(identity, RecoverMode::Release { discard_replay })
+            Ok(())
         }
-        RecoveryPlan::Committed => {
-            external_release(identity, RecoverMode::Release { discard_replay })
-        }
+        // 外来说明本实现不读其载荷；布局由标识确认，显式释放仍然允许。
+        RecoveryPlan::Foreign { .. } => Ok(()),
+        RecoveryPlan::NeedsManual { why } => match why {
+            ManualReason::DifferentTarget => Err(Refusal::RecordForeign {
+                why: format!("the record at {path} belongs to a different target: {why}"),
+            }),
+            ManualReason::HeaderCrc
+            | ManualReason::ShortHeader { .. }
+            | ManualReason::PayloadTooLarge(_)
+            | ManualReason::ExcessBytes(_)
+            | ManualReason::BodyCrc => Err(Refusal::RecordDamaged {
+                why: format!(
+                    "the record at {path} cannot be read as this implementation's layout: {why}"
+                ),
+            }),
+            // 载荷前缀可读、目标身份已核对；能回放的区间数无从枚举。
+            ManualReason::PayloadCrc | ManualReason::Frames(_) | ManualReason::LegacyGeneration => {
+                if discard_replay {
+                    Ok(())
+                } else {
+                    Err(Refusal::RecoveryRefused {
+                        why: format!(
+                            "the record at {path} is not fully readable, so the ranges it could \
+                             still replay are unknown; pass --discard-replay to give them up"
+                        ),
+                    })
+                }
+            }
+        },
     }
 }
 
@@ -104,6 +143,7 @@ mod tests {
     use diskedit_core::record::{FrameKind, Preimage, RecordBody, encode};
 
     use super::*;
+    use crate::app::decide::MIB;
     use crate::app::observe::TargetFacts;
     use crate::app::observe::records::RecordState;
     use crate::platform::{Occupancy, TargetKind};
@@ -115,7 +155,7 @@ mod tests {
             target: TargetFacts {
                 display: "disk.img".to_owned(),
                 path: "disk.img".into(),
-                bytes: 1 << 20,
+                bytes: MIB,
                 kind: TargetKind::File,
                 sector_size: 512,
                 identity: Some(TARGET),
@@ -140,10 +180,10 @@ mod tests {
         .with_confirmation(true)
     }
 
-    fn body() -> RecordBody {
+    fn body(total_bytes: u64) -> RecordBody {
         RecordBody {
             target: TARGET,
-            geometry_generation: 1,
+            legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
             plan_digest: [0x11; 32],
         }
     }
@@ -169,14 +209,13 @@ mod tests {
         }
     }
 
-    // covers: B8
     #[test]
     fn releasing_a_replayable_record_needs_discard() {
         let frames = [
             frame(0, FrameKind::Intent, false, false, &[]),
             frame(1, FrameKind::Preimage, true, false, &[0xAA; 4]),
         ];
-        let bytes = encode(&body(), &frames).unwrap();
+        let bytes = encode(&body(MIB), &frames).unwrap();
         let refused = decide(
             &snapshot(Some(bytes.clone()), Occupancy::Idle),
             &request(Command::Release {
@@ -203,13 +242,12 @@ mod tests {
         }
     }
 
-    // covers: I5
     #[test]
     fn releasing_a_record_for_another_target_is_refused() {
         // 记录自证属于别的载体：放弃也不能把它当作本目标的记录清掉。
         let other = RecordBody {
             target: Fingerprint::strong([0x99; 32]),
-            geometry_generation: 1,
+            legacy_generation: 0,
             plan_digest: [0x22; 32],
         };
         let frames = [frame(0, FrameKind::Intent, false, false, &[])];
@@ -221,7 +259,7 @@ mod tests {
             }),
         );
         match decision {
-            Decision::Refuse(Refusal::RecoveryRefused { why }) => {
+            Decision::Refuse(Refusal::RecordForeign { why }) => {
                 assert!(why.contains("different target"), "{why}");
             }
             other @ (Decision::Report { .. }

@@ -1,9 +1,8 @@
 //! 故障注入：用内存宿主驱动搬移执行器，覆盖写/刷盘/回读/记录落盘的失败分支。
 //!
-//! 新版把全部目标写入收进唯一写通道（`app::execute::write`），搬移执行器
+//! 全部目标写入收进唯一写通道（`app::execute::write`），搬移执行器
 //! （`app::execute::relocate`）在其上先后做数据步与表步。这里用可注入失败的
-//! 内存宿主把旧版 `execution/relocate.rs`、`execution/table.rs` 的构造点接到
-//! 同一批失败面：写前失败落 4，写过之后的失败落 5。
+//! 内存宿主覆盖同一批失败面：写前失败落 4，写过之后的失败落 5。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,7 +23,7 @@ use diskedit::platform::{
 };
 use diskedit_core::evidence::{Generation, Observation, Source};
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{FrameKind, RecoveryPlan, decode, recover};
+use diskedit_core::record::{FrameKind, RecoveryExpectation, RecoveryPlan, decode, recover};
 use diskedit_core::region::Region;
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
@@ -161,6 +160,16 @@ impl Memory {
             faults: Arc::new(faults),
             counts: Arc::new(Counts::default()),
             sector: Some(sector),
+            ..Self::new(Vec::new(), Faults::default())
+        }
+    }
+
+    /// 以"块设备但内核没回报逻辑扇区尺寸"的形态回报：没有任何可信的块大小。
+    fn block_device_without_sector(bytes: Vec<u8>) -> Self {
+        Self {
+            target: Arc::new(Mutex::new(bytes)),
+            kind: TargetKind::BlockDevice,
+            sector: None,
             ..Self::new(Vec::new(), Faults::default())
         }
     }
@@ -373,13 +382,12 @@ fn assert_partial(outcome: &Outcome, what: &str) {
     assert_eq!(exit_of(outcome), PARTIAL, "{what}");
 }
 
-// covers: I4
 #[test]
 fn a_step_cannot_mint_a_second_write_token() {
     use diskedit::app::execute::transaction::RecordSession;
 
     let memory = Memory::new(initial_bytes(), Faults::default());
-    let mut session = RecordSession::prepare(&memory, IDENTITY).expect("记录会话");
+    let mut session = RecordSession::prepare(&memory, IDENTITY, TOTAL).expect("记录会话");
     let region = Region::sized(0, SECTOR).expect("区间");
     session.token(7, &[region]).expect("首枚令牌");
     let error = session
@@ -391,7 +399,6 @@ fn a_step_cannot_mint_a_second_write_token() {
     );
 }
 
-// covers: R0577
 #[test]
 fn a_failed_source_read_changes_nothing_and_reports_no_mutation() {
     // 前三次读取用于写前表戳（首/次/末扇区），第四次是数据步的源读。
@@ -410,7 +417,6 @@ fn a_failed_source_read_changes_nothing_and_reports_no_mutation() {
     assert_eq!(*memory.target.lock().unwrap(), initial_bytes());
 }
 
-// covers: R0578
 #[test]
 fn a_write_failure_after_the_first_block_reports_partial() {
     // 第一块写完（目标已被改过），第二块写失败：应报待恢复。
@@ -421,7 +427,6 @@ fn a_write_failure_after_the_first_block_reports_partial() {
     assert_partial(&outcome, "数据写入失败");
 }
 
-// covers: R0579, R0580, R0581
 #[test]
 fn a_failed_data_flush_reports_partial() {
     let (outcome, _memory) = run(Faults {
@@ -431,7 +436,6 @@ fn a_failed_data_flush_reports_partial() {
     assert_partial(&outcome, "数据刷盘失败");
 }
 
-// covers: R0582
 #[test]
 fn data_that_does_not_read_back_reports_partial() {
     let (outcome, _memory) = run(Faults {
@@ -441,7 +445,6 @@ fn data_that_does_not_read_back_reports_partial() {
     assert_partial(&outcome, "回读不符");
 }
 
-// covers: R0583
 #[test]
 fn a_failed_progress_checkpoint_reports_partial() {
     // 第一次状态写入是意图帧；第二次是数据块的进度帧。
@@ -452,7 +455,6 @@ fn a_failed_progress_checkpoint_reports_partial() {
     assert_partial(&outcome, "进度记录落盘失败");
 }
 
-// covers: R0591, R0883
 #[test]
 fn a_failed_table_write_after_the_move_reports_partial() {
     // 前两次写入是数据块，第三次是表写。
@@ -463,7 +465,6 @@ fn a_failed_table_write_after_the_move_reports_partial() {
     assert_partial(&outcome, "表写失败");
 }
 
-// covers: R0593, R0884
 #[test]
 fn a_failed_table_flush_reports_partial() {
     // 第一次刷盘是数据步，第二次是表步。
@@ -474,7 +475,6 @@ fn a_failed_table_flush_reports_partial() {
     assert_partial(&outcome, "表刷盘失败");
 }
 
-// covers: R0886
 #[test]
 fn a_table_that_changes_after_the_write_reports_partial() {
     // 第三次写是表步；写入声称成功但盘面被外力改掉：回读核对必须发现摘要不符，
@@ -504,7 +504,6 @@ fn read_record(memory: &Memory) -> Vec<u8> {
         .expect("失败后记录必须保留")
 }
 
-// covers: B6
 #[test]
 fn a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source() {
     // 第二块写失败：数据步已写过第一块，记录里只应有意图帧与进度帧，
@@ -531,7 +530,6 @@ fn a_relocation_interruption_leaves_only_table_preimages_and_keeps_old_source() 
     assert_eq!(&target[1024..3072], &initial[1024..3072], "旧源区不得清零");
 }
 
-// covers: B16
 #[test]
 fn the_table_preimage_is_recorded_before_the_table_write() {
     // 第三次写是表步：写失败时记录里必须已经有覆盖表区间的原像帧。
@@ -586,7 +584,6 @@ fn weak_block_bytes() -> Vec<u8> {
     bytes
 }
 
-// covers: I2, I5, D25
 #[test]
 fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed() {
     // 块设备没有 WWN/EUI/可重复序列号时，`--alias NAME` 就是它的身份。确认阶段
@@ -609,9 +606,6 @@ fn a_write_naming_its_own_identity_on_an_unidentified_block_device_is_confirmed(
     assert_eq!(code, SUCCESS, "带声明身份的块设备写入应确认并执行");
 }
 
-// covers: R0004, R0014, R0018, R0021, R0023, R0024, R0026, R0029
-// covers: R0036
-// covers: B1, B19
 #[test]
 fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
     // 内核回报 520 字节扇区（不在 512..=65536 的 2 的幂集合内）：全部 LBA 换算失去
@@ -621,7 +615,15 @@ fn a_target_with_an_unsupported_sector_size_is_refused_as_unsupported() {
     assert_eq!(code, UNSUPPORTED, "集合外扇区尺寸应按 unsupported 拒绝");
 }
 
-// covers: D10
+#[test]
+fn a_block_device_without_a_reported_sector_size_is_refused() {
+    // 块设备读不出逻辑扇区尺寸时没有可信的块大小；镜像的 512 回退不适用于块设备，
+    // 按拒绝处理而不是猜一个值继续算 LBA。
+    let memory = Memory::block_device_without_sector(vec![0u8; 8192]);
+    let code = dispatch(&memory, &["diskedit", "layout", "memory"]);
+    assert_eq!(code, REFUSED, "缺扇区尺寸的块设备必须拒绝");
+}
+
 #[test]
 fn a_host_without_a_backend_refuses_with_the_unsupported_code() {
     // 未接入的宿主端口对每个能力都返回不支持；上层必须落 6，而不是当作目标拒绝。
@@ -653,7 +655,6 @@ fn table_only_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
     confirm(plan, true, &current).expect("计划可确认")
 }
 
-// covers: R0042, R0043
 #[test]
 fn a_target_that_changed_since_the_plan_is_not_written() {
     // 计划确认后盘面被外力改动：表区摘要不再一致，复用该计划必须按"未写"拒绝，
@@ -667,7 +668,6 @@ fn a_target_that_changed_since_the_plan_is_not_written() {
     assert_eq!(exit_of(&outcome), REFUSED);
 }
 
-// covers: R0958
 #[test]
 fn a_target_smaller_than_one_sector_is_refused_before_writing() {
     let bytes = initial_bytes();
@@ -678,7 +678,6 @@ fn a_target_smaller_than_one_sector_is_refused_before_writing() {
     assert_eq!(exit_of(&outcome), ENVIRONMENT);
 }
 
-// covers: R0536
 #[test]
 fn a_plan_without_a_table_write_step_never_touches_the_target() {
     let step = Step::new(StepKind::Inspect, Vec::new());
@@ -696,7 +695,6 @@ fn a_plan_without_a_table_write_step_never_touches_the_target() {
     );
 }
 
-// covers: I15
 #[test]
 fn a_record_that_cannot_be_read_is_an_environment_failure() {
     // 记录目录里有一条以记录文件命名的条目，但读取失败：不能当作"没有记录"
@@ -708,7 +706,6 @@ fn a_record_that_cannot_be_read_is_an_environment_failure() {
     assert_eq!(code, ENVIRONMENT, "读取记录失败必须按环境失败上报");
 }
 
-// covers: I15
 #[test]
 fn an_identity_that_cannot_be_read_is_not_reported_as_no_identity() {
     // 身份探测读失败不能折成"这个目标没有身份"：那会让 `--alias` 变成兜底，
@@ -719,7 +716,6 @@ fn an_identity_that_cannot_be_read_is_not_reported_as_no_identity() {
     assert_eq!(code, REFUSED, "身份读失败必须拒绝，不能当作没有身份");
 }
 
-// covers: I14
 #[test]
 fn a_grow_chain_naming_a_smaller_target_than_its_recorded_size_is_invalid() {
     // 决策层只会产出变大的 PV 尺寸。执行边界若看到 new < old，计划就自相矛盾：
@@ -752,7 +748,6 @@ fn a_grow_chain_naming_a_smaller_target_than_its_recorded_size_is_invalid() {
     );
 }
 
-// covers: F1
 #[test]
 fn a_commit_that_cannot_clear_its_record_leaves_a_terminal_record() {
     // 提交先写终态帧、再删除记录。若在两者之间崩溃，盘上的记录必须自证"已提交"，
@@ -779,13 +774,12 @@ fn a_commit_that_cannot_clear_its_record_leaves_a_terminal_record() {
         .cloned()
         .expect("清理失败后记录应留在原处");
     assert_eq!(
-        recover(&record, IDENTITY),
+        recover(&record, RecoveryExpectation::new(IDENTITY, TOTAL)),
         RecoveryPlan::Committed,
         "删除记录前盘上必须已经是完整的已提交记录"
     );
 }
 
-// covers: F8
 #[test]
 fn a_pending_record_for_another_target_is_not_adopted() {
     // 记录目录按身份派生，但记录本身的 `body.target` 仍可能指向别的载体（例如
@@ -797,7 +791,7 @@ fn a_pending_record_for_another_target_is_not_adopted() {
     let record = diskedit_core::record::encode(
         &diskedit_core::record::RecordBody {
             target: Fingerprint::strong([0x99; 32]),
-            geometry_generation: 0,
+            legacy_generation: 0,
             plan_digest: plan.request_digest(),
         },
         &[diskedit_core::record::Frame {
@@ -850,7 +844,6 @@ fn resume_spec() -> Vec<u8> {
     out
 }
 
-// covers: B24
 #[test]
 fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
     let bytes = initial_bytes();
@@ -862,7 +855,7 @@ fn a_resumed_move_with_a_mismatched_prefix_is_refused_without_writing() {
     let record = diskedit_core::record::encode(
         &diskedit_core::record::RecordBody {
             target: IDENTITY,
-            geometry_generation: 0,
+            legacy_generation: 0,
             plan_digest: plan.digest(),
         },
         &[

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use diskedit_core::fingerprint::Fingerprint;
 use diskedit_core::record::{
-    self, Frame, FrameKind, Preimage, RecordBody, frame::PREIMAGE_DIGEST_BYTES,
+    self, Frame, FrameKind, Preimage, RecordBody, frame::PREIMAGE_DIGEST_BYTES, geometry_generation,
 };
 use diskedit_core::region::Region;
 
@@ -20,7 +20,7 @@ use crate::platform::{Platform, StateLock};
 
 mod relocate_session;
 
-pub(crate) use relocate_session::Session as RelocateSession;
+pub(crate) use relocate_session::{Commit, Session as RelocateSession};
 
 /// 记录目录里的锁文件名。
 pub const LOCK_FILE: &str = "record.lock";
@@ -65,6 +65,8 @@ pub struct RecordSession<'a> {
     minted: Vec<u64>,
     /// 本次事务绑定的目标身份，同时用于记录载荷与目录定位。
     bound: Fingerprint,
+    /// 本次事务看到的目标总字节数展开出的几何代次。
+    geometry: u64,
     /// 已有的未终结记录所绑定的摘要。
     pending: Option<[u8; 32]>,
     /// 复用的记录已有这么多帧。
@@ -74,7 +76,11 @@ pub struct RecordSession<'a> {
 
 impl<'a> RecordSession<'a> {
     /// 取目标记录目录的独占锁，并读出仍在进行中的记录（若有）。
-    pub fn prepare(platform: &'a dyn Platform, identity: Fingerprint) -> Result<Self, ExecError> {
+    pub fn prepare(
+        platform: &'a dyn Platform,
+        identity: Fingerprint,
+        total_bytes: u64,
+    ) -> Result<Self, ExecError> {
         let root = platform
             .state_root()
             .ok_or_else(|| ExecError::Record("the host has no state directory".to_owned()))?;
@@ -121,6 +127,7 @@ impl<'a> RecordSession<'a> {
             session: SessionId::next(),
             minted: Vec::new(),
             bound: identity,
+            geometry: geometry_generation(total_bytes),
             pending,
             sequence,
             registered: false,
@@ -149,7 +156,7 @@ impl<'a> RecordSession<'a> {
         }
         let body = RecordBody {
             target: self.identity(),
-            geometry_generation: 0,
+            legacy_generation: self.geometry,
             plan_digest,
         };
         let frames = [
@@ -179,6 +186,9 @@ impl<'a> RecordSession<'a> {
             .write_record(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.sequence = 2;
+        // 记录此刻已经落盘：后续步骤再登记原像时，当前字节已是本事务写过的样子，
+        // 必须复用这条记录，不能拿它覆盖掉更早的原像。
+        self.pending = Some(plan_digest);
         self.registered = true;
         Ok(())
     }
@@ -203,7 +213,7 @@ impl<'a> RecordSession<'a> {
         }
         let body = RecordBody {
             target: self.identity(),
-            geometry_generation: 0,
+            legacy_generation: self.geometry,
             plan_digest,
         };
         let frames = [Frame {
@@ -220,6 +230,7 @@ impl<'a> RecordSession<'a> {
             .write_record(&self.file, &encoded)
             .map_err(ExecError::from)?;
         self.sequence = 1;
+        self.pending = Some(plan_digest);
         self.registered = true;
         Ok(())
     }
@@ -332,9 +343,336 @@ fn preimage(region: Region, before: &[u8], after: &[u8]) -> Preimage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    // covers: I4
+    use diskedit_core::record::{RecoveryExpectation, RecoveryPlan, recover};
+
+    use super::*;
+    use crate::platform::{
+        LoopBinding, Occupancy, PlatformError, PlatformResult, RecordEntry, StateLock,
+        TargetHandle, TargetKind, ToolRun,
+    };
+
+    const IDENTITY: Fingerprint = Fingerprint::strong([0x42; 32]);
+    /// 测试里记录会话看到的目标总字节数。
+    const TOTAL_BYTES: u64 = 1 << 20;
+
+    /// 记录目录里的记录文件位置，与 [`RecordSession::prepare`] 拼出的路径一致。
+    fn record_path() -> PathBuf {
+        PathBuf::from("/state")
+            .join("images")
+            .join(hex16(IDENTITY))
+            .join(RECORD_FILE)
+    }
+
+    struct Lock;
+
+    impl StateLock for Lock {}
+
+    /// 只实现记录位置读写的宿主；其余端口显式失败，不假装成功。
+    #[derive(Default)]
+    struct Memory {
+        files: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+        /// 置位后下一次记录写入失败，随后自动复位。
+        fail_next_write: AtomicBool,
+        /// 置位后下一次记录删除失败，随后自动复位。
+        fail_next_remove: AtomicBool,
+    }
+
+    impl Memory {
+        fn bytes(&self) -> Vec<u8> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(&record_path())
+                .cloned()
+                .expect("记录必须留在记录位置")
+        }
+
+        fn has_record(&self) -> bool {
+            self.files.lock().unwrap().contains_key(&record_path())
+        }
+    }
+
+    impl Platform for Memory {
+        fn open_target(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
+            Err(PlatformError::not_supported("no target handle"))
+        }
+        fn open_target_read_only(&self, _path: &Path) -> PlatformResult<Box<dyn TargetHandle>> {
+            Err(PlatformError::not_supported("no target handle"))
+        }
+        fn path_kind(&self, _path: &Path) -> TargetKind {
+            TargetKind::Other
+        }
+        fn is_partition_node(&self, _path: &Path) -> bool {
+            false
+        }
+        fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
+            Ok(IDENTITY)
+        }
+        fn occupancy(&self, _path: &Path) -> PlatformResult<Occupancy> {
+            Ok(Occupancy::Idle)
+        }
+        fn state_root(&self) -> Option<PathBuf> {
+            Some(PathBuf::from("/state"))
+        }
+        fn is_directory(&self, _path: &Path) -> bool {
+            true
+        }
+        fn list_record_entries(&self, _root: &Path, _name: &str) -> PlatformResult<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+        fn read_record(&self, path: &Path) -> PlatformResult<RecordEntry> {
+            Ok(match self.files.lock().unwrap().get(path).cloned() {
+                Some(bytes) => RecordEntry::Contents(bytes),
+                None => RecordEntry::Absent,
+            })
+        }
+        fn write_record(&self, path: &Path, bytes: &[u8]) -> PlatformResult<()> {
+            if self.fail_next_write.swap(false, Ordering::SeqCst) {
+                return Err(PlatformError::parse("injected record write failure"));
+            }
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), bytes.to_vec());
+            Ok(())
+        }
+        fn remove_record(&self, path: &Path) -> PlatformResult<()> {
+            if self.fail_next_remove.swap(false, Ordering::SeqCst) {
+                return Err(PlatformError::parse("injected record removal failure"));
+            }
+            self.files.lock().unwrap().remove(path);
+            Ok(())
+        }
+        fn rename_record(&self, from: &Path, to: &Path) -> PlatformResult<()> {
+            let mut files = self.files.lock().unwrap();
+            if let Some(bytes) = files.remove(from) {
+                files.insert(to.to_path_buf(), bytes);
+            }
+            Ok(())
+        }
+        fn run(
+            &self,
+            _program: diskedit_core::fs::Program,
+            _args: &[String],
+        ) -> PlatformResult<ToolRun> {
+            Err(PlatformError::not_supported("no tools"))
+        }
+        fn tool_available(&self, _program: diskedit_core::fs::Program) -> bool {
+            false
+        }
+        fn tool_name(&self, _program: diskedit_core::fs::Program) -> &'static str {
+            "unavailable"
+        }
+        fn bind_loop(&self, _path: &Path, _offset: u64, _len: u64) -> PlatformResult<LoopBinding> {
+            Err(PlatformError::not_supported("no loop"))
+        }
+        fn partition_device(&self, _disk: &Path, _number: u32) -> PlatformResult<PathBuf> {
+            Err(PlatformError::not_supported("no partitions"))
+        }
+        fn entropy(&self, len: usize) -> PlatformResult<Vec<u8>> {
+            Ok(vec![0u8; len])
+        }
+        fn create_directory_all(&self, _path: &Path) -> PlatformResult<()> {
+            Ok(())
+        }
+        fn remove_directory(&self, _path: &Path) -> PlatformResult<()> {
+            Ok(())
+        }
+        fn temporary_directory(&self, _tag: &str) -> PlatformResult<PathBuf> {
+            Err(PlatformError::not_supported("no temp"))
+        }
+        fn lock_state(&self, _path: &Path) -> PlatformResult<Box<dyn StateLock>> {
+            Ok(Box::new(Lock))
+        }
+    }
+
+    fn segments(
+        region: Region,
+        before: Vec<u8>,
+        after: Vec<u8>,
+    ) -> Vec<(Region, Vec<u8>, Vec<u8>)> {
+        vec![(region, before, after)]
+    }
+
+    #[test]
+    fn a_second_registration_keeps_the_earlier_preimage() {
+        // 同一计划的第二个写步骤再次登记原像时，当前字节已经是第一次写后的样子。
+        // 记录里的原像必须仍是第一次写之前的字节，否则回滚只能退到第一次写之后。
+        let memory = Memory::default();
+        let plan = [0x11u8; 32];
+        let region = Region::sized(0, 512).expect("区间");
+        let original = vec![0xAAu8; 512];
+        let written = vec![0xBBu8; 512];
+        let mut session =
+            RecordSession::prepare(&memory, IDENTITY, TOTAL_BYTES).expect("准备应成立");
+        session
+            .register(plan, &segments(region, original.clone(), written.clone()))
+            .expect("首次登记应成立");
+        let first = memory.bytes();
+
+        session
+            .register(plan, &segments(region, written, vec![0xCCu8; 512]))
+            .expect("同计划续跑登记应成立");
+        assert_eq!(
+            memory.bytes(),
+            first,
+            "同计划的第二次登记不得改写已经落盘的原像"
+        );
+
+        let decoded = record::decode(&first).expect("记录应可解码");
+        let stored = decoded
+            .frames
+            .iter()
+            .flat_map(|frame| &frame.regions)
+            .find(|preimage| preimage.offset == 0)
+            .expect("记录里应有覆盖该区间的原像");
+        assert_eq!(stored.data, original, "记录里必须是第一次写之前的字节");
+    }
+
+    #[test]
+    fn a_registration_for_another_plan_is_refused() {
+        let memory = Memory::default();
+        let region = Region::sized(0, 512).expect("区间");
+        let mut session =
+            RecordSession::prepare(&memory, IDENTITY, TOTAL_BYTES).expect("准备应成立");
+        session
+            .register(
+                [0x11u8; 32],
+                &segments(region, vec![0xAA; 512], vec![0xBB; 512]),
+            )
+            .expect("首次登记应成立");
+        let error = session
+            .register(
+                [0x22u8; 32],
+                &segments(region, vec![0xBB; 512], vec![0xCC; 512]),
+            )
+            .expect_err("另一份计划不得接管这条记录");
+        assert!(
+            error.to_string().contains("different plan"),
+            "实际错误：{error}"
+        );
+    }
+
+    #[test]
+    fn an_irreversible_step_is_marked_before_it_runs_and_resumes_by_the_marker() {
+        let memory = Memory::default();
+        let plan = [0x33u8; 32];
+        let mut first = RecordSession::prepare(&memory, IDENTITY, TOTAL_BYTES).expect("准备应成立");
+        assert!(!first.resumed(), "还没有记录时不是续跑");
+        first
+            .begin_irreversible(plan, b"make-filesystem")
+            .expect("不可逆意图应落盘");
+
+        // 外部动作还没成功就中断：盘上只有一条未完成的不可逆意图。
+        let bytes = memory.bytes();
+        let decoded = record::decode(&bytes).expect("记录应可解码");
+        assert_eq!(decoded.frames.len(), 1, "进入不可逆前只落一条意图");
+        assert!(decoded.frames[0].irreversible, "意图必须标为不可逆");
+        assert!(!decoded.frames[0].completed, "外部动作尚未成功");
+        assert_eq!(
+            recover(&bytes, RecoveryExpectation::new(IDENTITY, TOTAL_BYTES)),
+            RecoveryPlan::RollBack {
+                frames: decoded.frames.clone()
+            },
+            "未完成的不可逆记录不是已提交"
+        );
+        drop(first);
+
+        // 续跑：同一计划被接受，外部动作成功后补上完成标记。
+        let mut second =
+            RecordSession::prepare(&memory, IDENTITY, TOTAL_BYTES).expect("准备应成立");
+        assert!(second.resumed(), "续跑必须从记录认出未完成的不可逆阶段");
+        second
+            .begin_irreversible(plan, b"make-filesystem")
+            .expect("同计划续跑应被接受");
+        second.complete_irreversible().expect("完成标记应落盘");
+
+        let decoded = record::decode(&memory.bytes()).expect("记录应可解码");
+        assert_eq!(decoded.frames.len(), 2, "完成标记是额外一帧");
+        assert!(
+            decoded.frames[1].completed && decoded.frames[1].irreversible,
+            "外部成功后必须留下已完成的不可逆标记：{:?}",
+            decoded.frames
+        );
+    }
+
+    #[test]
+    fn a_commit_whose_terminal_frame_is_lost_is_unfinished_not_clean() {
+        let memory = Memory::default();
+        let (mut session, _) =
+            RelocateSession::prepare(&memory, IDENTITY, [0x44u8; 32], b"diskedit-relocate-v1")
+                .expect("准备应成立");
+        memory.fail_next_write.store(true, Ordering::SeqCst);
+        assert!(
+            matches!(session.commit(), Commit::Unfinished(_)),
+            "终态帧没落盘时不能报成已提交"
+        );
+        let decoded = record::decode(&memory.bytes()).expect("记录应可解码");
+        assert!(
+            decoded
+                .frames
+                .last()
+                .is_some_and(|frame| frame.kind != FrameKind::Committed),
+            "盘上不应出现终态帧"
+        );
+    }
+
+    #[test]
+    fn a_commit_that_cannot_clear_the_record_is_record_left() {
+        let memory = Memory::default();
+        let (mut session, _) =
+            RelocateSession::prepare(&memory, IDENTITY, [0x44u8; 32], b"diskedit-relocate-v1")
+                .expect("准备应成立");
+        memory.fail_next_remove.store(true, Ordering::SeqCst);
+        assert!(
+            matches!(session.commit(), Commit::RecordLeft(_)),
+            "终态帧已落盘、记录未清理是第三种结果"
+        );
+        let total = super::relocate_session::spec_total_bytes(b"diskedit-relocate-v1")
+            .expect("规格携带目标大小");
+        assert_eq!(
+            recover(&memory.bytes(), RecoveryExpectation::new(IDENTITY, total)),
+            RecoveryPlan::Committed,
+            "记录未清理时盘上必须已经是完整的已提交记录"
+        );
+    }
+
+    #[test]
+    fn a_commit_that_clears_the_record_is_clean() {
+        let memory = Memory::default();
+        let (mut session, _) =
+            RelocateSession::prepare(&memory, IDENTITY, [0x44u8; 32], b"diskedit-relocate-v1")
+                .expect("准备应成立");
+        assert!(matches!(session.commit(), Commit::Clean));
+        assert!(!memory.has_record(), "提交成功后记录应被清理");
+    }
+
+    #[test]
+    fn a_checkpointed_cursor_survives_a_new_session() {
+        let memory = Memory::default();
+        let plan = [0x55u8; 32];
+        let spec = b"diskedit-relocate-v1";
+        let (mut first, resume) =
+            RelocateSession::prepare(&memory, IDENTITY, plan, spec).expect("准备应成立");
+        assert_eq!(resume, None, "没有进度时从头开始");
+        first.checkpoint(3, [0xAB; 16]).expect("进度帧应落盘");
+
+        // 会话随进程消失，只剩下记录字节。
+        drop(first);
+        let (_second, resume) =
+            RelocateSession::prepare(&memory, IDENTITY, plan, spec).expect("准备应成立");
+        assert_eq!(
+            resume,
+            Some((3, [0xAB; 16])),
+            "块游标与已写前缀摘要必须随记录落盘，而不是只留在会话里"
+        );
+    }
+
     #[test]
     fn mint_grants_recorded_tokens() {
         let mint = Mint::new();

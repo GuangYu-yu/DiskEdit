@@ -137,8 +137,12 @@ pub(super) fn execute_plan(
     }
     super::filesystem::ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
-    let mut session =
-        RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
+    let total_bytes = platform
+        .open_target_read_only(target)
+        .map_err(|error| (ExecError::from(error), false))?
+        .len();
+    let mut session = RecordSession::prepare(platform, plan.identity(), total_bytes)
+        .map_err(|error| (error, false))?;
     super::filesystem::check_identity(platform, target, plan).map_err(|error| (error, false))?;
 
     let partition = match &action {
@@ -208,7 +212,6 @@ fn lvm_exec_error(error: LvmError) -> ExecError {
 mod tests {
     use super::*;
 
-    // covers: I13
     #[test]
     fn a_shrink_past_the_allocated_end_is_rejected() {
         let error =
@@ -221,7 +224,6 @@ mod tests {
         );
     }
 
-    // covers: I13
     #[test]
     fn a_shrink_covering_the_allocated_end_is_accepted() {
         shrink_allocated_check(4_194_304, 4_194_304).expect("目标等于已分配末端应成立");

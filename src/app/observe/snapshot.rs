@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use diskedit_core::fingerprint::{Fingerprint, Strength};
 use diskedit_core::geometry::SectorSize;
 
-use crate::platform::{Occupancy, Platform, PlatformError, TargetKind};
+use crate::platform::{Occupancy, Platform, PlatformError, PlatformResult, TargetKind};
 
 use super::records::{self, RecordState};
 use super::table::{self, TableView};
@@ -187,7 +187,7 @@ pub fn capture_records(
     Ok(RecordSnapshot { target, record })
 }
 
-/// 采集恢复命令的现场：按 B9 的次序先定位记录，再探测占用。
+/// 采集恢复命令的现场：先定位记录，再探测占用。
 pub fn capture_recover(
     platform: &dyn Platform,
     request: &Request,
@@ -210,56 +210,110 @@ pub(crate) fn open_target(
     request: &Request,
 ) -> Result<TargetFacts, CaptureError> {
     let spec = request.target_spec().ok_or(CaptureError::NoTarget)?;
-    let path = &spec.path;
+    let declared = request.alias();
     // 覆盖值只命名镜像：块设备上先于打开拒绝，盘被占用时也报拒绝而不是打开失败。
-    if overrides_block_sector(platform.path_kind(path), request.sector_size()) {
+    if overrides_block_sector(platform.path_kind(&spec.path), request.sector_size()) {
         return Err(CaptureError::SectorSizeOnBlockDevice);
     }
-    let declared = request.alias();
-    // 只有 Strong 等级构成身份；不可用等级不参与记录定位，也不能与声明名争用。
     // 探测失败是读故障，不能折成"没有身份"：那会让 `--alias` 变成兜底。
+    let strong = probe_identity(platform, &spec.path)?;
+    check_shape(platform, &spec.path)?;
+    // `records list`/`verify` 在打开目标之前先判 `--alias` 的适用性，因此目标
+    // 不存在时也报用法错误而不是拒绝。
+    let early = matches!(
+        request.command(),
+        Command::RecordsList { .. } | Command::RecordsVerify { .. }
+    );
+    if early && alias_not_applicable(platform.path_kind(&spec.path), declared, strong) {
+        return Err(CaptureError::DeclaredIdentityNotApplicable);
+    }
+    open_with_identity(
+        platform,
+        &spec.path,
+        declared,
+        request.sector_size(),
+        strong,
+    )
+}
+
+/// 打开一个已经定位好的路径（挂载点形态的整盘）：与 [`open_target`] 同一套规则。
+pub(super) fn open_path(
+    platform: &dyn Platform,
+    path: &std::path::Path,
+    declared: Option<&str>,
+    sector_override: Option<u64>,
+) -> Result<TargetFacts, CaptureError> {
+    if overrides_block_sector(platform.path_kind(path), sector_override) {
+        return Err(CaptureError::SectorSizeOnBlockDevice);
+    }
+    let strong = probe_identity(platform, path)?;
+    check_shape(platform, path)?;
+    open_with_identity(platform, path, declared, sector_override, strong)
+}
+
+/// 探测目标自身证明的身份：只有 Strong 等级构成身份，不可用等级返回 `None`。
+///
+/// 探测失败以 `Err` 返回，调用方不得把它折成"没有身份"——否则声明名会变成读故障
+/// 的兜底。身份的唯一判定入口是这里，确认阶段同样复用它。
+pub(crate) fn probe_identity(
+    platform: &dyn Platform,
+    path: &std::path::Path,
+) -> PlatformResult<Option<Fingerprint>> {
     let fingerprint = platform.identity(path)?;
-    // 目标形态由端口探一次，之后不再靠"打开是否成功"推断：目录在有的宿主上能
-    // 只读打开、在别的宿主上打开即失败，两种结果不该给出不同的退出码。这条
-    // 判定放在身份探测之后：目标不存在时先报打开失败，而不是"形态不认识"。
+    Ok((fingerprint.strength() == Strength::Strong).then_some(fingerprint))
+}
+
+/// 目标形态由端口探一次，之后不再靠"打开是否成功"推断：目录在有的宿主上能只读
+/// 打开、在别的宿主上打开即失败，两种结果不该给出不同的退出码。这条判定放在身份
+/// 探测之后：目标不存在时先报打开失败，而不是"形态不认识"。
+fn check_shape(platform: &dyn Platform, path: &std::path::Path) -> Result<(), CaptureError> {
     if platform.path_kind(path) == TargetKind::Other {
         return Err(CaptureError::Unreadable {
             why: "the target is neither a regular file nor a block device".to_owned(),
         });
     }
-    let strong = (fingerprint.strength() == Strength::Strong).then_some(fingerprint);
-    // `--alias` 只命名自身证明不了身份的目标。`records list`/`verify` 与基线一样
-    // 在打开目标之前先判这一条，因此目标不存在时也报用法错误而不是拒绝。
-    let declares =
-        |kind: TargetKind| declared.is_some() && !(kind.is_block_device() && strong.is_none());
-    let early = matches!(
-        request.command(),
-        Command::RecordsList { .. } | Command::RecordsVerify { .. }
-    );
-    if early && declares(platform.path_kind(path)) {
-        return Err(CaptureError::DeclaredIdentityNotApplicable);
-    }
+    Ok(())
+}
+
+/// `--alias` 只命名自身证明不了身份的目标。
+fn alias_not_applicable(
+    kind: TargetKind,
+    declared: Option<&str>,
+    strong: Option<Fingerprint>,
+) -> bool {
+    declared.is_some() && !(kind.is_block_device() && strong.is_none())
+}
+
+/// 身份已探测后的打开与判定：形态、`--alias` 适用性、扇区尺寸都在这里收口。
+fn open_with_identity(
+    platform: &dyn Platform,
+    path: &std::path::Path,
+    declared: Option<&str>,
+    sector_override: Option<u64>,
+    strong: Option<Fingerprint>,
+) -> Result<TargetFacts, CaptureError> {
     let handle = platform.open_target_read_only(path)?;
     let kind = handle.kind();
-    if overrides_block_sector(kind, request.sector_size()) {
+    if overrides_block_sector(kind, sector_override) {
         return Err(CaptureError::SectorSizeOnBlockDevice);
     }
-    if declares(kind) {
+    if alias_not_applicable(kind, declared, strong) {
         return Err(CaptureError::DeclaredIdentityNotApplicable);
     }
     // 声明名只在自动身份不可得时生效；它与自动身份走同一个记录键空间。
     let identity = declared.map(Fingerprint::declared).or(strong);
     // 内核回报的逻辑扇区尺寸先过允许集合：集合外的值（520/524/528 等）会让全部
-    // LBA 换算失去依据，按能力不支持拒绝，而不是静默当作 512。
-    let sector_size = match handle.sector_size() {
-        None => 512,
+    // LBA 换算失去依据，按能力不支持拒绝，而不是静默当作 512。块设备读不出扇区
+    // 尺寸时没有任何可信值，同样拒绝；只有镜像按固定块大小回退。
+    let sector_size = match handle.resolved_sector_size().or(sector_override) {
+        None => return Err(CaptureError::SectorSizeUnknown),
         Some(bytes) => SectorSize::new(bytes)
             .map(SectorSize::bytes)
             .map_err(|_| CaptureError::UnsupportedSector { bytes })?,
     };
     Ok(TargetFacts {
         display: path.display().to_string(),
-        path: path.clone(),
+        path: path.to_path_buf(),
         bytes: handle.len(),
         kind,
         sector_size,
@@ -279,4 +333,32 @@ pub(crate) fn record_state(
     target: &TargetFacts,
 ) -> Result<RecordState, CaptureError> {
     records::locate(platform, target.identity).map_err(CaptureError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::observe::TargetSpec;
+    use crate::platform::UnsupportedPlatform;
+
+    #[test]
+    fn a_probe_failure_with_an_alias_is_not_turned_into_an_identity() {
+        // 身份探测读失败时，`--alias` 不能把"读不出来"填成一个已知身份：观察阶段
+        // 必须让读故障上行。删掉探测失败的 `?`，这里会变成形态不认识的拒绝。
+        let request = Request::new(
+            TargetSpec::new("disk.img", None),
+            Command::Layout { json: false },
+        )
+        .with_alias(Some("declared-name".to_owned()));
+        let error = open_target(&UnsupportedPlatform, &request).expect_err("探测失败必须上行");
+        assert!(
+            matches!(error, CaptureError::Platform(_)),
+            "探测失败应按端口故障上报，实际：{error}"
+        );
+        // 身份入口本身也把失败与"没有身份"分开：失败是 `Err`，不可用等级是 `None`。
+        assert!(
+            probe_identity(&UnsupportedPlatform, std::path::Path::new("disk.img")).is_err(),
+            "探测失败不得折成没有身份"
+        );
+    }
 }

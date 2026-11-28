@@ -282,7 +282,7 @@ impl Platform for LinuxPlatform {
     fn create_directory_all(&self, path: &Path) -> PlatformResult<()> {
         use std::os::unix::fs::DirBuilderExt;
         // 记录目录链 `<state_root>/images/<键>`：逐级按 0700 建出，只有属主能读——记录里
-        // 存着写前的分区表。`state_root` 之上的中间层只建不核，与基线一致；`create_dir_all`
+        // 存着写前的分区表。`state_root` 之上的中间层只建不核；`create_dir_all`
         // 会让 `state_root`/`images` 带上 umask 的 0755，故逐级 `DirBuilder::mode(0700)`。
         let images = path
             .parent()
@@ -923,36 +923,7 @@ fn loop_identity(
 }
 
 fn image_occupancy(path: &Path) -> PlatformResult<Occupancy> {
-    let canonical = std::fs::canonicalize(path).map_err(|error| PlatformError::io(path, error))?;
-    let block = match std::fs::read_dir("/sys/block") {
-        Ok(entries) => entries,
-        Err(error) => {
-            return Ok(Occupancy::Unknown {
-                why: format!("cannot enumerate block devices: {error}"),
-            });
-        }
-    };
-    for entry in block.flatten() {
-        let backing = entry.path().join("loop/backing_file");
-        let Ok(text) = std::fs::read_to_string(&backing) else {
-            continue;
-        };
-        let target = text.trim();
-        if target.is_empty() {
-            continue;
-        }
-        let resolved = std::fs::canonicalize(Path::new("/").join(target))
-            .unwrap_or_else(|_| PathBuf::from(target));
-        if resolved == canonical {
-            return Ok(Occupancy::Used {
-                evidence: format!(
-                    "bound to a block device through {}",
-                    entry.file_name().to_string_lossy()
-                ),
-            });
-        }
-    }
-    Ok(Occupancy::Idle)
+    image_occupancy_in(Path::new(SYSFS), path, false)
 }
 
 /// 与 [`image_occupancy`] 相同，但只为 DM 栈持有的 loop 不算占用。
@@ -960,8 +931,31 @@ fn image_occupancy(path: &Path) -> PlatformResult<Occupancy> {
 /// 这是 LVM2 PV 收尾的口径：pvresize 只改 PV 元数据，持有该分区的 dm 栈不解析
 /// 这部分字节。其余持有者（未挂载的 md、另一个 loop 等）与挂载仍按占用拒绝。
 fn image_occupancy_allow_dm(path: &Path) -> PlatformResult<Occupancy> {
+    image_occupancy_in(Path::new(SYSFS), path, true)
+}
+
+/// 一个 loop 设备的承载文件；没有承载文件时为空。
+///
+/// 读不出来是环境故障，不能当作"这个 loop 没在用"：那会把占用结论折成空闲。
+fn loop_backing_file(entry: &Path) -> std::io::Result<Option<PathBuf>> {
+    let text = match std::fs::read_to_string(entry.join("loop/backing_file")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let target = text.trim();
+    if target.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from("/").join(target)))
+}
+
+/// 镜像的占用判定：任何 loop 绑定、任何多设备 btrfs 成员都算占用。
+///
+/// `allow_dm` 时只为 DM 栈持有的 loop 不计入（见 [`image_occupancy_allow_dm`]）。
+fn image_occupancy_in(sysfs: &Path, path: &Path, allow_dm: bool) -> PlatformResult<Occupancy> {
     let canonical = std::fs::canonicalize(path).map_err(|error| PlatformError::io(path, error))?;
-    let block = match std::fs::read_dir("/sys/block") {
+    let block = match std::fs::read_dir(sysfs.join("block")) {
         Ok(entries) => entries,
         Err(error) => {
             return Ok(Occupancy::Unknown {
@@ -969,30 +963,41 @@ fn image_occupancy_allow_dm(path: &Path) -> PlatformResult<Occupancy> {
             });
         }
     };
-    for entry in block.flatten() {
-        let backing = entry.path().join("loop/backing_file");
-        let Ok(text) = std::fs::read_to_string(&backing) else {
-            continue;
+    for entry in block {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                return Ok(Occupancy::Unknown {
+                    why: format!("cannot enumerate block devices: {error}"),
+                });
+            }
         };
-        let target = text.trim();
-        if target.is_empty() {
-            continue;
-        }
-        let resolved = std::fs::canonicalize(Path::new("/").join(target))
-            .unwrap_or_else(|_| PathBuf::from(target));
+        let backing = match loop_backing_file(&entry.path()) {
+            Ok(Some(backing)) => backing,
+            Ok(None) => continue,
+            Err(error) => {
+                return Ok(Occupancy::Unknown {
+                    why: format!(
+                        "cannot read the loop backing file of {}: {error}",
+                        entry.file_name().to_string_lossy()
+                    ),
+                });
+            }
+        };
+        let resolved = std::fs::canonicalize(&backing).unwrap_or(backing);
         if resolved != canonical {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let mut holders = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(entry.path().join("holders")) {
+        if allow_dm && let Ok(entries) = std::fs::read_dir(entry.path().join("holders")) {
             for holder in entries.flatten() {
                 holders.push(holder.file_name().to_string_lossy().into_owned());
             }
-        }
-        holders.sort();
-        if !holders.is_empty() && holders.iter().all(|holder| holder.starts_with("dm-")) {
-            continue;
+            holders.sort();
+            if !holders.is_empty() && holders.iter().all(|holder| holder.starts_with("dm-")) {
+                continue;
+            }
         }
         return Ok(Occupancy::Used {
             evidence: if holders.is_empty() {
@@ -1002,10 +1007,33 @@ fn image_occupancy_allow_dm(path: &Path) -> PlatformResult<Occupancy> {
             },
         });
     }
-    Ok(Occupancy::Idle)
+    btrfs_occupancy(path, "the image holds no loop binding")
+}
+
+/// 多设备 btrfs 成员：未挂载、没有 loop 绑定也要判为占用。
+fn btrfs_occupancy(path: &Path, idle_context: &str) -> PlatformResult<Occupancy> {
+    match btrfs_membership(path) {
+        BtrfsMembers::Multi(facts) => Ok(Occupancy::Used {
+            evidence: format!(
+                "member {} (device {}) of a {}-device btrfs filesystem {}",
+                hex(&facts.member.uuid),
+                facts.member.devid,
+                facts.devices,
+                hex(&facts.fsid)
+            ),
+        }),
+        BtrfsMembers::Single | BtrfsMembers::NotBtrfs => Ok(Occupancy::Idle),
+        BtrfsMembers::Unreadable(why) => Ok(Occupancy::Unknown {
+            why: format!("{idle_context}, and its btrfs superblock is unreadable: {why}"),
+        }),
+    }
 }
 
 fn block_occupancy(path: &Path, _metadata: &std::fs::Metadata) -> PlatformResult<Occupancy> {
+    block_occupancy_in(Path::new(SYSFS), path)
+}
+
+fn block_occupancy_in(sysfs: &Path, path: &Path) -> PlatformResult<Occupancy> {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Ok(mounts) = std::fs::read_to_string("/proc/self/mounts")
         && let Some(mount) = mounts
@@ -1032,25 +1060,22 @@ fn block_occupancy(path: &Path, _metadata: &std::fs::Metadata) -> PlatformResult
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| PlatformError::parse("block device path has no name"))?;
-    match holders(Path::new(SYSFS), name) {
+    match holders(sysfs, name) {
         Ok(names) if !names.is_empty() => Ok(Occupancy::Used {
             evidence: format!("held by {}", names.join(", ")),
         }),
         Ok(_) => {
             // 未挂载、无 holders 的多设备 btrfs 成员仍是别人的数据：superblock 记录着
             // 全网设备数，成员数大于 1 时不能当空闲分区盘处理。
-            if let Some(evidence) = btrfs_multidevice(path) {
-                return Ok(Occupancy::Used { evidence });
-            }
-            Ok(Occupancy::Idle)
+            btrfs_occupancy(path, "no holders")
         }
         // 没有 sysfs 节点：无从判定。
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Occupancy::Unknown {
             why: format!("cannot locate the holders of {name}: {error}"),
         }),
-        // 来源存在却读不出：fail-closed，按已占用处理，不把"看不见"当成"没有"。
-        Err(error) => Ok(Occupancy::Used {
-            evidence: format!("cannot confirm the holders of {name}: {error}"),
+        // 来源存在却读不出：读失败是未知，不是"没有占用"。
+        Err(error) => Ok(Occupancy::Unknown {
+            why: format!("cannot read the holders of {name}: {error}"),
         }),
     }
 }
@@ -1061,10 +1086,22 @@ const SYSFS: &str = "/sys";
 const HOLDERS_DEPTH: usize = 8;
 /// btrfs superblock 的魔数。
 const BTRFS_MAGIC: &[u8; 8] = b"_BHRfS_M";
+/// superblock 中魔数的位置。
+const BTRFS_MAGIC_AT: std::ops::Range<usize> = 64..72;
 /// btrfs superblock 的三份副本偏移（64K、64M、256G）。
 const BTRFS_SUPERBLOCK_OFFSETS: [u64; 3] = [0x1_0000, 0x400_0000, 0x40_0000_0000];
+/// UUID 的字节数。
+const BTRFS_UUID_SIZE: usize = 16;
+/// superblock 中文件系统 UUID 的位置；所有成员共享同一个值。
+const BTRFS_FSID: std::ops::Range<usize> = 0x20..0x30;
 /// superblock 中 `num_devices` 的位置。
 const BTRFS_NUM_DEVICES: std::ops::Range<usize> = 0x88..0x90;
+/// superblock 中本设备 `DEV_ITEM` 的位置。
+const BTRFS_DEV_ITEM: std::ops::Range<usize> = 0xC9..0x12B;
+/// `DEV_ITEM` 中 `devid` 的位置。
+const BTRFS_DEV_ITEM_DEVID: std::ops::Range<usize> = 0xC9..0xD1;
+/// `DEV_ITEM` 中本设备 UUID 的位置。
+const BTRFS_DEV_ITEM_UUID: std::ops::Range<usize> = 0x10B..0x11B;
 
 /// 递归收集设备的上层 holders（阵列、dm、多路径）。`depth` 限制层数。
 fn holders(sysfs: &Path, name: &str) -> std::io::Result<Vec<String>> {
@@ -1098,34 +1135,99 @@ fn holders(sysfs: &Path, name: &str) -> std::io::Result<Vec<String>> {
     Ok(found)
 }
 
-/// 目标是多设备 btrfs 的成员时给出证据。
-fn btrfs_multidevice(path: &Path) -> Option<String> {
-    let superblock = btrfs_superblock(path)?;
-    let devices = btrfs_num_devices(&superblock)?;
-    (devices > 1).then(|| format!("member of a {devices}-device btrfs filesystem"))
+/// superblock 中 `DEV_ITEM` 记录的设备标识：设备号与本设备 UUID。
+#[derive(Debug, PartialEq, Eq)]
+struct BtrfsMember {
+    /// 本设备在文件系统内的设备号。
+    devid: u64,
+    /// btrfs 为本设备生成的 UUID。
+    uuid: [u8; BTRFS_UUID_SIZE],
 }
 
-/// 读第一份可用的 btrfs superblock 副本。
-fn btrfs_superblock(path: &Path) -> Option<Vec<u8>> {
-    let file = File::open(path).ok()?;
-    let mut buffer = vec![0u8; 4096];
-    for offset in BTRFS_SUPERBLOCK_OFFSETS {
-        let read = FileExt::read_at(&file, &mut buffer, offset).ok()?;
-        if read == buffer.len() && &buffer[64..72] == BTRFS_MAGIC {
-            return Some(buffer);
+/// 一份 superblock 能给出的成员事实。
+#[derive(Debug, PartialEq, Eq)]
+struct BtrfsFacts {
+    /// 文件系统声明的成员总数。
+    devices: u64,
+    /// 本设备的标识。
+    member: BtrfsMember,
+    /// 文件系统 UUID，所有成员共享。
+    fsid: [u8; BTRFS_UUID_SIZE],
+}
+
+/// 目标在 btrfs 里的成员身份：不是 btrfs、单设备、多设备成员、或读不出来。
+#[derive(Debug, PartialEq, Eq)]
+enum BtrfsMembers {
+    NotBtrfs,
+    Single,
+    /// 多设备文件系统；`member` 是本次读到的这台设备的标识。
+    Multi(BtrfsFacts),
+    Unreadable(String),
+}
+
+/// 读超级块判断成员身份；读失败或字段不全都是未知，不是"不是 btrfs"。
+fn btrfs_membership(path: &Path) -> BtrfsMembers {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            return BtrfsMembers::Unreadable(format!("cannot open {}: {error}", path.display()));
         }
+    };
+    let mut buffer = vec![0u8; 4096];
+    let mut first_error = None;
+    for (index, offset) in BTRFS_SUPERBLOCK_OFFSETS.into_iter().enumerate() {
+        let read = match FileExt::read_at(&file, &mut buffer, offset) {
+            Ok(read) => read,
+            Err(error) => {
+                // 第一份副本读不出来才是"读故障"；后面的副本在短设备上可能越界，
+                // 那不影响"这是不是 btrfs"的判断。
+                if index == 0 {
+                    first_error = Some(format!(
+                        "cannot read the btrfs superblock of {} at {offset}: {error}",
+                        path.display()
+                    ));
+                }
+                continue;
+            }
+        };
+        if read < BTRFS_MAGIC_AT.end || &buffer[BTRFS_MAGIC_AT] != BTRFS_MAGIC {
+            continue;
+        }
+        // 魔数已确认是 btrfs：字段读不全就不再往下猜，按未知处理。
+        return match btrfs_facts(&buffer[..read]) {
+            Some(facts) if facts.devices > 1 => BtrfsMembers::Multi(facts),
+            Some(_) => BtrfsMembers::Single,
+            None => BtrfsMembers::Unreadable(format!(
+                "the btrfs superblock of {} at {offset} is too short to hold a device item",
+                path.display()
+            )),
+        };
     }
-    None
+    match first_error {
+        Some(why) => BtrfsMembers::Unreadable(why),
+        None => BtrfsMembers::NotBtrfs,
+    }
 }
 
-/// 从 superblock 读 `num_devices`；不是 btrfs 或长度不足时为 `None`。
-fn btrfs_num_devices(superblock: &[u8]) -> Option<u64> {
-    if superblock.len() < BTRFS_NUM_DEVICES.end || &superblock[64..72] != BTRFS_MAGIC {
+/// 从 superblock 读成员总数、本设备标识与文件系统 UUID。
+///
+/// 不是 btrfs、字段不完整或成员数为零时为 `None`；调用方按未知处理。
+fn btrfs_facts(superblock: &[u8]) -> Option<BtrfsFacts> {
+    if superblock.len() < BTRFS_DEV_ITEM.end || &superblock[BTRFS_MAGIC_AT] != BTRFS_MAGIC {
         return None;
     }
-    Some(u64::from_le_bytes(
-        superblock[BTRFS_NUM_DEVICES].try_into().ok()?,
-    ))
+    let devices = u64::from_le_bytes(superblock[BTRFS_NUM_DEVICES].try_into().ok()?);
+    if devices == 0 {
+        return None;
+    }
+    let devid = u64::from_le_bytes(superblock[BTRFS_DEV_ITEM_DEVID].try_into().ok()?);
+    let uuid: [u8; BTRFS_UUID_SIZE] = superblock[BTRFS_DEV_ITEM_UUID].try_into().ok()?;
+    let fsid: [u8; BTRFS_UUID_SIZE] = superblock[BTRFS_FSID].try_into().ok()?;
+    Some(BtrfsFacts {
+        devices,
+        member: BtrfsMember { devid, uuid },
+        fsid,
+    })
 }
 
 /// 小写十六进制，用于给临时目录取不冲突的后缀。
@@ -1141,7 +1243,6 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    // covers: B5
     #[test]
     fn state_files_are_private_and_written_atomically() {
         let platform = LinuxPlatform;
@@ -1206,7 +1307,6 @@ mod tests {
         .expect("holder 节点可建立");
     }
 
-    // covers: B4
     #[test]
     fn holders_are_followed_through_every_layer() {
         let sysfs = temporary_root("b4");
@@ -1231,34 +1331,144 @@ mod tests {
         std::fs::remove_dir_all(&sysfs).expect("清理临时根");
     }
 
-    // covers: B17
     #[test]
     fn a_multi_device_btrfs_member_is_occupied() {
+        let uuid = [0x11u8; BTRFS_UUID_SIZE];
+        let fsid = [0x22u8; BTRFS_UUID_SIZE];
         let mut superblock = vec![0u8; 4096];
-        superblock[64..72].copy_from_slice(BTRFS_MAGIC);
+        superblock[BTRFS_MAGIC_AT].copy_from_slice(BTRFS_MAGIC);
+        superblock[BTRFS_FSID].copy_from_slice(&fsid);
         superblock[BTRFS_NUM_DEVICES].copy_from_slice(&2u64.to_le_bytes());
-        assert_eq!(btrfs_num_devices(&superblock), Some(2));
+        superblock[BTRFS_DEV_ITEM_DEVID].copy_from_slice(&3u64.to_le_bytes());
+        superblock[BTRFS_DEV_ITEM_UUID].copy_from_slice(&uuid);
+        assert_eq!(
+            btrfs_facts(&superblock),
+            Some(BtrfsFacts {
+                devices: 2,
+                member: BtrfsMember { devid: 3, uuid },
+                fsid,
+            })
+        );
 
         let root = temporary_root("b17");
         let image = root.join("member.img");
         let mut bytes = vec![0u8; 0x1_0000 + 4096];
         bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
         std::fs::write(&image, &bytes).expect("镜像可写");
-        assert!(
-            btrfs_multidevice(&image).is_some(),
+        assert_eq!(
+            btrfs_membership(&image),
+            BtrfsMembers::Multi(BtrfsFacts {
+                devices: 2,
+                member: BtrfsMember { devid: 3, uuid },
+                fsid,
+            }),
             "多设备成员即便未挂载也应判为已占用"
         );
+        // 镜像形态也要走同一条判定：没有 loop 绑定不代表它是空闲的。
+        let empty_sysfs = root.join("empty-sysfs");
+        std::fs::create_dir_all(empty_sysfs.join("block")).expect("空 sysfs 可建立");
+        let Occupancy::Used { evidence } =
+            image_occupancy_in(&empty_sysfs, &image, false).expect("可判定")
+        else {
+            panic!("多设备成员应判为已占用");
+        };
+        assert!(evidence.contains(&hex(&uuid)), "{evidence}");
+        assert!(evidence.contains(&hex(&fsid)), "{evidence}");
 
         superblock[BTRFS_NUM_DEVICES].copy_from_slice(&1u64.to_le_bytes());
-        assert_eq!(btrfs_num_devices(&superblock), Some(1));
+        assert_eq!(btrfs_facts(&superblock).map(|facts| facts.devices), Some(1));
         bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
         std::fs::write(&image, &bytes).expect("镜像可写");
-        assert!(btrfs_multidevice(&image).is_none(), "单设备不算占用");
+        assert_eq!(
+            btrfs_membership(&image),
+            BtrfsMembers::Single,
+            "单设备不算多设备成员"
+        );
+        assert!(matches!(
+            image_occupancy_in(&empty_sysfs, &image, false).expect("可判定"),
+            Occupancy::Idle
+        ));
 
         std::fs::remove_dir_all(&root).expect("清理临时根");
     }
 
-    // covers: I5
+    #[test]
+    fn an_incomplete_btrfs_superblock_is_unknown_not_single() {
+        let root = temporary_root("b18");
+        let image = root.join("truncated.img");
+        let mut bytes = vec![0u8; 0x1_0000 + 0x100];
+        bytes[0x1_0000 + BTRFS_MAGIC_AT.start..0x1_0000 + BTRFS_MAGIC_AT.end]
+            .copy_from_slice(BTRFS_MAGIC);
+        std::fs::write(&image, &bytes).expect("镜像可写");
+        assert!(
+            matches!(btrfs_membership(&image), BtrfsMembers::Unreadable(_)),
+            "魔数之后字段不全必须报未知，不能折成单设备"
+        );
+        let sysfs = root.join("sysfs");
+        std::fs::create_dir_all(sysfs.join("block")).expect("空 sysfs 可建立");
+        assert!(
+            matches!(
+                image_occupancy_in(&sysfs, &image, false).expect("可判定"),
+                Occupancy::Unknown { .. }
+            ),
+            "字段不全不能当成空闲"
+        );
+
+        // 成员数为零不是有效的 btrfs 超级块：同样按未知处理。
+        let mut superblock = vec![0u8; 4096];
+        superblock[BTRFS_MAGIC_AT].copy_from_slice(BTRFS_MAGIC);
+        bytes.resize(0x1_0000 + 4096, 0);
+        bytes[0x1_0000..0x1_0000 + 4096].copy_from_slice(&superblock);
+        std::fs::write(&image, &bytes).expect("镜像可写");
+        assert!(matches!(
+            btrfs_membership(&image),
+            BtrfsMembers::Unreadable(_)
+        ));
+
+        std::fs::remove_dir_all(&root).expect("清理临时根");
+    }
+
+    #[test]
+    fn an_unreadable_occupancy_source_is_unknown_not_idle() {
+        let root = temporary_root("r23");
+        let sysfs = root.join("sysfs");
+        // loop 设备目录存在，但承载文件读不出来（这里用一个目录占住该路径）。
+        std::fs::create_dir_all(sysfs.join("block/loop0/loop/backing_file"))
+            .expect("不可读的承载文件节点可建立");
+        let image = root.join("idle.img");
+        std::fs::write(&image, vec![0u8; 4096]).expect("镜像可写");
+        assert!(
+            matches!(
+                image_occupancy_in(&sysfs, &image, false).expect("可判定"),
+                Occupancy::Unknown { .. }
+            ),
+            "sysfs 读失败必须是未知，不能当成空闲"
+        );
+
+        // holders 来源存在却读不出来（同样用目录占位）：未知，不是空闲。
+        let block_sysfs = root.join("block-sysfs");
+        std::fs::create_dir_all(block_sysfs.join("class/block/sdz1")).expect("设备节点可建立");
+        std::fs::write(block_sysfs.join("class/block/sdz1/holders"), b"x")
+            .expect("写成普通文件使 read_dir 失败");
+        assert!(
+            matches!(
+                block_occupancy_in(&block_sysfs, Path::new("/dev/sdz1")).expect("可判定"),
+                Occupancy::Unknown { .. }
+            ),
+            "holders 读失败必须是未知，不能当成没有占用"
+        );
+
+        // 目标自己的超级块读不出来：同样是未知，不是"不是 btrfs"。
+        let directory = root.join("not-a-file");
+        std::fs::create_dir_all(&directory).expect("目录可建立");
+        assert!(
+            matches!(btrfs_membership(&directory), BtrfsMembers::Unreadable(_)),
+            "打不开的目标必须报未知"
+        );
+
+        std::fs::remove_dir_all(&root).expect("清理临时根");
+    }
+
     #[test]
     fn a_loop_identity_without_its_mapping_facts_is_not_guessed() {
         // sysfs 缺 `loop/sizelimit` 时，身份不能把缺失当成 0：映射偏移与限长是

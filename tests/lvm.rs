@@ -61,7 +61,6 @@ fn run_without_tools(args: &[&str]) -> (i32, String) {
     )
 }
 
-// covers: R0385, R0386, R0387, R0679, R0680, R0681
 #[test]
 fn pv_grow_without_the_lvm_tools_refuses_instead_of_touching_the_fs() {
     let path = pv_image("grow.img");

@@ -4,5 +4,3 @@ use diskedit_core::evidence::Observation;
 fn main() {
     let _fact: Observation<u64> = None;
 }
-
-// covers: I5

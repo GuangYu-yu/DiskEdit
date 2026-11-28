@@ -8,9 +8,12 @@ use diskedit_core::fingerprint::{Fingerprint, Strength};
 use super::step::{Access, PropertyValue, Step, StepKind};
 use crate::app::observe::{ContentProperty, RecoverMode, TableFormat};
 
+/// FNV-1a 64 位的偏移基值；计划摘要与区域摘要都从同一个种子开始。
+pub(crate) const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
 /// 计算摘要。
 pub fn plan_digest(identity: Option<Fingerprint>, steps: &[Step]) -> [u8; 32] {
-    let mut lanes = [Lane::new(0xcbf2_9ce4_8422_2325); 4];
+    let mut lanes = [Lane::new(FNV_OFFSET_BASIS); 4];
     match identity {
         Some(identity) => {
             push_bytes(&mut lanes, b"identity");
@@ -48,7 +51,7 @@ pub fn request_digest(
     overwrite: bool,
     sector_size: u64,
 ) -> [u8; 32] {
-    let mut lanes = [Lane::new(0xcbf2_9ce4_8422_2325); 4];
+    let mut lanes = [Lane::new(FNV_OFFSET_BASIS); 4];
     match identity {
         Some(identity) => {
             push_bytes(&mut lanes, b"identity");

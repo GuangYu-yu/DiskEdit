@@ -89,22 +89,7 @@ impl<'a> WriteChannel<'a> {
 
     /// 读一段原始字节；读取不受声明区间限制。
     pub fn read_exact(&self, offset: u64, len: usize) -> Result<Vec<u8>, ExecError> {
-        let mut buffer = vec![0u8; len];
-        let mut filled = 0;
-        while filled < len {
-            let read = self
-                .target
-                .read_at(offset + filled as u64, &mut buffer[filled..])
-                .map_err(ExecError::from)?;
-            if read == 0 {
-                return Err(ExecError::Io(format!(
-                    "read at {} for {} bytes ended early",
-                    offset, len
-                )));
-            }
-            filled += read;
-        }
-        Ok(buffer)
+        read_exact_region(&*self.target, offset, len)
     }
 
     /// 写一段字节；区间必须被本步声明覆盖。
@@ -173,36 +158,126 @@ impl<'a> WriteChannel<'a> {
 
     /// 回读并逐个核对已写入分段的摘要。
     pub fn verify_written(&self) -> Result<(), ExecError> {
-        for (region, expected) in &self.written {
-            let mut hasher = Hasher::new();
-            let mut offset = region.start();
-            let mut remaining = region.len();
-            while remaining > 0 {
-                let take = remaining.min(VERIFY_CHUNK as u64) as usize;
-                let bytes = self.read_exact(offset, take)?;
-                hasher.update(&bytes);
-                offset += take as u64;
-                remaining -= take as u64;
-            }
-            if hasher.finish() != *expected {
-                return Err(ExecError::Postcondition(format!(
-                    "read-back digest mismatch for region [{}, {})",
-                    region.start(),
-                    region.end()
-                )));
-            }
-        }
-        Ok(())
+        verify_digests(&*self.target, &self.written)
     }
+}
+
+/// 从目标读满 `len` 字节；读到 0 表示对端提前结束。
+fn read_exact_region(
+    target: &dyn TargetHandle,
+    offset: u64,
+    len: usize,
+) -> Result<Vec<u8>, ExecError> {
+    let mut buffer = vec![0u8; len];
+    let mut filled = 0;
+    while filled < len {
+        let read = target
+            .read_at(offset + filled as u64, &mut buffer[filled..])
+            .map_err(ExecError::from)?;
+        if read == 0 {
+            return Err(ExecError::Io(format!(
+                "read at {} for {} bytes ended early",
+                offset, len
+            )));
+        }
+        filled += read;
+    }
+    Ok(buffer)
+}
+
+/// 逐区间回读并与期望摘要比对。
+///
+/// 只依赖目标句柄的读写，与目标上的文件系统无关：直写与载体写走同一条回读路径。
+pub(crate) fn verify_digests(
+    target: &dyn TargetHandle,
+    expected: &[(Region, Digest)],
+) -> Result<(), ExecError> {
+    for (region, digest) in expected {
+        let mut hasher = Hasher::new();
+        let mut offset = region.start();
+        let mut remaining = region.len();
+        while remaining > 0 {
+            let take = remaining.min(VERIFY_CHUNK as u64) as usize;
+            let bytes = read_exact_region(target, offset, take)?;
+            hasher.update(&bytes);
+            offset += take as u64;
+            remaining -= take as u64;
+        }
+        if hasher.finish() != *digest {
+            return Err(ExecError::Postcondition(format!(
+                "read-back digest mismatch for region [{}, {})",
+                region.start(),
+                region.end()
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::app::execute::transaction::Mint;
     use crate::platform::{PlatformResult, TargetKind};
+
+    /// 长度由外部持有的原子值决定；用来验证通道每次都按此刻长度判上界。
+    struct ResizableTarget {
+        bytes: Vec<u8>,
+        len: Arc<AtomicU64>,
+    }
+
+    impl TargetHandle for ResizableTarget {
+        fn path(&self) -> &Path {
+            Path::new("resizable")
+        }
+
+        fn len(&self) -> u64 {
+            self.len.load(Ordering::SeqCst)
+        }
+
+        fn kind(&self) -> TargetKind {
+            TargetKind::File
+        }
+
+        fn sector_size(&self) -> Option<u64> {
+            Some(512)
+        }
+
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            let visible = (self.len() as usize).min(self.bytes.len());
+            let end = (start + buf.len()).min(visible);
+            if start >= end {
+                return Ok(0);
+            }
+            let n = end - start;
+            buf[..n].copy_from_slice(&self.bytes[start..end]);
+            Ok(n)
+        }
+
+        fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            let end = (start + buf.len()).min(self.bytes.len());
+            if start >= end {
+                return Ok(0);
+            }
+            let n = end - start;
+            self.bytes[start..end].copy_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn barrier(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn refresh_partitions(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+    }
 
     /// 内存目标：只用于验证写通道的边界与回读，不触盘。
     struct MemoryTarget {
@@ -270,7 +345,6 @@ mod tests {
         )
     }
 
-    // covers: I3
     #[test]
     fn a_write_outside_the_declared_regions_is_rejected() {
         let mut target = MemoryTarget {
@@ -288,7 +362,6 @@ mod tests {
         );
     }
 
-    // covers: B20, I11
     #[test]
     fn a_write_past_the_target_length_is_rejected() {
         let mut target = MemoryTarget {
@@ -306,7 +379,6 @@ mod tests {
         );
     }
 
-    // covers: I3, I11
     #[test]
     fn a_declared_in_bounds_write_reads_back_identically() {
         let mut target = MemoryTarget {
@@ -321,7 +393,6 @@ mod tests {
         channel.verify_written().expect("回读摘要应一致");
     }
 
-    // covers: I4
     #[test]
     fn a_token_from_another_session_is_rejected() {
         let mut target = MemoryTarget {
@@ -338,7 +409,6 @@ mod tests {
         );
     }
 
-    // covers: I4
     #[test]
     fn a_token_for_another_step_is_rejected() {
         let mut target = MemoryTarget {
@@ -361,7 +431,6 @@ mod tests {
         );
     }
 
-    // covers: I4
     #[test]
     fn a_token_for_another_region_set_is_rejected() {
         let mut target = MemoryTarget {
@@ -381,6 +450,86 @@ mod tests {
         .expect("区间摘要不符的令牌必须被拒绝");
         assert!(
             error.to_string().contains("does not cover"),
+            "实际错误：{error}"
+        );
+    }
+
+    #[test]
+    fn the_channel_checks_the_target_length_at_write_time() {
+        let len = Arc::new(AtomicU64::new(4096));
+        let mut target = ResizableTarget {
+            bytes: vec![0u8; 4096],
+            len: Arc::clone(&len),
+        };
+        let declared = [Region::sized(0, 2048).expect("区间")];
+        let session = SessionId::next();
+        let mut channel = WriteChannel::new(
+            &mut target,
+            session,
+            token(session, 0, &declared),
+            0,
+            &declared,
+        )
+        .expect("通道");
+        assert_eq!(channel.target_len(), 4096);
+        // 通道建立后目标被外部截断：上界必须按此刻长度判，而不是建立时的缓存。
+        len.store(1024, Ordering::SeqCst);
+        assert_eq!(channel.target_len(), 1024);
+        let region = Region::sized(0, 2048).expect("区间");
+        let error = channel
+            .write(region, &[0u8; 2048])
+            .expect_err("按此刻长度已越界，必须拒绝");
+        assert!(
+            error.to_string().contains("past the target length"),
+            "实际错误：{error}"
+        );
+    }
+
+    #[test]
+    fn a_read_back_that_differs_from_the_written_bytes_is_reported() {
+        let mut target = MemoryTarget {
+            bytes: vec![0u8; 4096],
+        };
+        let declared = [Region::sized(0, 512).expect("区间")];
+        let region = Region::sized(0, 512).expect("区间");
+        {
+            let mut channel = channel(&mut target, SessionId::next(), 0, &declared).expect("通道");
+            channel.write(region, &[0x5au8; 512]).expect("写入");
+        }
+        // 期望摘要取另一段字节：读回来的内容与之不符，必须报错。
+        let mut hasher = Hasher::new();
+        hasher.update(&[0x11u8; 512]);
+        let error = verify_digests(&target, &[(region, hasher.finish())])
+            .expect_err("回读与期望不符必须被报告");
+        assert!(error.to_string().contains("mismatch"), "实际错误：{error}");
+    }
+
+    #[test]
+    fn a_read_back_past_the_current_length_ends_early() {
+        let len = Arc::new(AtomicU64::new(4096));
+        let mut target = ResizableTarget {
+            bytes: vec![0u8; 4096],
+            len: Arc::clone(&len),
+        };
+        let declared = [Region::sized(0, 2048).expect("区间")];
+        let region = Region::sized(0, 2048).expect("区间");
+        let session = SessionId::next();
+        let mut channel = WriteChannel::new(
+            &mut target,
+            session,
+            token(session, 0, &declared),
+            0,
+            &declared,
+        )
+        .expect("通道");
+        channel.write(region, &[0x5au8; 2048]).expect("写入");
+        // 目标被外部截断到一扇区：回读越界，读取提前结束。
+        len.store(512, Ordering::SeqCst);
+        let error = channel
+            .verify_written()
+            .expect_err("回读不到声明长度必须失败");
+        assert!(
+            error.to_string().contains("ended early"),
             "实际错误：{error}"
         );
     }

@@ -58,7 +58,6 @@ mod tests {
         assert_eq!(down(8191, 4096), Ok(4096));
     }
 
-    // covers: R0863
     #[test]
     fn extremes_do_not_wrap() {
         assert_eq!(up(u64::MAX, 4096), Err(GeometryError::Overflow));

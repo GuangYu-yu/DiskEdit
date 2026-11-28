@@ -1,7 +1,7 @@
 //! 执行层的基础类型：状态机、写入令牌与唯一写通道。
 //!
 //! 执行只接收已确认的计划与独占句柄；写入必须先有记录原像，再经唯一写通道落到
-//! 声明区间内。具体步骤的执行器按纵切逐个接入，这里只固定所有写路径共用的
+//! 声明区间内。具体步骤的执行器分布在各子模块，这里只固定所有写路径共用的
 //! 约束。
 
 pub mod diagnose;
@@ -190,7 +190,6 @@ mod tests {
         assert!(!outcome.succeeded());
     }
 
-    // covers: D1
     #[test]
     fn recovery_outcomes_are_not_success() {
         let outcome = Outcome::needs_recovery("interrupted");
@@ -198,7 +197,6 @@ mod tests {
         assert!(!outcome.succeeded());
     }
 
-    // covers: D1
     #[test]
     fn completed_is_the_only_success() {
         assert!(Outcome::completed().succeeded());

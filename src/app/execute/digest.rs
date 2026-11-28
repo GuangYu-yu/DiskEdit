@@ -7,6 +7,7 @@
 use diskedit_core::region::Region;
 
 use super::ExecError;
+use crate::app::decide::digest::FNV_OFFSET_BASIS;
 use crate::platform::TargetHandle;
 
 /// 128 位区域摘要。
@@ -29,7 +30,7 @@ impl Default for Hasher {
 impl Hasher {
     pub const fn new() -> Self {
         Self {
-            left: 0xcbf29ce484222325,
+            left: FNV_OFFSET_BASIS,
             right: 0x9e3779b97f4a7c15,
             fed: 0,
         }
@@ -70,6 +71,9 @@ pub fn digest(bytes: &[u8]) -> Digest {
 }
 
 /// 读一段区域并增量摘要；按块读取，单次缓冲不超过 `chunk`。
+///
+/// 摘要只覆盖读满 `region.len()` 之后才计算：任何一次读少于请求长度都按 IO 失败
+/// 返回，不把残缺字节当成区域内容。
 pub fn hash_region(
     target: &mut dyn TargetHandle,
     region: Region,
@@ -81,9 +85,14 @@ pub fn hash_region(
     let mut buffer = vec![0u8; chunk.max(1)];
     while remaining > 0 {
         let take = remaining.min(buffer.len() as u64) as usize;
-        target
+        let read = target
             .read_at(offset, &mut buffer[..take])
             .map_err(ExecError::from)?;
+        if read != take {
+            return Err(ExecError::Io(format!(
+                "read of region ended early: expected {take} bytes, got {read} bytes"
+            )));
+        }
         hasher.update(&buffer[..take]);
         offset += take as u64;
         remaining -= take as u64;
@@ -124,7 +133,57 @@ pub fn read_region(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+    use crate::platform::{PlatformResult, TargetKind};
+
+    /// 每次只吐出至多 `per_read` 字节的目标；用来注入短读。
+    struct ShortReader {
+        bytes: Vec<u8>,
+        per_read: usize,
+    }
+
+    impl TargetHandle for ShortReader {
+        fn path(&self) -> &Path {
+            Path::new("short-reader")
+        }
+
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+
+        fn kind(&self) -> TargetKind {
+            TargetKind::File
+        }
+
+        fn sector_size(&self) -> Option<u64> {
+            Some(512)
+        }
+
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            if start >= self.bytes.len() {
+                return Ok(0);
+            }
+            let end = (start + buf.len()).min(self.bytes.len());
+            let n = (end - start).min(self.per_read);
+            buf[..n].copy_from_slice(&self.bytes[start..start + n]);
+            Ok(n)
+        }
+
+        fn write_at(&mut self, _offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+            Ok(buf.len())
+        }
+
+        fn barrier(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn refresh_partitions(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn same_bytes_same_digest_different_bytes_different_digest() {
@@ -139,5 +198,27 @@ mod tests {
         hasher.update(b"ab");
         hasher.update(b"c");
         assert_eq!(hasher.finish(), digest(b"abc"));
+    }
+
+    #[test]
+    fn a_short_read_of_a_region_is_not_hashed_as_the_region() {
+        let bytes = vec![0x5au8; 4096];
+        let mut short = ShortReader {
+            bytes: bytes.clone(),
+            per_read: 100,
+        };
+        let region = Region::sized(0, 4096).expect("区间");
+        let error = hash_region(&mut short, region, 1 << 20)
+            .expect_err("短读必须失败，而不是对残缺字节求摘要");
+        assert!(error.to_string().contains("ended early"), "{error}");
+
+        let mut full = ShortReader {
+            bytes,
+            per_read: usize::MAX,
+        };
+        assert_eq!(
+            hash_region(&mut full, region, 1 << 20).expect("读满可求摘要"),
+            digest(&[0x5au8; 4096])
+        );
     }
 }

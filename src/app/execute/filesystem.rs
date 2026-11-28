@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use diskedit_core::fs::{ContentKind, FsKind, MkfsKind, Program};
+use diskedit_core::fs::{ContentKind, FsKind, MkfsKind, OnlineGrow, Program, online_grow, profile};
 use diskedit_core::region::Region;
 
 use super::transaction::RecordSession;
@@ -94,12 +94,15 @@ pub(super) fn execute_online_step(
     confirm_mount(platform, &online).map_err(|error| (error, false))?;
     check_identity(platform, online.disk, plan).map_err(|error| (error, false))?;
 
-    if let Some((program, args)) = online_invocation(&online)
-        && platform.tool_available(program)
-    {
-        return run_online_native(platform, &online, program, &args);
+    match online_invocation(&online) {
+        Some((program, args)) if platform.tool_available(program) => {
+            run_online_native(platform, &online, program, &args)
+        }
+        // 在线能力表给出了程序，本机却没有：交给载体，载体也不接受时按不支持报告。
+        Some(_) => run_online_carrier(platform, &online),
+        // 在线能力表说这个内容没有在线方式：直接按表给出的理由拒绝，不去试探载体。
+        None => Err((ExecError::Unsupported(online_refusal(&online)), false)),
     }
-    run_online_carrier(platform, &online)
 }
 
 /// 计划里的在线步骤；必须恰好一个。
@@ -225,13 +228,21 @@ fn confirm_mount(platform: &dyn Platform, online: &Online<'_>) -> Result<(), Exe
     }
 }
 
-/// 在线扩缩的程序与参数；没有在线工具的族返回 `None`。
+/// 在线扩缩用的程序与参数。
+///
+/// 程序身份取自档案表的在线列，本函数只决定它拿设备还是挂载点、以及各工具自己的
+/// 参数形态；档案表说没有在线方式时返回 `None`，不在执行层另留一份能力判断。
 fn online_invocation(online: &Online<'_>) -> Option<(Program, Vec<String>)> {
     let mount = online.mount_point.display().to_string();
     let device = online.device.display().to_string();
+    let kind = ContentKind::Filesystem(online.filesystem);
     if online.shrink {
-        return match online.filesystem {
-            FsKind::Btrfs => Some((
+        // 在线收缩要求档案允许收缩，且该内容的在线形态本身以挂载点为参数。
+        if !profile(kind).shrink.is_supported() {
+            return None;
+        }
+        return match online_grow(kind) {
+            OnlineGrow::MountPoint(Program::Btrfs) => Some((
                 Program::Btrfs,
                 vec![
                     "filesystem".to_owned(),
@@ -240,47 +251,79 @@ fn online_invocation(online: &Online<'_>) -> Option<(Program, Vec<String>)> {
                     mount,
                 ],
             )),
-            FsKind::Ext
-            | FsKind::Xfs
-            | FsKind::Squashfs
-            | FsKind::Erofs
-            | FsKind::F2fs
-            | FsKind::Exfat
-            | FsKind::Vfat
-            | FsKind::Ntfs
-            | FsKind::HfsPlus
-            | FsKind::Apfs
-            | FsKind::Bcachefs
-            | FsKind::Jfs
-            | FsKind::Reiserfs
-            | FsKind::Udf => None,
+            OnlineGrow::Device(_) | OnlineGrow::MountPoint(_) | OnlineGrow::Unsupported(_) => None,
         };
     }
-    match online.filesystem {
-        FsKind::Ext => Some((Program::Resize2fs, vec![device])),
-        FsKind::Xfs => Some((Program::XfsGrowfs, vec![mount])),
-        FsKind::Btrfs => Some((
-            Program::Btrfs,
-            vec![
-                "filesystem".to_owned(),
-                "resize".to_owned(),
-                "max".to_owned(),
-                mount,
-            ],
-        )),
-        FsKind::Squashfs
-        | FsKind::Erofs
-        | FsKind::F2fs
-        | FsKind::Exfat
-        | FsKind::Vfat
-        | FsKind::Ntfs
-        | FsKind::HfsPlus
-        | FsKind::Apfs
-        | FsKind::Bcachefs
-        | FsKind::Jfs
-        | FsKind::Reiserfs
-        | FsKind::Udf => None,
+    let program = online_grow(kind).program()?;
+    let args = match program {
+        Program::Resize2fs => vec![device],
+        Program::XfsGrowfs => vec![mount],
+        Program::Btrfs => vec![
+            "filesystem".to_owned(),
+            "resize".to_owned(),
+            "max".to_owned(),
+            mount,
+        ],
+        // 档案表给出的程序在这里还没有参数形态：返回 `None` 让执行按不支持停下，
+        // 而不是猜一份 argv。
+        Program::E2fsck
+        | Program::Dumpe2fs
+        | Program::Mke2fs
+        | Program::Tune2fs
+        | Program::Ntfsresize
+        | Program::Ntfsfix
+        | Program::Ntfslabel
+        | Program::FsckF2fs
+        | Program::ResizeF2fs
+        | Program::XfsRepair
+        | Program::XfsAdmin
+        | Program::Btrfstune
+        | Program::Fatresize
+        | Program::Fatlabel
+        | Program::FsckVfat
+        | Program::Exfatlabel
+        | Program::FsckExfat
+        | Program::Mkswap
+        | Program::Swaplabel
+        | Program::Pvs
+        | Program::Lvs
+        | Program::Vgs
+        | Program::Pvresize
+        | Program::Lvextend
+        | Program::MkfsVfat
+        | Program::MkfsExfat
+        | Program::MkfsNtfs
+        | Program::MkfsXfs
+        | Program::MkfsBtrfs
+        | Program::MkfsF2fs
+        | Program::Mount
+        | Program::Umount
+        | Program::Losetup
+        | Program::Sfdisk
+        | Program::Partx
+        | Program::Blkid => return None,
+    };
+    Some((program, args))
+}
+
+/// 在线形态被拒绝的理由；与档案表保持同一句话。
+fn online_refusal(online: &Online<'_>) -> String {
+    let kind = ContentKind::Filesystem(online.filesystem);
+    if online.shrink && !profile(kind).shrink.is_supported() {
+        return format!(
+            "{} cannot shrink in place; shrink it offline and rerun",
+            online.filesystem.as_str()
+        );
     }
+    online_grow(kind)
+        .reason()
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "{} has no online resize form in this build",
+                online.filesystem.as_str()
+            )
+        })
 }
 
 /// 本机执行在线扩容：工具运行一次，随后回读尺寸确认真的长到分区末尾。
@@ -515,8 +558,12 @@ pub(super) fn execute_plan(
     ensure_block_capability(platform, target).map_err(|error| (error, false))?;
     // 锁前核对一次身份，持锁后再核对一次。
     check_identity(platform, target, plan).map_err(|error| (error, false))?;
-    let mut session =
-        RecordSession::prepare(platform, plan.identity()).map_err(|error| (error, false))?;
+    let total_bytes = platform
+        .open_target_read_only(target)
+        .map_err(|error| (ExecError::from(error), false))?
+        .len();
+    let mut session = RecordSession::prepare(platform, plan.identity(), total_bytes)
+        .map_err(|error| (error, false))?;
     check_identity(platform, target, plan).map_err(|error| (error, false))?;
 
     let device = resolve_device(
@@ -605,6 +652,8 @@ pub(super) fn execute_plan(
             shrink(platform, *filesystem, device.device(), *bytes)?;
         }
         FsAction::RebuildSwap { start_bytes, .. } => {
+            // 先读旧首部再调工具：UUID 与卷标可能被 fstab/resume 引用，重建必须原样
+            // 传回去。读不出来就停在这里，不调用工具，也不生成一个新的随机身份。
             let identity = read_swap_identity(platform, target, *start_bytes)
                 .map_err(|error| (error, true))?;
             let mut args = swap_invocation(&identity);
@@ -874,7 +923,8 @@ fn read_swap_identity(
         .map_err(ExecError::from)?;
     if read != fields.len() {
         return Err(ExecError::Io(
-            "the old swap header could not be read in full".to_owned(),
+            "the old swap header could not be read in full; the partition was not reformatted"
+                .to_owned(),
         ));
     }
     parse_swap_identity(&fields)
@@ -1101,7 +1151,7 @@ pub(super) fn shrink(
             Ok(())
         }
         // 多设备 btrfs 收缩不受支持：任何成员设备都不能单独改小。占用证据在挂载前
-        // 由目标自己的 superblock 给出（B17），所以未挂载也能拒绝，且不写任何字节。
+        // 由目标自己的 superblock 给出，所以未挂载也能拒绝，且不写任何字节。
         FsKind::Btrfs => {
             if let Occupancy::Used { evidence } = platform
                 .occupancy(device)
@@ -1739,7 +1789,6 @@ fn failure(error: ExecError, touched: bool) -> Outcome {
     }
 }
 
-// covers: B15
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1817,6 +1866,97 @@ mod tests {
         }
     }
 
+    /// 一个在线步骤的现场事实；路径都是常量，生命周期足够跑完用例。
+    fn online_step_facts(filesystem: FsKind, shrink: bool) -> Online<'static> {
+        Online {
+            mount_point: Path::new("/mnt"),
+            device: Path::new("dev0"),
+            disk: Path::new("disk0"),
+            partition: 1,
+            filesystem,
+            bytes: 64 << 20,
+            shrink,
+        }
+    }
+
+    #[test]
+    fn online_capabilities_come_from_the_matrix_not_a_second_table() {
+        for filesystem in FsKind::ALL {
+            let kind = ContentKind::Filesystem(filesystem);
+            let grow = online_step_facts(filesystem, false);
+            match (online_grow(kind).program(), online_invocation(&grow)) {
+                (Some(expected), Some((program, _))) => {
+                    assert_eq!(program, expected, "{filesystem:?} 的程序必须来自档案表")
+                }
+                (None, None) => assert!(
+                    online_grow(kind).reason().is_some(),
+                    "{filesystem:?} 没有在线程序时必须带理由"
+                ),
+                (expected, got) => {
+                    panic!("{filesystem:?} 的执行能力与档案表不一致：表 {expected:?}，执行 {got:?}")
+                }
+            }
+            let shrink = online_step_facts(filesystem, true);
+            let shrink_expected =
+                filesystem == FsKind::Btrfs && profile(kind).shrink.is_supported();
+            assert_eq!(
+                online_invocation(&shrink).is_some(),
+                shrink_expected,
+                "{filesystem:?} 的在线收缩只由档案表同时允许时成立"
+            );
+        }
+    }
+
+    #[test]
+    fn online_grow_hands_the_tool_the_device_or_the_mount_point_it_asks_for() {
+        let ext =
+            online_invocation(&online_step_facts(FsKind::Ext, false)).expect("ext 有在线扩容");
+        assert_eq!(ext.0, Program::Resize2fs);
+        assert_eq!(ext.1, vec!["dev0".to_owned()]);
+
+        let xfs =
+            online_invocation(&online_step_facts(FsKind::Xfs, false)).expect("xfs 有在线扩容");
+        assert_eq!(xfs.0, Program::XfsGrowfs);
+        assert_eq!(xfs.1, vec!["/mnt".to_owned()]);
+
+        let btrfs =
+            online_invocation(&online_step_facts(FsKind::Btrfs, false)).expect("btrfs 有在线扩容");
+        assert_eq!(
+            btrfs.1,
+            vec![
+                "filesystem".to_owned(),
+                "resize".to_owned(),
+                "max".to_owned(),
+                "/mnt".to_owned()
+            ]
+        );
+
+        let shrink = online_invocation(&online_step_facts(FsKind::Btrfs, true))
+            .expect("挂载中的 btrfs 可以收缩");
+        assert_eq!(
+            shrink.1,
+            vec![
+                "filesystem".to_owned(),
+                "resize".to_owned(),
+                "65536k".to_owned(),
+                "/mnt".to_owned()
+            ]
+        );
+
+        // 档案表判为不支持的内容不给出程序，并按表里的原话拒绝。
+        for filesystem in [FsKind::Ntfs, FsKind::F2fs, FsKind::Vfat] {
+            let facts = online_step_facts(filesystem, false);
+            assert!(
+                online_invocation(&facts).is_none(),
+                "{filesystem:?} 不得凭空得到在线程序"
+            );
+            assert!(
+                online_refusal(&facts).len() > 20,
+                "{filesystem:?} 的拒绝理由过短"
+            );
+        }
+    }
+
     #[test]
     fn grow_programs_are_fixed_per_family() {
         let ext = grow_plan(FsKind::Ext).expect("ext 扩容");
@@ -1860,7 +2000,6 @@ mod tests {
         assert_eq!(SIGNATURE_SITE_BYTES % 1024, 0);
     }
 
-    // covers: I9
     #[test]
     fn write_class_programs_are_named_and_bounded_by_the_token() {
         use diskedit_core::fs::Access;
@@ -1882,7 +2021,6 @@ mod tests {
         assert!(verify_ext_size(&filled, 16 * 512).is_ok());
     }
 
-    // covers: B27
     #[test]
     fn a_tool_without_an_exit_status_is_indeterminate() {
         use crate::platform::PlatformError;
@@ -1921,7 +2059,6 @@ mod tests {
         ));
     }
 
-    // covers: D4
     #[test]
     fn a_repaired_filesystem_is_a_success_and_a_later_failure_is_partial() {
         // 脏 ext 上检查器会报 1（已修复）；那是成功，修复本身已写目标。
@@ -1969,7 +2106,6 @@ mod tests {
         assert!(verify_ext_size(&silent, 4096).is_err());
     }
 
-    // covers: B28
     #[test]
     fn a_btrfs_shrink_only_requires_the_filesystem_to_fit() {
         let superblock = ToolRun {
@@ -1996,7 +2132,6 @@ mod tests {
         assert!(verify_btrfs_size(&silent, 104857600, true).is_err());
     }
 
-    // covers: B28
     #[test]
     fn an_xfs_grow_is_verified_by_the_data_geometry() {
         // 真实探针输出形态：data 行给出块大小与块数。
@@ -2025,7 +2160,6 @@ mod tests {
         assert!(xfs_geometry("log =internal log bsize=4096 blocks=16384").is_none());
     }
 
-    // covers: B28
     #[test]
     fn swap_rebuild_keeps_the_old_uuid_and_label() {
         let mut fields = [0u8; 32];
@@ -2060,7 +2194,6 @@ mod tests {
         assert!(swap_invocation(&blank).is_empty());
     }
 
-    // covers: B28
     #[test]
     fn a_non_utf8_swap_label_is_refused_instead_of_being_rewritten() {
         let mut fields = [0u8; 32];
@@ -2068,7 +2201,6 @@ mod tests {
         assert!(parse_swap_identity(&fields).is_err());
     }
 
-    // covers: D11
     #[test]
     fn a_block_device_without_the_capability_is_refused_as_unsupported() {
         // 普通文件经 loop 得到分区视图，不需要块层能力。

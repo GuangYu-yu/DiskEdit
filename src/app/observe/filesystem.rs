@@ -3,14 +3,13 @@
 //! 外部程序能否运行是宿主事实，与分区内容一起一次采齐；判定层据此给出
 //! `ToolMissing`，而不是等执行时才发现。这里不决定任何做法，只如实记录。
 
-use diskedit_core::fingerprint::Strength;
 use diskedit_core::fs::{ContentKind, FsKind, Program, Verb, catalog};
 
 use crate::platform::{MountFacts, Occupancy, Platform};
 
 use super::new::{PriorState, prior_state};
 use super::records::RecordState;
-use super::snapshot::{CaptureError, TargetFacts, open_target, record_state};
+use super::snapshot::{CaptureError, TargetFacts, open_path, open_target, record_state};
 use super::table::{self, PartitionView, TableView};
 use super::{Command, PartitionSelector, Request};
 
@@ -175,35 +174,14 @@ fn capture_mounted(
     })
 }
 
-/// 以整盘为现场；身份优先取盘自身证明的强身份，其次用声明的身份名。
+/// 以整盘为现场：与整目标形态同一套打开规则（身份探测失败不折成无身份、
+/// 扇区尺寸不可知即拒绝、`--alias` 只用于自身证明不了身份的盘）。
 pub(super) fn open_disk(
     platform: &dyn Platform,
     disk: &std::path::Path,
     request: &Request,
 ) -> Result<TargetFacts, CaptureError> {
-    let handle = platform.open_target_read_only(disk)?;
-    let strong = platform
-        .identity(disk)
-        .ok()
-        .filter(|fingerprint| fingerprint.strength() == Strength::Strong);
-    let identity = request
-        .alias()
-        .map(diskedit_core::fingerprint::Fingerprint::declared)
-        .or(strong);
-    let sector_size = match handle.sector_size() {
-        None => 512,
-        Some(bytes) => diskedit_core::geometry::SectorSize::new(bytes)
-            .map(diskedit_core::geometry::SectorSize::bytes)
-            .map_err(|_| CaptureError::UnsupportedSector { bytes })?,
-    };
-    Ok(TargetFacts {
-        display: disk.display().to_string(),
-        path: disk.to_path_buf(),
-        bytes: handle.len(),
-        kind: handle.kind(),
-        sector_size,
-        identity,
-    })
+    open_path(platform, disk, request.alias(), request.sector_size())
 }
 
 impl From<&PartitionView> for PartitionFacts {

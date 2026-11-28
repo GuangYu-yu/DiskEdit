@@ -126,7 +126,7 @@ pub fn show(snapshot: &RecordSiteSnapshot) -> Decision {
                 }
             };
             // 记录里写着它属于哪个目标：能自行证明身份的目标必须与之相符，否则记录是
-            // 别的工作留下的证据，不能被当作本目标的现状（基线判定为外来）。
+            // 别的工作留下的证据，不能被当作本目标的现状。
             if let Some(identity) = snapshot.target.identity
                 && decoded.body.target != identity
             {
@@ -165,14 +165,10 @@ pub fn show(snapshot: &RecordSiteSnapshot) -> Decision {
 }
 
 fn decode_summary(decoded: &diskedit_core::record::DecodedRecord) -> String {
-    format!(
-        "geometry generation {}, plan digest {}",
-        decoded.body.geometry_generation,
-        hex(&decoded.body.plan_digest)
-    )
+    format!("plan digest {}", hex(&decoded.body.plan_digest))
 }
 
-/// 把解码失败归类成与基线一致的三种结构结论：截断、校验不符、格式不认。
+/// 把解码失败归类成三种结构结论：截断、校验不符、格式不认。
 fn damage(error: &diskedit_core::record::RecordError) -> String {
     use diskedit_core::record::RecordError;
     match error {
@@ -201,9 +197,10 @@ fn damage(error: &diskedit_core::record::RecordError) -> String {
         | RecordError::PostimageLengthMismatch
         | RecordError::PreimageTooLarge => {
             "structure: the record's magic is not recognized or its payload does not match the \
-             layout this build reads — keep the file; `diskedit release` will not \
-             quarantine it automatically, so remove it by hand once you are sure it is stale, and \
-             nothing may write to this target until then"
+             layout this build reads — keep the file; `diskedit release` archives it as \
+             `record.<N>.abandoned` when the layout can be attributed to this build (pass \
+             `--discard-replay` when the recorded ranges cannot be enumerated) and refuses \
+             otherwise, and nothing may write to this target until then"
                 .to_owned()
         }
     }
@@ -221,11 +218,7 @@ pub fn record_id(bytes: &[u8]) -> String {
 
 fn entry(path: &Path, bytes: &[u8]) -> RecordEntry {
     let decoded = match diskedit_core::record::decode(bytes) {
-        Ok(decoded) => format!(
-            "geometry generation {}, plan digest {}",
-            decoded.body.geometry_generation,
-            hex(&decoded.body.plan_digest)
-        ),
+        Ok(decoded) => format!("plan digest {}", hex(&decoded.body.plan_digest)),
         Err(error) => format!("record is unreadable: {error:?}"),
     };
     RecordEntry {

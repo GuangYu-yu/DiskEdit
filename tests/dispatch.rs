@@ -173,7 +173,6 @@ fn entry_name(argv: &[&str]) -> String {
     }
 }
 
-// covers: I6
 #[test]
 fn a_write_is_refused_before_the_target_is_opened() {
     for argv in WRITE_COMMANDS {
@@ -189,7 +188,6 @@ fn a_write_is_refused_before_the_target_is_opened() {
     }
 }
 
-// covers: I6
 #[test]
 fn the_write_command_list_matches_the_declared_surface() {
     let declared: Vec<&str> = diskedit::app::cli::declared_entries()
@@ -199,7 +197,6 @@ fn the_write_command_list_matches_the_declared_surface() {
     assert_eq!(declared, enumerated, "写命令用例与命令面声明不一致");
 }
 
-// covers: I6
 #[test]
 fn a_read_only_command_reaches_the_port() {
     // 只读命令不受能力门约束：它确实走进端口，并被"未接入"拒绝。
@@ -209,7 +206,6 @@ fn a_read_only_command_reaches_the_port() {
     assert!(calls > 0, "只读命令应当进入端口");
 }
 
-// covers: I6
 #[test]
 fn a_dry_run_is_not_a_write() {
     // `--dry-run` 只预览，不写盘；能力门放行，命令照常进入端口。
@@ -219,7 +215,6 @@ fn a_dry_run_is_not_a_write() {
     assert!(calls > 0, "--dry-run 不是写，能力门不应拦下它");
 }
 
-// covers: I6
 #[test]
 fn every_write_command_demands_confirmation() {
     for argv in WRITE_COMMANDS {

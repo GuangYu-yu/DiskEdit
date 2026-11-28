@@ -12,6 +12,9 @@ use crate::platform::{Platform, PlatformError, PlatformResult, RecordEntry};
 /// 记录目录的文件名。
 pub const RECORD_FILE: &str = "record";
 
+/// 状态根下存放记录目录的那一级名字；`<state_root>/images/<key>/record`。
+pub const IMAGE_DIR: &str = "images";
+
 /// 一个目标的记录状态。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordState {
@@ -25,13 +28,6 @@ pub struct RecordState {
     pub bytes: Option<Vec<u8>>,
     /// 无法定位或读取的原因。
     pub unavailable: Option<String>,
-}
-
-impl RecordState {
-    /// 没有记录或无法定位记录。
-    pub fn absent(&self) -> bool {
-        self.bytes.is_none()
-    }
 }
 
 /// 按目标身份定位记录目录。
@@ -57,9 +53,9 @@ pub fn locate(
             unavailable: Some("target identity could not be established".to_owned()),
         });
     };
-    let directory = root.join("images").join(hex16(fingerprint));
+    let directory = directory(&root, fingerprint);
     let directory_exists = platform.is_directory(&directory);
-    let file = directory.join(RECORD_FILE);
+    let file = record_file(&directory);
     match platform.read_record(&file) {
         Ok(RecordEntry::Contents(bytes)) => Ok(RecordState {
             directory: Some(directory),
@@ -117,4 +113,31 @@ pub fn hex16(fingerprint: Fingerprint) -> String {
         text.push_str(&format!("{byte:02x}"));
     }
     text
+}
+
+/// 记录目录：`<state_root>/images/<key>`。定位与写入都从这里取路径。
+pub fn directory(root: &Path, fingerprint: Fingerprint) -> PathBuf {
+    root.join(IMAGE_DIR).join(hex16(fingerprint))
+}
+
+/// 记录文件：记录目录下的 `record`。
+pub fn record_file(directory: &Path) -> PathBuf {
+    directory.join(RECORD_FILE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_record_layout_is_one_definition() {
+        let fingerprint = Fingerprint::strong([0x0a; 32]);
+        let root = Path::new("/state");
+        let directory = directory(root, fingerprint);
+        assert_eq!(
+            directory,
+            Path::new("/state/images/0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a")
+        );
+        assert_eq!(record_file(&directory), directory.join("record"));
+    }
 }

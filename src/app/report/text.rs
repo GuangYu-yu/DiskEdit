@@ -1,5 +1,6 @@
 //! 现场结论的文本渲染。
 
+use super::LayoutField;
 use crate::app::decide::report::{
     AddPreview, LayoutPartition, LayoutReport, RecordSiteReport, RecordVerdict, ResizePreview,
 };
@@ -8,20 +9,25 @@ use crate::platform::Occupancy;
 /// `layout` 的固定文本行；`--json` 的结构化明细走 `json::layout`。
 pub fn layout(report: &LayoutReport) -> String {
     let mut lines = vec![
-        format!("label: {}", report.label.as_str()),
-        format!("sector_size: {}", report.sector_size),
-        format!("size_bytes: {}", report.size_bytes),
+        field_line(LayoutField::Label, report.label.as_str()),
+        field_line(LayoutField::Damaged, report.damaged),
+        field_line(LayoutField::SectorSize, report.sector_size),
+        field_line(LayoutField::SizeBytes, report.size_bytes),
     ];
     if let Some(guid) = &report.disk_guid {
-        lines.push(format!("disk_guid: {guid}"));
+        lines.push(field_line(LayoutField::DiskGuid, guid));
     }
     if let Some(last) = report.last_part {
-        lines.push(format!("last_part: {last}"));
+        lines.push(field_line(LayoutField::LastPart, last));
     }
     for partition in &report.partitions {
         lines.push(partition_line(partition));
     }
     lines.join("\n")
+}
+
+fn field_line(field: LayoutField, value: impl std::fmt::Display) -> String {
+    format!("{} {}", field.text_prefix(), value)
 }
 
 fn partition_line(partition: &LayoutPartition) -> String {
@@ -31,7 +37,8 @@ fn partition_line(partition: &LayoutPartition) -> String {
         partition.name.clone()
     };
     format!(
-        "partition {}: LBA {}..{} ({} bytes) type {} name {} fs {}",
+        "{}{}: LBA {}..{} ({} bytes) type {} name {} fs {}",
+        LayoutField::Partitions.text_prefix(),
         partition.number,
         partition.first_lba,
         partition.last_lba,
@@ -119,7 +126,6 @@ fn verdict(record: &RecordVerdict, occupancy: &Occupancy) -> &'static str {
 mod tests {
     use super::*;
 
-    // covers: D12
     #[test]
     fn recovery_text_keeps_the_three_elements_and_adds_the_cause() {
         let text = recovery("the write barrier failed");

@@ -23,7 +23,6 @@ impl Rng {
     }
 }
 
-// covers: T14
 #[test]
 fn alignment_never_moves_a_value_out_of_one_step() {
     let mut rng = Rng(0x005e_eda1_1ce5);
@@ -48,7 +47,6 @@ fn alignment_never_moves_a_value_out_of_one_step() {
     }
 }
 
-// covers: T14
 #[test]
 fn sector_offsets_are_inverse_where_defined() {
     let mut rng = Rng(0x5123_4567_89ab);
@@ -74,7 +72,6 @@ fn sector_offsets_are_inverse_where_defined() {
     }
 }
 
-// covers: T14
 #[test]
 fn sector_rounding_brackets_the_input() {
     let mut rng = Rng(0xabcd_ef01_2345);
@@ -96,7 +93,6 @@ fn sector_rounding_brackets_the_input() {
     }
 }
 
-// covers: T14
 #[test]
 fn region_set_maintains_its_invariants_under_union() {
     let mut rng = Rng(0x1111_2222_3333);
@@ -128,7 +124,6 @@ fn region_set_maintains_its_invariants_under_union() {
     }
 }
 
-// covers: T14
 #[test]
 fn region_intersection_is_symmetric_and_bounded() {
     let mut rng = Rng(0x9999_8888_7777);
@@ -149,7 +144,6 @@ fn region_intersection_is_symmetric_and_bounded() {
     }
 }
 
-// covers: T14
 #[test]
 fn generated_reference_mentions_every_declared_syntax() {
     let files = diskedit::docsgen::files();
@@ -169,7 +163,6 @@ fn generated_reference_mentions_every_declared_syntax() {
     }
 }
 
-// covers: T14
 #[test]
 fn relocation_spans_cover_the_source_exactly_once() {
     let mut rng = Rng(0x0f0f_1e1e_2d2d);

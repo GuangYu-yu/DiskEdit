@@ -29,7 +29,7 @@ pub const BASE: &str = "target/fixtures/s1";
 pub const S2_BASE: &str = "target/fixtures/s2";
 
 /// 本进程专用的状态根：两个二进制共用一份全新的 `XDG_STATE_HOME`，隔离宿主的
-/// 真实状态目录，避免历史记录让 `inspect` 之类的只读对照因残留目录而时绿时红。
+/// 真实状态目录，避免历史记录让 `records show` 之类的只读对照因残留目录而时绿时红。
 pub const STATE_HOME: &str = "target/fixtures/state";
 
 /// 同一进程内的测试可能并发调用；夹具只写一次。

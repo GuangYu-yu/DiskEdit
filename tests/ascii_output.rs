@@ -1,6 +1,6 @@
 //! 用户可见文本的字符集守卫：帮助、版本与用法错误只输出 ASCII。
 //!
-//! 基线文案是英文；混入中文标点或全角字符会让脚本化调用与逐字对照失效。
+//! 用户可见文案是英文；混入中文标点或全角字符会让脚本化调用与逐字对照失效。
 
 use std::process::Command;
 
@@ -21,7 +21,6 @@ fn assert_ascii(argv: &[&str], output: &std::process::Output) {
     }
 }
 
-// covers: T14
 #[test]
 fn help_version_and_usage_are_ascii_only() {
     for argv in [
@@ -36,7 +35,6 @@ fn help_version_and_usage_are_ascii_only() {
     }
 }
 
-// covers: T14
 #[test]
 fn every_command_help_is_ascii_only() {
     for command in diskedit::app::cli::declare::COMMANDS {
@@ -52,7 +50,6 @@ fn every_command_help_is_ascii_only() {
     }
 }
 
-// covers: T14
 #[test]
 fn layout_json_is_ascii_only() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

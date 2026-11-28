@@ -40,7 +40,6 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("偏移在界内"))
 }
 
-// covers: R0005, R0006, R0007, R0008, R0009, R0010, R0011
 #[cfg(target_os = "linux")]
 #[test]
 fn a_grown_container_is_repaired_in_the_same_table_write() {

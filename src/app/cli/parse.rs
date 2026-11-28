@@ -6,8 +6,10 @@
 use std::path::PathBuf;
 
 use diskedit_core::fs::MkfsKind;
+use diskedit_core::geometry::SectorSize;
 use diskedit_core::table::Guid;
 
+use super::declare::{self, Arity};
 use crate::app::observe::{
     Alignment, Command, CopyRequest, MoveRequest, PartitionSelector, Request, ResizeRequest,
     SetKey, SetRequest, SizeSpec, StartSpec, TableFormat, TargetSpec, TypeSelector,
@@ -42,6 +44,27 @@ fn confirm_gate(tokens: &Tokens, name: &str, dry_run: bool) -> Result<(), UsageE
     Ok(())
 }
 
+/// 按命令面声明扫描参数：收下哪些选项来自 [`declare::CommandDef::options`]，
+/// 取值形状来自 [`declare::arity`]。本文件不维护第二份白名单。
+fn command_tokens(args: &[String], name: &str) -> Result<Tokens, UsageError> {
+    let command =
+        declare::find(name).ok_or_else(|| UsageError::new(format!("unknown command `{name}`")))?;
+    let mut values: Vec<&str> = Vec::new();
+    let mut switches: Vec<&str> = Vec::new();
+    for option in command.options() {
+        match declare::arity(option) {
+            Some(Arity::Value) => values.push(option),
+            Some(Arity::Switch) => switches.push(option),
+            None => {
+                return Err(UsageError::new(format!(
+                    "option `{option}` of `{name}` has no declared shape"
+                )));
+            }
+        }
+    }
+    Tokens::scan(args, &values, &switches)
+}
+
 /// 解析一条只读命令。
 pub fn parse(args: &[String]) -> Result<Request, UsageError> {
     let Some(command) = args.first() else {
@@ -68,7 +91,7 @@ pub fn parse(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_layout(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--sector-size"], &["--json"])?;
+    let tokens = command_tokens(args, "layout")?;
     let target = one_target(&tokens, "layout")?;
     if target.partition.is_some() {
         return Err(UsageError::new(
@@ -90,7 +113,7 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
     };
     match subcommand.as_str() {
         "list" => {
-            let tokens = Tokens::scan(&args[1..], &["--alias", "--root"], &[])?;
+            let tokens = command_tokens(&args[1..], "records list")?;
             let root = tokens.value("--root").map(PathBuf::from);
             if root.is_some() {
                 // `--root` 形态扫描一个记录容器目录，与目标形态互斥。
@@ -122,7 +145,7 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
             .with_alias(alias(&tokens)))
         }
         "verify" => {
-            let tokens = Tokens::scan(&args[1..], &["--alias"], &[])?;
+            let tokens = command_tokens(&args[1..], "records verify")?;
             if tokens.positionals.len() != 2 {
                 return Err(UsageError::new("records verify needs <TARGET> <ID>"));
             }
@@ -136,7 +159,7 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
             Ok(Request::new(target, Command::RecordsVerify { token }).with_alias(alias(&tokens)))
         }
         "show" => {
-            let tokens = Tokens::scan(&args[1..], &["--alias"], &[])?;
+            let tokens = command_tokens(&args[1..], "records show")?;
             let target = one_target(&tokens, "records show")?;
             if target.partition.is_some() {
                 return Err(UsageError::new(
@@ -152,7 +175,7 @@ fn parse_records(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_check(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--sector-size"], &[])?;
+    let tokens = command_tokens(args, "check")?;
     let target = one_target(&tokens, "check")?;
     let partition = target
         .partition
@@ -161,7 +184,7 @@ fn parse_check(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--label", "--alias", "--sector-size"], &["--yes"])?;
+    let tokens = command_tokens(args, "mkfs")?;
     confirm_gate(&tokens, "mkfs", false)?;
     if tokens.positionals.len() != 2 {
         return Err(UsageError::new("mkfs needs <TARGET>:N <FS>"));
@@ -186,7 +209,7 @@ fn parse_mkfs(args: &[String]) -> Result<Request, UsageError> {
 
 /// `undo`/`replay`/`release`：三个恢复入口，各自回滚、回放或放弃记录。
 fn parse_undo(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
+    let tokens = command_tokens(args, "undo")?;
     confirm_gate(&tokens, "undo", false)?;
     let target = one_target(&tokens, "undo")?;
     if target.partition.is_some() {
@@ -201,7 +224,7 @@ fn parse_undo(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_replay(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
+    let tokens = command_tokens(args, "replay")?;
     confirm_gate(&tokens, "replay", false)?;
     let target = one_target(&tokens, "replay")?;
     if target.partition.is_some() {
@@ -216,11 +239,7 @@ fn parse_replay(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_release(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--alias", "--sector-size"],
-        &["--yes", "--discard-replay"],
-    )?;
+    let tokens = command_tokens(args, "release")?;
     confirm_gate(&tokens, "release", false)?;
     let target = one_target(&tokens, "release")?;
     if target.partition.is_some() {
@@ -242,26 +261,7 @@ fn parse_release(args: &[String]) -> Result<Request, UsageError> {
 /// `resize`：分区与文件系统一起扩缩；SIZE、`--end` 与 `--grow-to-end` 三选一。
 /// `--fs-only` 走文件系统形态：离线 `<TARGET>:N`，或挂载点在线 `<MOUNTPOINT> [BYTES]`。
 fn parse_resize(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &[
-            "--end",
-            "--align",
-            "--chunk",
-            "--lv",
-            "--alias",
-            "--sector-size",
-        ],
-        &[
-            "--yes",
-            "--grow-to-end",
-            "--allow-move",
-            "--grow-lv",
-            "--no-fs",
-            "--fs-only",
-            "--dry-run",
-        ],
-    )?;
+    let tokens = command_tokens(args, "resize")?;
     if tokens.has("--fs-only") {
         return parse_resize_fs_only(&tokens);
     }
@@ -435,11 +435,7 @@ fn parse_size_spec(raw: &str) -> Result<SizeSpec, UsageError> {
 }
 
 fn parse_new(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--table", "--alias", "--sector-size"],
-        &["--yes", "--overwrite-data"],
-    )?;
+    let tokens = command_tokens(args, "new")?;
     confirm_gate(&tokens, "new", false)?;
     let target = one_target(&tokens, "new")?;
     if target.partition.is_some() {
@@ -467,19 +463,7 @@ fn parse_new(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_add(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &[
-            "--align",
-            "--start",
-            "--part-number",
-            "--name",
-            "--type-guid",
-            "--alias",
-            "--sector-size",
-        ],
-        &["--yes", "--dry-run"],
-    )?;
+    let tokens = command_tokens(args, "add")?;
     let dry_run = tokens.has("--dry-run");
     confirm_gate(&tokens, "add", dry_run)?;
     if tokens.positionals.len() != 2 {
@@ -528,7 +512,7 @@ fn parse_add(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes"])?;
+    let tokens = command_tokens(args, "delete")?;
     confirm_gate(&tokens, "delete", false)?;
     let target = one_target(&tokens, "delete")?;
     let Some(partition) = target.partition else {
@@ -543,7 +527,7 @@ fn parse_delete(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_set(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(args, &["--alias", "--sector-size"], &["--yes", "--random"])?;
+    let tokens = command_tokens(args, "set")?;
     confirm_gate(&tokens, "set", false)?;
     if tokens.positionals.len() < 2 {
         return Err(UsageError::new(
@@ -609,11 +593,7 @@ fn parse_set(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_move(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &["--align", "--start", "--chunk", "--alias", "--sector-size"],
-        &["--yes"],
-    )?;
+    let tokens = command_tokens(args, "move")?;
     confirm_gate(&tokens, "move", false)?;
     let target = one_target(&tokens, "move")?;
     let Some(partition) = target.partition else {
@@ -637,18 +617,7 @@ fn parse_move(args: &[String]) -> Result<Request, UsageError> {
 }
 
 fn parse_copy(args: &[String]) -> Result<Request, UsageError> {
-    let tokens = Tokens::scan(
-        args,
-        &[
-            "--align",
-            "--start",
-            "--chunk",
-            "--name",
-            "--alias",
-            "--sector-size",
-        ],
-        &["--yes", "--keep-partuuid"],
-    )?;
+    let tokens = command_tokens(args, "copy")?;
     confirm_gate(&tokens, "copy", false)?;
     let target = one_target(&tokens, "copy")?;
     let Some(partition) = target.partition else {
@@ -842,6 +811,8 @@ fn record_token(raw: &str) -> Result<String, UsageError> {
     }
 }
 
+/// `--sector-size` 的允许集合就是几何层接受的那一组：这里不另立一份清单，
+/// 否则解析会收下几何层随后拒绝的值。
 fn sector_size(tokens: &Tokens) -> Result<Option<u64>, UsageError> {
     let Some(raw) = tokens.value("--sector-size") else {
         return Ok(None);
@@ -849,12 +820,19 @@ fn sector_size(tokens: &Tokens) -> Result<Option<u64>, UsageError> {
     let size: u64 = raw
         .parse()
         .map_err(|_| UsageError::new(format!("`{raw}` is not a sector size")))?;
-    if size < 512 || !size.is_power_of_two() {
-        return Err(UsageError::new(
-            "sector size must be a power of two of at least 512",
-        ));
+    match SectorSize::new(size) {
+        Ok(sector) => Ok(Some(sector.bytes())),
+        Err(_) => {
+            let allowed: Vec<String> = SectorSize::ALLOWED
+                .iter()
+                .map(|bytes| bytes.to_string())
+                .collect();
+            Err(UsageError::new(format!(
+                "`{raw}` is not a sector size — use one of {}",
+                allowed.join(", ")
+            )))
+        }
     }
-    Ok(Some(size))
 }
 
 fn alias(tokens: &Tokens) -> Option<String> {
@@ -987,7 +965,83 @@ mod tests {
         }
     }
 
-    // covers: D14
+    #[test]
+    fn sector_size_accepts_exactly_the_geometry_set() {
+        // 允许集合只由几何层给出：几何层拒绝的值，解析也必须拒绝；否则同一个
+        // `--sector-size` 会在解析通过、打开时按"不支持的扇区尺寸"退 6。
+        for bytes in SectorSize::ALLOWED {
+            let word = bytes.to_string();
+            assert!(
+                parse_words(&["layout", "disk.img", "--sector-size", &word]).is_ok(),
+                "{bytes} 在几何允许集合内，解析不应拒绝"
+            );
+        }
+        for bad in ["520", "131072", "65535"] {
+            assert!(
+                parse_words(&["layout", "disk.img", "--sector-size", bad]).is_err(),
+                "{bad} 不在几何允许集合内，解析必须拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn resize_forms_without_their_required_argument_are_usage_errors() {
+        // 扩容的三种形态各有必需参数：SIZE、`--end LBA`、`--grow-to-end` 加 `:N`。
+        for words in [
+            &["resize", "disk.img:1", "--yes"][..],
+            &["resize", "disk.img", "--yes"][..],
+            &["resize", "disk.img", "1G", "--grow-to-end", "--yes"][..],
+            &["resize", "disk.img", "--grow-to-end", "--yes"][..],
+            &["resize", "disk.img", "--end", "4096", "--yes"][..],
+            &["resize", "--fs-only", "--yes"][..],
+            &["resize", "disk.img:1", "1G", "--fs-only", "--yes"][..],
+        ] {
+            assert!(
+                parse_words(words).is_err(),
+                "缺必需参数的形态必须拒绝：{words:?}"
+            );
+        }
+        // `--end` 与 `--grow-to-end` 缺少取值也是用法错误。
+        let error = parse_words(&["resize", "disk.img:1", "--end"]).expect_err("缺值必须拒绝");
+        assert!(error.message.contains("needs a value"), "{error:?}");
+        // 完整形态通过。
+        assert!(parse_words(&["resize", "disk.img:1", "--grow-to-end", "--yes"]).is_ok());
+    }
+
+    #[test]
+    fn the_option_whitelist_comes_from_the_declared_surface() {
+        // 每个命令收下的选项集合必须恰好等于命令面声明的并集：解析器不再另抄
+        // 一份白名单，多收或少收一条都会让这条红。
+        for command in declare::COMMANDS {
+            let declared = command.options();
+            for option in &declared {
+                let mut args = vec![(*option).to_owned()];
+                if declare::arity(option) == Some(Arity::Value) {
+                    args.push("0".to_owned());
+                }
+                assert!(
+                    command_tokens(&args, command.name).is_ok(),
+                    "{} 声明了 {option}，解析却不收",
+                    command.name
+                );
+            }
+            for option in declare::OPTIONS.iter().map(|(name, _)| *name) {
+                if declared.contains(&option) {
+                    continue;
+                }
+                let mut args = vec![option.to_owned()];
+                if declare::arity(option) == Some(Arity::Value) {
+                    args.push("0".to_owned());
+                }
+                assert!(
+                    command_tokens(&args, command.name).is_err(),
+                    "{} 没声明 {option}，解析却收下了",
+                    command.name
+                );
+            }
+        }
+    }
+
     #[test]
     fn fractional_sizes_convert_to_exact_bytes_without_truncating() {
         // 9.5G = 9.5 × 2^30 字节（K/M/G/T 为二进制单位，即 2 的幂），不截断成 9G。

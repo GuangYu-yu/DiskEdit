@@ -143,24 +143,39 @@ pub fn check_consistency() {
                 command.name
             );
         }
-        for variant in command.variants {
-            for option in variant.options {
-                assert!(
-                    OPTIONS.iter().any(|(known, _, _)| known == option),
-                    "选项 {option} 缺少文档条目（命令 {}）",
-                    command.name
-                );
-            }
-        }
-        for option in command.common_options {
+        for option in command.options() {
             assert!(
-                OPTIONS.iter().any(|(known, _, _)| known == option),
-                "公共选项 {option} 缺少文档条目（命令 {}）",
+                declare::arity(option).is_some(),
+                "选项 {option} 没有声明取值形状（命令 {}）",
+                command.name
+            );
+            assert!(
+                OPTIONS.iter().any(|(known, _, _)| *known == option),
+                "选项 {option} 缺少文档条目（命令 {}）",
                 command.name
             );
         }
     }
+    // 选项表与命令面的选项集合互为子集：多写或少写一条都会让生成物与声明分叉。
+    for (option, value, _) in OPTIONS {
+        let arity = declare::arity(option).unwrap_or_else(|| {
+            panic!("文档里的选项 {option} 不在命令面声明中");
+        });
+        assert_eq!(
+            arity == declare::Arity::Value,
+            *value != SWITCH_DISPLAY,
+            "选项 {option} 的取值形状与文档的数量列不一致"
+        );
+    }
+    assert_eq!(
+        OPTIONS.len(),
+        declare::OPTIONS.len(),
+        "文档选项数与命令面声明的选项数不一致"
+    );
 }
+
+/// 开关选项的数量列：`—` 表示不带值。
+const SWITCH_DISPLAY: &str = "—";
 
 const HEADER: &str = "Generated from `app/cli/declare.rs`, `app/report/exit.rs` and \
                       `diskedit_core::fs::catalog` by `docsgen`.\nRegenerate with \
@@ -324,15 +339,7 @@ fn reference() -> String {
 }
 
 fn options_of(command: &declare::CommandDef) -> String {
-    let mut options: Vec<&str> = command.common_options.to_vec();
-    for variant in command.variants {
-        for option in variant.options {
-            if !options.contains(option) {
-                options.push(option);
-            }
-        }
-    }
-    options.sort_unstable();
+    let options = command.options();
     if options.is_empty() {
         return "—".to_owned();
     }
@@ -435,4 +442,28 @@ fn exit_codes() -> String {
         out.push_str(&format!("| {code} | {meaning} |\n"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    /// 手写文档里引用的记录布局必须与代码常量逐字一致：改了常量却漏改文档，
+    /// 或文档描述了实现里没有的路径，都会在这里红。
+    #[test]
+    fn the_documented_record_layout_matches_the_code() {
+        use crate::app::execute::transaction::LOCK_FILE;
+        use crate::app::observe::records::{IMAGE_DIR, RECORD_FILE};
+
+        let layout = format!("<state_root>/{IMAGE_DIR}/<key>/{RECORD_FILE}");
+        for path in ["docs/en/internals.md", "docs/zh/internals.md"] {
+            let text = std::fs::read_to_string(path).expect("文档应可读");
+            assert!(
+                text.contains(&layout),
+                "{path} 没有写出实现使用的记录路径 {layout}"
+            );
+            assert!(
+                text.contains(LOCK_FILE),
+                "{path} 没有写出实现使用的锁文件名 {LOCK_FILE}"
+            );
+        }
+    }
 }

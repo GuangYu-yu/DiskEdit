@@ -232,7 +232,6 @@ mod tests {
         result
     }
 
-    // covers: D7
     #[test]
     fn a_matching_bundle_is_accepted() {
         let root = scratch("bundle-ok");
@@ -242,7 +241,6 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    // covers: D7
     #[test]
     fn a_digest_mismatch_is_refused_before_boot() {
         let root = scratch("bundle-digest");
@@ -257,7 +255,6 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    // covers: D7
     #[test]
     fn a_path_leaving_the_bundle_is_refused() {
         let root = scratch("bundle-escape");
@@ -273,7 +270,6 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    // covers: D7
     #[test]
     fn a_malformed_worker_digest_or_a_different_version_is_refused() {
         let root = scratch("bundle-worker");

@@ -358,3 +358,98 @@ fn session_id() -> String {
     hasher.write_u128(nanos);
     format!("{:016x}", hasher.finish())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::platform::{PlatformResult, TargetKind};
+
+    /// 固定长度的来宾目标；只用于验证按段写入的区间上界。
+    struct Memory {
+        bytes: Vec<u8>,
+    }
+
+    impl crate::platform::TargetHandle for Memory {
+        fn path(&self) -> &Path {
+            Path::new(GUEST_DISK)
+        }
+
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+
+        fn kind(&self) -> TargetKind {
+            TargetKind::File
+        }
+
+        fn sector_size(&self) -> Option<u64> {
+            Some(512)
+        }
+
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            if start >= self.bytes.len() {
+                return Ok(0);
+            }
+            let end = (start + buf.len()).min(self.bytes.len());
+            let n = end - start;
+            buf[..n].copy_from_slice(&self.bytes[start..end]);
+            Ok(n)
+        }
+
+        fn write_at(&mut self, offset: u64, buf: &[u8]) -> PlatformResult<usize> {
+            let start = offset as usize;
+            if start >= self.bytes.len() {
+                return Ok(0);
+            }
+            let end = (start + buf.len()).min(self.bytes.len());
+            let n = end - start;
+            self.bytes[start..end].copy_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn barrier(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+
+        fn refresh_partitions(&mut self) -> PlatformResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_write_segment_past_the_guest_target_is_refused() {
+        let mut target = Memory {
+            bytes: vec![0u8; 4096],
+        };
+        let past = [protocol::DiskWrite {
+            offset: 4096,
+            bytes: vec![0x01],
+        }];
+        assert!(matches!(
+            write_segments(&mut target, &past),
+            Reply::Failed(_)
+        ));
+
+        let overflow = [protocol::DiskWrite {
+            offset: u64::MAX,
+            bytes: vec![0x01, 0x02],
+        }];
+        assert!(matches!(
+            write_segments(&mut target, &overflow),
+            Reply::Failed(_)
+        ));
+
+        let inside = [protocol::DiskWrite {
+            offset: 0,
+            bytes: vec![0x03],
+        }];
+        assert!(matches!(
+            write_segments(&mut target, &inside),
+            Reply::Applied(_)
+        ));
+        assert_eq!(target.bytes[0], 0x03);
+    }
+}

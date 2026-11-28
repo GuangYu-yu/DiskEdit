@@ -1,79 +1,79 @@
-//! 入口矩阵与 lint 登记：每个声明过的入口恰好有一行，并且有唯一的纵切归属。
+//! 入口矩阵与 lint 登记：每个声明过的入口恰好有一行，并归属于一个已登记的类别。
 
 use std::collections::BTreeSet;
 
 use diskedit::app::cli::declared_entries;
 
-/// 一个入口的纵切归属；新增入口必须在这里补行。
+/// 一个入口的类别归属；新增入口必须在这里补行。
 struct Entry {
     command: &'static str,
-    slice: &'static str,
+    category: &'static str,
 }
 
 const ENTRIES: &[Entry] = &[
     Entry {
         command: "layout",
-        slice: "S1",
+        category: "inspect",
     },
     Entry {
         command: "records list",
-        slice: "S1",
+        category: "inspect",
     },
     Entry {
         command: "records verify",
-        slice: "S1",
+        category: "inspect",
     },
     Entry {
         command: "records show",
-        slice: "S1",
+        category: "inspect",
     },
     Entry {
         command: "check",
-        slice: "S1",
+        category: "inspect",
     },
     Entry {
         command: "new",
-        slice: "S2",
+        category: "table-create",
     },
     Entry {
         command: "add",
-        slice: "S3",
+        category: "table-edit",
     },
     Entry {
         command: "delete",
-        slice: "S3",
+        category: "table-edit",
     },
     Entry {
         command: "set",
-        slice: "S3",
+        category: "table-edit",
     },
     Entry {
         command: "move",
-        slice: "S4",
+        category: "relocate",
     },
     Entry {
         command: "copy",
-        slice: "S4",
+        category: "relocate",
     },
     Entry {
         command: "mkfs",
-        slice: "S5",
+        category: "filesystem-create",
     },
     Entry {
         command: "undo",
-        slice: "S7",
+        category: "record-lifecycle",
     },
     Entry {
         command: "replay",
-        slice: "S7",
+        category: "record-lifecycle",
     },
     Entry {
         command: "release",
-        slice: "S7",
+        category: "record-lifecycle",
     },
     Entry {
         command: "resize",
-        slice: "S6",
+        category: "partition-resize",
     },
 ];
 
@@ -88,8 +88,16 @@ fn entry_matrix_matches_the_declared_entries() {
 }
 
 #[test]
-fn every_entry_has_one_row_and_a_known_slice() {
-    const SLICES: &[&str] = &["S1", "S2", "S3", "S4", "S5", "S6", "S7"];
+fn every_entry_has_one_row_and_a_known_category() {
+    const CATEGORIES: &[&str] = &[
+        "inspect",
+        "table-create",
+        "table-edit",
+        "relocate",
+        "filesystem-create",
+        "partition-resize",
+        "record-lifecycle",
+    ];
     let mut seen = BTreeSet::new();
     for entry in ENTRIES {
         assert!(
@@ -98,10 +106,10 @@ fn every_entry_has_one_row_and_a_known_slice() {
             entry.command
         );
         assert!(
-            SLICES.contains(&entry.slice),
-            "{} 的纵切归属 {} 不在 S1–S7 内",
+            CATEGORIES.contains(&entry.category),
+            "{} 的类别 {} 不在已登记的类别内",
             entry.command,
-            entry.slice
+            entry.category
         );
     }
 }

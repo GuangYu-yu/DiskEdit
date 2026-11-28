@@ -1,7 +1,7 @@
 //! 命令行：声明命令面、渲染帮助、解析用法并驱动一次只读判定。
 //!
 //! 命令面只有一张表（[`declare`]）；帮助与门禁导出都读它。进程级出口（帮助、
-//! 版本、用法错误）在这里固定；具体命令的解析、观察、判定与渲染按纵切接入。
+//! 版本、用法错误）在这里固定；具体命令的解析、观察、判定与渲染由各子模块承担。
 
 pub mod declare;
 pub mod parse;
@@ -296,7 +296,7 @@ fn capture_failed(
             )
         }
         // `check` 已经进入执行阶段：目标字节读不出来是环境故障，不是拒绝。
-        // 打开失败仍按拒绝处理，与基线一致。
+        // 打开失败仍按拒绝处理。
         Command::Check { .. } if matches!(error, observe::CaptureError::Unreadable { .. }) => {
             eprintln!("error: {why}");
             exit::ENVIRONMENT
@@ -514,9 +514,10 @@ fn write(
 
 /// 锁外观测身份；执行器会在持锁后再次核对。
 ///
-/// 与 `observe::snapshot::open_target` 同一规则：`--alias` 声明的名字只在目标
-/// 自身无法给出 Strong 身份时生效，且此时它就是这个目标的身份。否则块设备上的确认
-/// 会因自动身份不适用而误报"身份不可证明"，让所有 `--alias` 写入都失败。
+/// 身份的唯一判定入口是 [`observe::snapshot::probe_identity`]：`--alias` 声明的名字
+/// 只在目标自身无法给出 Strong 身份时生效，且此时它就是这个目标的身份。探测本身
+/// 失败时结果是"未知"，不能被声明名填成已知事实——否则读故障会被当成可继续写入
+/// 的依据。块设备上的确认也不会因自动身份不适用而误报"身份不可证明"。
 fn observe_identity(
     platform: &dyn Platform,
     path: &std::path::Path,
@@ -524,28 +525,20 @@ fn observe_identity(
 ) -> diskedit_core::evidence::Observation<diskedit_core::fingerprint::Fingerprint> {
     use diskedit_core::evidence::{Generation, Observation, Source};
     use diskedit_core::fingerprint::Fingerprint;
-    use diskedit_core::fingerprint::Strength;
-    match platform.identity(path) {
-        Ok(fingerprint) if fingerprint.strength() == Strength::Strong => Observation::known(
+    match observe::snapshot::probe_identity(platform, path) {
+        Err(error) => Observation::unknown(error.to_string()),
+        Ok(Some(fingerprint)) => Observation::known(
             fingerprint,
             Source::new("platform.identity"),
             Generation::FIRST,
         ),
-        Ok(_) => match declared {
+        Ok(None) => match declared {
             Some(name) => Observation::known(
                 Fingerprint::declared(name),
                 Source::new("--alias"),
                 Generation::FIRST,
             ),
             None => Observation::not_applicable("the target gives no comparable identity"),
-        },
-        Err(error) => match declared {
-            Some(name) => Observation::known(
-                Fingerprint::declared(name),
-                Source::new("--alias"),
-                Generation::FIRST,
-            ),
-            None => Observation::unknown(error.to_string()),
         },
     }
 }
@@ -624,15 +617,7 @@ fn print_command_help(command: &declare::CommandDef) {
     }
     println!();
     println!("  {}", command.summary);
-    let mut options: Vec<&str> = command.common_options.to_vec();
-    for variant in command.variants {
-        for option in variant.options {
-            if !options.contains(option) {
-                options.push(option);
-            }
-        }
-    }
-    options.sort_unstable();
+    let options = command.options();
     if !options.is_empty() {
         println!();
         println!("options:");

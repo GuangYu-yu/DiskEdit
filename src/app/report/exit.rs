@@ -1,7 +1,7 @@
 //! 退出码的唯一映射。
 //!
-//! 七个值来自行为基线第 2 节；判定顺序固定，命中即停。执行终态与拒绝成因各
-//! 自映射到同一组常量，除此之外没有第二处产码。
+//! 七个值；判定顺序固定，命中即停。执行终态与拒绝成因各自映射到同一组常量，
+//! 除此之外没有第二处产码。
 
 use crate::app::decide::Refusal;
 use crate::app::execute::{ExecutionState, FailureKind, Outcome};
@@ -92,7 +92,6 @@ pub fn exit_of_refusal(refusal: &Refusal) -> u8 {
 mod tests {
     use super::*;
 
-    // covers: D5, I7, R0782, R0783, R0784, R0785
     #[test]
     fn every_unwritten_failure_has_one_code() {
         for (failure, expected) in [

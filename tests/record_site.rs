@@ -31,7 +31,6 @@ fn code_only(text: &str) -> String {
         .join("\n")
 }
 
-// covers: I17
 #[test]
 fn records_never_go_through_generic_state_file_io() {
     const GENERIC: [&str; 6] = [
@@ -113,7 +112,6 @@ mod linux {
         }
     }
 
-    // covers: R0651
     #[test]
     fn a_regular_record_file_is_read() {
         let platform = host();
@@ -126,7 +124,6 @@ mod linux {
         );
     }
 
-    // covers: R0651
     #[test]
     fn a_missing_record_is_absent() {
         let platform = host();
@@ -139,7 +136,6 @@ mod linux {
         );
     }
 
-    // covers: R0651
     #[test]
     fn a_symbolic_link_at_the_last_component_is_not_a_record() {
         let platform = host();
@@ -155,7 +151,6 @@ mod linux {
         );
     }
 
-    // covers: R0651
     #[test]
     fn a_symbolic_link_in_the_parent_chain_is_not_a_record() {
         let platform = host();
@@ -174,7 +169,6 @@ mod linux {
         );
     }
 
-    // covers: R0651
     #[test]
     fn a_directory_at_the_record_path_is_not_a_record() {
         let platform = host();
@@ -215,7 +209,6 @@ mod linux {
         )
     }
 
-    // covers: I15
     #[test]
     fn scanning_reports_a_linked_record_as_not_a_recovery_file() {
         let directory = fixture("scan-link");
@@ -229,7 +222,6 @@ mod linux {
         assert!(stderr.contains("is not a recovery file"), "{stderr}");
     }
 
-    // covers: I15
     #[test]
     fn scanning_reports_a_regular_record() {
         let directory = fixture("scan-regular");
@@ -240,7 +232,6 @@ mod linux {
         assert_eq!(code, 0, "普通记录必须能列出：{stderr}");
     }
 
-    // covers: I17
     #[test]
     fn a_parent_swapped_for_a_link_is_refused_by_every_operation() {
         let platform = host();

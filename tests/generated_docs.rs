@@ -27,7 +27,6 @@ const BILINGUAL: &[(&str, &str)] = &[
     ("docs/en/interop.md", "docs/zh/interop.md"),
 ];
 
-// covers: T16
 #[test]
 fn generated_docs_match_their_sources() {
     let write = std::env::var_os("DISKEDIT_WRITE_DOCS").is_some_and(|value| value == "1");

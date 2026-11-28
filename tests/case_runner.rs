@@ -50,7 +50,6 @@ fn copy_fixture(name: &str, destination: &str) {
     .unwrap_or_else(|error| panic!("复制夹具 {name} 失败: {error}"));
 }
 
-// covers: B10, B12
 #[cfg(target_os = "linux")]
 #[test]
 fn new_writes_a_readable_table_and_refuses_to_clobber() {
@@ -100,7 +99,6 @@ fn new_writes_a_readable_table_and_refuses_to_clobber() {
     );
 }
 
-// covers: B11
 #[cfg(target_os = "linux")]
 #[test]
 fn new_refuses_a_target_below_the_gpt_minimum() {
@@ -124,7 +122,6 @@ fn new_refuses_a_target_below_the_gpt_minimum() {
     assert_eq!(code, 0, "恰好最小容量应可建表：{stderr}");
 }
 
-// covers: B25
 #[cfg(target_os = "linux")]
 #[test]
 fn new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one() {
@@ -158,8 +155,6 @@ fn new_refuses_an_inconsistent_protective_mbr_and_keeps_a_canonical_one() {
     assert_eq!(&after[..512], &before[..512], "已合规的保护 MBR 不得重写");
 }
 
-// covers: B26
-// covers: B12
 #[cfg(target_os = "linux")]
 #[test]
 fn add_delete_and_set_rewrite_both_copies() {
@@ -290,7 +285,6 @@ fn read_at(image: &str, sector: u64, len: usize) -> Vec<u8> {
     bytes[offset..offset + len].to_vec()
 }
 
-// covers: B14, B21, D8, R0033
 #[cfg(target_os = "linux")]
 #[test]
 fn move_and_copy_relocate_data_and_keep_type_guids() {
@@ -313,7 +307,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":5120"), "{stdout}");
     assert!(stdout.contains("\"last_lba\":6143"), "{stdout}");
-    // D8：搬移不改写已有分区的类型 GUID。
+    // 搬移不改写已有分区的类型 GUID。
     assert!(
         stdout.contains("\"type\":\"0FC63DAF-8483-4772-8E79-3D69D8477DE4\""),
         "搬移后 #2 的类型 GUID 应保持不变：{stdout}"
@@ -322,7 +316,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
         stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
         "未参与搬移的 #1 类型 GUID 应保持不变：{stdout}"
     );
-    // B14/B21：内容确实搬到新起点。
+    // 内容确实搬到新起点。
     assert_eq!(
         read_at(&moved, 5148, marker.len()),
         marker,
@@ -352,7 +346,7 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
     assert_eq!(code, 0);
     assert!(stdout.contains("\"first_lba\":6144"), "{stdout}");
     assert!(stdout.contains("\"name\":\"clone\""), "{stdout}");
-    // 副本继承源类型 GUID（D8 的“不改写用户已有类型”）。
+    // 副本继承源类型 GUID（“不改写用户已有类型”）。
     assert!(
         stdout.contains("\"type\":\"C12A7328-F81F-11D2-BA4B-00A0C93EC93B\""),
         "副本应继承源类型 GUID：{stdout}"
@@ -384,8 +378,6 @@ fn move_and_copy_relocate_data_and_keep_type_guids() {
     );
 }
 
-// covers: B13, B26, R0059, R0203, R0209
-// covers: B13, R0209
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
@@ -514,7 +506,6 @@ fn resize_rewrites_the_table_and_refuses_unsafe_shrinks() {
     );
 }
 
-// covers: R0347, R0365, R0438, R0439, R0440, R0441, R0442, R0443
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
@@ -527,10 +518,10 @@ fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
     let original = std::fs::read(&image).expect("读取夹具");
     let target = format!("{image}:2");
 
-    // `+N`/`-N` 越过 u64 可表达的范围：SIZE 溢出，退 3（R0438/R0439）。
-    // 同一段还覆盖百分比形态：先乘后除的结果超出 u64（R0440），以及百分比收缩
-    // 超过当前尺寸（R0442）。R0441 是百分比放大在 checked_add 处的同类溢出，
-    // 与 R0440 同文案、同退出码；当前分区不足 1 MiB 时被 1 MiB 下取整遮蔽，按同类认领。
+    // `+N`/`-N` 越过 u64 可表达的范围：SIZE 溢出，退 3。
+    // 同一段还覆盖百分比形态：先乘后除的结果超出 u64，以及百分比收缩超过当前
+    // 尺寸。百分比放大在 checked_add 处也会同类溢出，同文案、同退出码；当前分区
+    // 不足 1 MiB 时被 1 MiB 下取整遮蔽，按同类认领。
     for size in [
         "+18446744073709551615",
         "-18446744073709551615",
@@ -541,11 +532,11 @@ fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
         assert_eq!(code, 3, "SIZE {size} 应拒绝：{stderr}");
     }
 
-    // 绝对 SIZE 不足一个扇区：退 3（R0443）。
+    // 绝对 SIZE 不足一个扇区：退 3。
     let (code, _, stderr) = run_argv(&["resize", &target, "1", "--no-fs", "--yes"]);
     assert_eq!(code, 3, "不足一个扇区应拒绝：{stderr}");
 
-    // 绝对 SIZE 越出 LBA 区间：退 3（R0347）；干跑走同一判据（R0365）。
+    // 绝对 SIZE 越出 LBA 区间：退 3；干跑走同一判据。
     for dry_run in [false, true] {
         let mut argv = vec![
             "resize",
@@ -571,7 +562,6 @@ fn resize_refuses_sizes_that_overflow_or_fall_below_a_sector() {
     );
 }
 
-// covers: R0341, R0342, R0348, R0349
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
@@ -583,7 +573,7 @@ fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
         .expect("复制 GPT 夹具");
     let target = |n: u32| format!("{image}:{n}");
 
-    // 顶到 last usable 后再 `grow`：拒绝，退 3（R0341）。
+    // 顶到 last usable 后再 `grow`：拒绝，退 3。
     let (code, _, stderr) = run_argv(&["resize", &target(2), "grow", "--no-fs", "--yes"]);
     assert_eq!(code, 0, "首次扩容应成功：{stderr}");
     let after_grow = std::fs::read(&image).expect("读取夹具");
@@ -595,16 +585,16 @@ fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
         "拒绝时目标字节不得改变"
     );
 
-    // 右侧被邻接分区挡住（#1 的右边是 #2）：`grow` 拒绝，退 3（R0342）。
+    // 右侧被邻接分区挡住（#1 的右边是 #2）：`grow` 拒绝，退 3。
     let (code, _, stderr) = run_argv(&["resize", &target(1), "grow", "--no-fs", "--yes"]);
     assert_eq!(code, 3, "右侧被占的 grow 应拒绝：{stderr}");
 
-    // 绝对 SIZE 换算后越出可用区：拒绝，退 3（R0348）。
+    // 绝对 SIZE 换算后越出可用区：拒绝，退 3。
     let before = std::fs::read(&image).expect("读取夹具");
     let (code, _, stderr) = run_argv(&["resize", &target(2), "99999999", "--no-fs", "--yes"]);
     assert_eq!(code, 3, "SIZE 越出可用区应拒绝：{stderr}");
 
-    // 绝对 SIZE 需要的增长超过右侧空闲：拒绝，退 3（R0349）。
+    // 绝对 SIZE 需要的增长超过右侧空闲：拒绝，退 3。
     let (code, _, stderr) = run_argv(&["resize", &target(1), "2M", "--no-fs", "--yes"]);
     assert_eq!(code, 3, "增长超过右侧空闲应拒绝：{stderr}");
     assert_eq!(
@@ -614,7 +604,6 @@ fn resize_refuses_grow_without_room_and_sizes_past_the_usable_range() {
     );
 }
 
-// covers: R0329, R0372, R0373, R0394, R0395, R0444, R0452
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
@@ -666,7 +655,6 @@ fn resize_refuses_mbr_relocation_flags_and_no_table_targets() {
     assert_eq!(code, 3, "无表目标应拒绝：{stderr}");
 }
 
-// covers: B15, D23, R0064, R0094
 #[cfg(target_os = "linux")]
 #[test]
 fn filesystem_commands_refuse_without_touching_the_target() {
@@ -791,9 +779,6 @@ fn run_argv_env(argv: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
     )
 }
 
-// covers: R0302
-// covers: R0851, R0853, R0855, R0857, R0859
-// covers: D22
 #[cfg(target_os = "linux")]
 #[test]
 fn undo_refuses_a_target_without_a_record() {
@@ -810,14 +795,12 @@ fn undo_refuses_a_target_without_a_record() {
     assert!(stderr.contains("no recovery record"), "{stderr}");
 }
 
-// covers: R0301
 #[test]
 fn undo_refuses_a_partition_selector() {
     let (code, _stdout, stderr) = run_argv(&["undo", "disk.img:1", "--yes"]);
     assert_eq!(code, 2, "undo 不接受分区选择器：{stderr}");
 }
 
-// covers: D9
 #[test]
 fn read_only_layout_emits_one_structured_json_document() {
     // 只读命令统一输出本实现的结构化 JSON：单个对象、字段集稳定。
@@ -899,7 +882,6 @@ fn a_copied_partition_gets_its_own_deterministic_partuuid() {
     assert_eq!(copy("6144"), first, "同一槽位的重复复制应得到同一 PARTUUID");
 }
 
-// covers: R0358, R0359, R0360
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
@@ -917,7 +899,6 @@ fn resize_refuses_a_target_without_a_table_or_a_missing_partition() {
     assert!(stderr.contains("does not exist"), "{stderr}");
 }
 
-// covers: D3
 #[test]
 fn check_reports_the_reason_it_cannot_act() {
     // 检查器的失败原因必须可见：既给结论，也给成因与下一步。
@@ -956,14 +937,12 @@ fn record_body(
 ) -> diskedit_core::record::RecordBody {
     diskedit_core::record::RecordBody {
         target,
-        geometry_generation: 1,
+        legacy_generation: 0,
         plan_digest: [0u8; 32],
     }
 }
 
-// covers: R0149, R0150, R0151, R0152, R0153, R0154
 #[cfg(target_os = "linux")]
-// covers: D21
 #[test]
 fn records_show_refuses_a_damaged_or_foreign_record() {
     fixtures::prepare();
@@ -1029,7 +1008,6 @@ fn records_show_refuses_a_damaged_or_foreign_record() {
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
 
-// covers: D21
 #[cfg(target_os = "linux")]
 #[test]
 fn a_write_refuses_when_the_record_cannot_be_decoded() {
@@ -1054,7 +1032,6 @@ fn a_write_refuses_when_the_record_cannot_be_decoded() {
     assert_eq!(code, 3, "记录不可解码必须拒绝写入：{stderr}");
     assert!(stderr.contains("cannot be decoded"), "{stderr}");
 }
-// covers: R0674
 #[cfg(target_os = "linux")]
 #[test]
 fn resize_allow_move_relocates_the_blocking_partition() {
@@ -1065,7 +1042,7 @@ fn resize_allow_move_relocates_the_blocking_partition() {
     std::fs::copy(std::path::Path::new(fixtures::BASE).join("gpt.img"), &image)
         .expect("复制 GPT 夹具");
 
-    // 右侧本来就空时 `--allow-move` 没有可搬对象：按基线拒绝，退 3（R0674）。
+    // 右侧本来就空时 `--allow-move` 没有可搬对象：拒绝，退 3。
     let (code, _, stderr) = run_argv(&[
         "resize",
         &format!("{image}:2"),
@@ -1102,7 +1079,6 @@ fn resize_allow_move_relocates_the_blocking_partition() {
         "{stdout}"
     );
 }
-// covers: R0445, R0446, R0447, R0448, R0449, R0450
 #[cfg(target_os = "linux")]
 #[test]
 fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
@@ -1152,7 +1128,7 @@ fn superfloppy_resize_grows_the_filesystem_and_refuses_unextendable_requests() {
 /// 保护 MBR（实测 util-linux 2.39.3：打印 "Activation is unsupported for GPT --
 /// entering nested PMBR."，并在 PMBR 写 0x80 + 0x01/0xFF 两条记录）。本实现不采纳这条
 /// 隐式决定：`set flag boot` 落在 GPT 的 ESP 类型 GUID 上，legacy active 与 GPT 旗标
-/// 分开建模，保护 MBR 保持规范形态。处置理由见 incident-classes.tsv SA1-015。
+/// 分开建模，保护 MBR 保持规范形态。
 #[cfg(target_os = "linux")]
 #[test]
 fn a_gpt_boot_flag_becomes_the_esp_type_and_leaves_the_protective_mbr_alone() {
@@ -1198,8 +1174,7 @@ fn two_partition_gpt(image: &str) {
 }
 
 /// 混合 MBR（GPT 的 PMBR 里带一条 legacy 条目）在 gdisk 里被识别并保留；本实现只读
-/// 时接受原样，任何表写都把 PMBR 收敛为规范的单一 0xEE 全覆盖记录。处置理由见
-/// incident-classes.tsv SA3-002。
+/// 时接受原样，任何表写都把 PMBR 收敛为规范的单一 0xEE 全覆盖记录。
 #[cfg(target_os = "linux")]
 #[test]
 fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
@@ -1259,8 +1234,7 @@ fn a_hybrid_mbr_is_read_as_is_and_normalized_only_on_a_table_write() {
 }
 
 /// 盘上已有的重复 PARTUUID：gdisk 用专家命令 `f` 显式重随机化；本实现读取时保留，
-/// 任何表写只改用户点名的条目，不静默改写身份数据（同 D8 原则）。处置理由见
-/// incident-classes.tsv SA3-001。
+/// 任何表写只改用户点名的条目，不静默改写身份数据。
 #[cfg(target_os = "linux")]
 #[test]
 fn duplicate_partuuids_are_read_and_preserved_not_rewritten() {

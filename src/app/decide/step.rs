@@ -237,3 +237,123 @@ impl Step {
         self.kind.access()
     }
 }
+
+/// 一次搬移的带符号位移（扇区）。
+///
+/// 只能由新旧起点导出：表示不了（超出 `i64`）或没有位移都返回 `None`，调用方
+/// 拒绝，不把差值截断成边界值。目标块由源块加该位移得到。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Displacement {
+    shift: i64,
+}
+
+impl Displacement {
+    /// 新旧起点之差。
+    pub fn between(old_start: u64, new_start: u64) -> Option<Self> {
+        let shift = i64::try_from(i128::from(new_start) - i128::from(old_start)).ok()?;
+        if shift == 0 {
+            return None;
+        }
+        Some(Self { shift })
+    }
+
+    /// 带符号的扇区数。
+    pub const fn sectors(self) -> i64 {
+        self.shift
+    }
+
+    /// 目标区间是否与源区间相交：位移量小于长度即自重叠。
+    pub fn overlaps(self, sectors: u64) -> bool {
+        self.shift.unsigned_abs() < sectors
+    }
+}
+
+/// 字节换算成扇区，向下取整；扇区大小为零即 `None`。
+pub fn sectors_floor(bytes: u64, sector_size: u64) -> Option<u64> {
+    if sector_size == 0 {
+        return None;
+    }
+    Some(bytes / sector_size)
+}
+
+/// 字节换算成扇区，向上取整：不足一个扇区也算一整个。
+pub fn sectors_ceil(bytes: u64, sector_size: u64) -> Option<u64> {
+    if sector_size == 0 {
+        return None;
+    }
+    Some(bytes.div_ceil(sector_size))
+}
+
+/// 扇区数换算成字节数；溢出即 `None`。
+pub fn sectors_bytes(sectors: u64, sector_size: u64) -> Option<u64> {
+    if sector_size == 0 {
+        return None;
+    }
+    sectors.checked_mul(sector_size)
+}
+
+/// 起点 LBA 换算成字节偏移；溢出即 `None`。
+pub fn lba_bytes(lba: u64, sector_size: u64) -> Option<u64> {
+    sectors_bytes(lba, sector_size)
+}
+
+/// 含两端的 LBA 区间有多少个扇区；区间倒置即 `None`。
+pub fn span_sectors(start_lba: u64, end_lba: u64) -> Option<u64> {
+    end_lba.checked_sub(start_lba)?.checked_add(1)
+}
+
+/// 含两端的 LBA 区间有多少字节；区间倒置或溢出即 `None`。
+pub fn span_bytes(start_lba: u64, end_lba: u64, sector_size: u64) -> Option<u64> {
+    sectors_bytes(span_sectors(start_lba, end_lba)?, sector_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_and_sector_conversions_are_one_explicit_point() {
+        // 非整倍：向下取整与向上取整都必须说得清，不能靠调用点各自截断。
+        assert_eq!(sectors_floor(1000, 512), Some(1));
+        assert_eq!(sectors_ceil(1000, 512), Some(2));
+        assert_eq!(sectors_floor(1024, 512), Some(2));
+        assert_eq!(sectors_bytes(2, 512), Some(1024));
+        assert_eq!(span_sectors(10, 19), Some(10));
+        assert_eq!(span_bytes(10, 19, 512), Some(5120));
+        // 零扇区无法换算：调用方必须拒绝，不能拿零当除数。
+        assert_eq!(sectors_floor(1000, 0), None);
+        assert_eq!(sectors_ceil(1000, 0), None);
+        assert_eq!(sectors_bytes(1, 0), None);
+        // 极值溢出即 `None`，不回绕。
+        assert_eq!(sectors_bytes(u64::MAX, 2), None);
+        assert_eq!(span_bytes(0, u64::MAX, 2), None);
+        // 区间倒置不是"零长度"。
+        assert_eq!(span_sectors(10, 9), None);
+    }
+
+    #[test]
+    fn a_forward_displacement_is_positive_and_overlapping() {
+        let displacement = Displacement::between(10, 25).expect("正向位移可表示");
+        assert_eq!(displacement.sectors(), 15);
+        // 位移 15 小于长度 100：源与目标重叠。
+        assert!(displacement.overlaps(100));
+        assert!(!displacement.overlaps(15));
+    }
+
+    #[test]
+    fn a_backward_displacement_is_negative_and_overlapping() {
+        let displacement = Displacement::between(25, 10).expect("负向位移可表示");
+        assert_eq!(displacement.sectors(), -15);
+        assert!(displacement.overlaps(100));
+        assert!(!displacement.overlaps(15));
+    }
+
+    #[test]
+    fn an_unrepresentable_or_zero_displacement_is_refused() {
+        // 零位移不是搬移：调用方应给出"无需移动"而不是造一个空步骤。
+        assert!(Displacement::between(7, 7).is_none());
+        // 差值超出 `i64`：拒绝，不截断成 `i64::MAX`。
+        assert!(Displacement::between(0, u64::MAX).is_none());
+        assert!(Displacement::between(u64::MAX, 0).is_none());
+    }
+}

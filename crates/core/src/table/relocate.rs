@@ -114,7 +114,6 @@ mod tests {
 
     const SS: u64 = 512;
 
-    // covers: B14
     #[test]
     fn a_forward_move_copies_tail_to_head() {
         let layout = layout(1000, SS, 2000, 1 << 20).expect("布局");
@@ -180,9 +179,8 @@ mod tests {
         assert!(layout(0, SS, 5, 1024).is_some());
     }
 
-    // covers: B21
     #[test]
-    fn b21_resume_checks_prefix_digest() {
+    fn resume_checks_the_prefix_digest() {
         let digest = [0x5a; 16];
         assert_eq!(resume(None, digest), Resume::Start);
         assert_eq!(resume(Some((0, digest)), digest), Resume::Start);

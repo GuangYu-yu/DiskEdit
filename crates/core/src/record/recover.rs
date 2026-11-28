@@ -7,6 +7,7 @@
 use super::BODY_LEN;
 use super::codec::decode_body;
 use super::frame::{Frame, FrameError, FrameKind};
+use super::geometry_generation;
 use super::header::{HEADER_LEN, HeaderError, RecordHeader};
 use crate::fingerprint::Fingerprint;
 
@@ -24,52 +25,139 @@ pub enum RecoveryPlan {
     /// 记录不是本实现写下的，拒绝且不读后续帧。
     Foreign { magic: [u8; 4] },
     /// 结构损坏或证据冲突，需要人工。
-    NeedsManual { why: String },
+    NeedsManual { why: ManualReason },
 }
 
-/// 由记录字节与当前目标指纹推出恢复结论。
-pub fn recover(bytes: &[u8], current: Fingerprint) -> RecoveryPlan {
+/// 记录不能被归入四种结论之一的原因。
+///
+/// 用枚举而不是文案：调用方要按原因分流（例如"记录属于别的目标"不能被放弃），
+/// 按文案分流的分支会在文案改写时悄悄失效。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManualReason {
+    /// 头 CRC 与计算值不符。
+    HeaderCrc,
+    /// 字节数不足一个头。
+    ShortHeader { needed: usize, actual: usize },
+    /// 头声明的载荷长度超过实现上限。
+    PayloadTooLarge(u32),
+    /// 记录字节比头声明的载荷长：追加帧时没有同步重写头。
+    ExcessBytes(usize),
+    /// 载荷固定前缀的 CRC 不符。
+    BodyCrc,
+    /// 载荷 CRC 与头声明不符。
+    PayloadCrc,
+    /// 记录自称属于别的目标。
+    DifferentTarget,
+    /// 记录声明的几何代次与当前目标不符，或为零。
+    LegacyGeneration,
+    /// 帧前缀自身不自洽。
+    Frames(String),
+}
+
+impl std::fmt::Display for ManualReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HeaderCrc => f.write_str("record header CRC mismatch"),
+            Self::ShortHeader { needed, actual } => write!(
+                f,
+                "record is shorter than its header: need {needed} bytes, got {actual}"
+            ),
+            Self::PayloadTooLarge(len) => write!(f, "declared payload length {len} is too large"),
+            Self::ExcessBytes(count) => write!(
+                f,
+                "record carries {count} bytes past the length its header declares"
+            ),
+            Self::BodyCrc => f.write_str("record payload prefix CRC mismatch"),
+            Self::PayloadCrc => f.write_str("record payload CRC mismatch"),
+            Self::DifferentTarget => f.write_str("record targets a different device"),
+            Self::LegacyGeneration => {
+                f.write_str("record's geometry generation does not match the target")
+            }
+            Self::Frames(why) => f.write_str(why),
+        }
+    }
+}
+
+/// 恢复期对当前目标的期望：身份指纹与总字节数。
+///
+/// 只有身份而没有几何证据时（由 [`Fingerprint`] 转换得到），几何核对无从成立，
+/// 记录按需要人工处理拒绝，而不是跳过核对。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecoveryExpectation {
+    identity: Fingerprint,
+    /// 目标总字节数；`None` 表示调用方没有几何证据。
+    total_bytes: Option<u64>,
+}
+
+impl RecoveryExpectation {
+    /// 身份与几何都已知的目标。
+    pub const fn new(identity: Fingerprint, total_bytes: u64) -> Self {
+        Self {
+            identity,
+            total_bytes: Some(total_bytes),
+        }
+    }
+}
+
+impl From<Fingerprint> for RecoveryExpectation {
+    /// 只有身份：没有几何证据，几何核对只能拒绝。
+    fn from(identity: Fingerprint) -> Self {
+        Self {
+            identity,
+            total_bytes: None,
+        }
+    }
+}
+
+/// 由记录字节与当前目标推出恢复结论。
+pub fn recover(bytes: &[u8], expected: impl Into<RecoveryExpectation>) -> RecoveryPlan {
+    let expected = expected.into();
     if bytes.is_empty() {
         return RecoveryPlan::Absent;
     }
     let header = match RecordHeader::parse(bytes) {
         Ok(header) => header,
         Err(HeaderError::ForeignFormat { magic }) => return RecoveryPlan::Foreign { magic },
-        Err(HeaderError::HeaderCrcMismatch) => {
-            return needs_manual("record header CRC mismatch");
-        }
+        Err(HeaderError::HeaderCrcMismatch) => return needs_manual(ManualReason::HeaderCrc),
         Err(HeaderError::TooShort { needed, actual }) => {
-            return needs_manual(format!(
-                "record is shorter than its header: need {needed} bytes, got {actual}"
-            ));
+            return needs_manual(ManualReason::ShortHeader { needed, actual });
         }
         Err(HeaderError::PayloadTooLarge(len)) => {
-            return needs_manual(format!("declared payload length {len} is too large"));
+            return needs_manual(ManualReason::PayloadTooLarge(len));
         }
     };
     let available = bytes.len() - HEADER_LEN;
     let declared = header.payload_len as usize;
-    // 头声明的长度是最后一次成功落盘的载荷；其后多出的字节是尚未提交的追加，
-    // 按不完整帧处理，不据此判定记录损坏。
-    let usable = available.min(declared);
-    let payload = &bytes[HEADER_LEN..HEADER_LEN + usable];
+    // 记录只由"整条重写"产生：头声明的长度就是载荷的全部长度。多出字节只可能
+    // 来自"追加了帧却没更新头"，那种记录里的终态不可见，不能按前缀解释成更早
+    // 的状态——否则已提交的写入会被当成待回滚。
+    if available > declared {
+        return needs_manual(ManualReason::ExcessBytes(available - declared));
+    }
+    let payload = &bytes[HEADER_LEN..];
     if payload.len() < BODY_LEN {
         // 前缀未写全：没有任何帧完整落盘，因此没有目标写入发生。
         return RecoveryPlan::RollBack { frames: Vec::new() };
     }
     let body = match decode_body(payload) {
         Ok(body) => body,
-        Err(_) => return needs_manual("record payload prefix CRC mismatch"),
+        Err(_) => return needs_manual(ManualReason::BodyCrc),
     };
-    if !body.target.matches(current) {
-        return needs_manual("record targets a different device");
+    if !body.target.matches(expected.identity) {
+        return needs_manual(ManualReason::DifferentTarget);
     }
-    if available >= declared && crate::table::crc32(payload) != header.payload_crc {
-        return needs_manual("record payload CRC mismatch");
+    // 身份与几何在同一条恢复路径上核对：没有几何证据、几何代次为零、或与当前
+    // 目标总字节数重算出的代次不等，都不能按记录里的偏移回放。
+    let geometry = expected.total_bytes.map(geometry_generation);
+    if body.legacy_generation == 0 || geometry != Some(body.legacy_generation) {
+        return needs_manual(ManualReason::LegacyGeneration);
+    }
+    if available == declared && crate::table::crc32(payload) != header.payload_crc {
+        return needs_manual(ManualReason::PayloadCrc);
     }
     let frames = match parse_prefix(payload) {
         Ok(frames) => frames,
-        Err(why) => return RecoveryPlan::NeedsManual { why },
+        Err(why) => return needs_manual(ManualReason::Frames(why)),
     };
     match frames.last() {
         None => RecoveryPlan::RollBack { frames },
@@ -117,8 +205,8 @@ fn parse_prefix(payload: &[u8]) -> Result<Vec<Frame>, String> {
     Ok(frames)
 }
 
-fn needs_manual(why: impl Into<String>) -> RecoveryPlan {
-    RecoveryPlan::NeedsManual { why: why.into() }
+fn needs_manual(why: ManualReason) -> RecoveryPlan {
+    RecoveryPlan::NeedsManual { why }
 }
 
 #[cfg(test)]
@@ -126,15 +214,28 @@ mod tests {
     use super::*;
     use crate::record::RecordBody;
     use crate::record::frame::Preimage;
-    use crate::record::{encode, frame};
+    use crate::record::{encode, frame, geometry_generation};
 
     const TARGET: Fingerprint = Fingerprint::strong([0x42; 32]);
+    /// 恢复期看到的目标总字节数。
+    const TOTAL: u64 = 1 << 20;
+
+    fn expectation(identity: Fingerprint) -> RecoveryExpectation {
+        RecoveryExpectation::new(identity, TOTAL)
+    }
 
     fn body() -> RecordBody {
         RecordBody {
             target: TARGET,
-            geometry_generation: 3,
+            legacy_generation: geometry_generation(TOTAL),
             plan_digest: [0x11; 32],
+        }
+    }
+
+    fn body_with_generation(generation: u64) -> RecordBody {
+        RecordBody {
+            legacy_generation: generation,
+            ..body()
         }
     }
 
@@ -168,14 +269,49 @@ mod tests {
     }
 
     #[test]
+    fn a_generation_that_is_zero_or_differs_from_the_target_is_not_replayed() {
+        // 零代次是没有几何证据的保留值，非零但不等于当前目标重算值的代次同样不成立：
+        // 两者都按需要人工处理拒绝，而不是照常回滚或重放。
+        let bytes = encode(&body_with_generation(0), &all_frames()).expect("编码应成立");
+        assert!(matches!(
+            recover(&bytes, expectation(TARGET)),
+            RecoveryPlan::NeedsManual {
+                why: ManualReason::LegacyGeneration
+            }
+        ));
+        let bytes = encode(&body_with_generation(3), &all_frames()).expect("编码应成立");
+        assert!(matches!(
+            recover(&bytes, expectation(TARGET)),
+            RecoveryPlan::NeedsManual {
+                why: ManualReason::LegacyGeneration
+            }
+        ));
+    }
+
+    #[test]
     fn empty_bytes_is_absent() {
         assert_eq!(recover(&[], TARGET), RecoveryPlan::Absent);
     }
 
     #[test]
+    fn a_record_without_geometry_evidence_is_refused() {
+        // 只有身份、没有总字节数时，几何核对无从成立：记录不能回放。
+        let bytes = bytes_with(&all_frames());
+        assert!(matches!(
+            recover(&bytes, TARGET),
+            RecoveryPlan::NeedsManual {
+                why: ManualReason::LegacyGeneration
+            }
+        ));
+    }
+
+    #[test]
     fn committed_record_needs_only_cleanup() {
         let bytes = bytes_with(&all_frames());
-        assert_eq!(recover(&bytes, TARGET), RecoveryPlan::Committed);
+        assert_eq!(
+            recover(&bytes, expectation(TARGET)),
+            RecoveryPlan::Committed
+        );
         assert!(matches!(
             crate::record::decode(&bytes),
             Ok(decoded) if decoded.body == body()
@@ -186,7 +322,7 @@ mod tests {
     fn prefix_ending_in_a_completed_frame_is_replayed() {
         let all = all_frames();
         let bytes = bytes_with(&all[..2]);
-        match recover(&bytes, TARGET) {
+        match recover(&bytes, expectation(TARGET)) {
             RecoveryPlan::Replay { frames } => assert_eq!(frames, all[..2].to_vec()),
             RecoveryPlan::Absent
             | RecoveryPlan::Committed
@@ -200,7 +336,7 @@ mod tests {
     fn prefix_ending_in_an_incomplete_frame_rolls_back() {
         let all = all_frames();
         let bytes = bytes_with(&all[..1]);
-        match recover(&bytes, TARGET) {
+        match recover(&bytes, expectation(TARGET)) {
             RecoveryPlan::RollBack { frames } => assert_eq!(frames, all[..1].to_vec()),
             RecoveryPlan::Absent
             | RecoveryPlan::Committed
@@ -210,13 +346,12 @@ mod tests {
         }
     }
 
-    // covers: I8
     #[test]
     fn truncation_at_any_byte_has_a_deterministic_plan() {
         let bytes = bytes_with(&all_frames());
         for cut in 0..=bytes.len() {
-            let first = recover(&bytes[..cut], TARGET);
-            let second = recover(&bytes[..cut], TARGET);
+            let first = recover(&bytes[..cut], expectation(TARGET));
+            let second = recover(&bytes[..cut], expectation(TARGET));
             assert_eq!(first, second, "cut {cut} must be deterministic");
             if cut >= HEADER_LEN {
                 assert!(
@@ -228,20 +363,64 @@ mod tests {
     }
 
     #[test]
-    fn a_torn_trailing_frame_does_not_poison_earlier_frames() {
+    fn frames_appended_without_rewriting_the_header_are_refused() {
+        // 帧格式定案为"整条重写"：只追加帧而不更新头时，追加部分不可见。这种记录
+        // 不能按前缀读成"更早的状态"，否则已提交的写入会被当成待回滚；它是两头
+        // 不一致的记录，交人工判定。
         let all = all_frames();
         let mut bytes = bytes_with(&all[..2]);
-        let mut partial = Vec::new();
-        frame::Frame::encode_into(&all[2], &mut partial).expect("编码应成立");
-        bytes.extend_from_slice(&partial[..partial.len() / 2]);
-        let plan = recover(&bytes, TARGET);
-        match plan {
-            RecoveryPlan::Replay { frames } => assert_eq!(frames, all[..2].to_vec()),
-            RecoveryPlan::Absent
-            | RecoveryPlan::Committed
-            | RecoveryPlan::RollBack { .. }
-            | RecoveryPlan::Foreign { .. }
-            | RecoveryPlan::NeedsManual { .. } => panic!("expected replay from the intact prefix"),
+        let mut extra = Vec::new();
+        frame::Frame::encode_into(&all[2], &mut extra).expect("编码应成立");
+        bytes.extend_from_slice(&extra);
+        assert!(matches!(
+            recover(&bytes, expectation(TARGET)),
+            RecoveryPlan::NeedsManual { .. }
+        ));
+    }
+
+    #[test]
+    fn the_target_and_generation_checks_apply_to_every_state() {
+        // 四态各自成立时，目标指纹与几何代次的核对仍然独立生效：它们不是
+        // "看到终态就跳过"的旁路。
+        let cases: Vec<(Vec<Frame>, RecoveryPlan)> = vec![
+            (Vec::new(), RecoveryPlan::RollBack { frames: Vec::new() }),
+            (
+                vec![frame(0, FrameKind::Preimage, false)],
+                RecoveryPlan::RollBack {
+                    frames: vec![frame(0, FrameKind::Preimage, false)],
+                },
+            ),
+            (
+                vec![frame(0, FrameKind::Progress, true)],
+                RecoveryPlan::Replay {
+                    frames: vec![frame(0, FrameKind::Progress, true)],
+                },
+            ),
+            (all_frames(), RecoveryPlan::Committed),
+        ];
+        let other = Fingerprint::strong([0x99; 32]);
+        for (frames, expected) in cases {
+            let bytes = bytes_with(&frames);
+            assert_eq!(
+                recover(&bytes, expectation(TARGET)),
+                expected,
+                "四态必须分开"
+            );
+            assert!(
+                matches!(
+                    recover(&bytes, expectation(other)),
+                    RecoveryPlan::NeedsManual { .. }
+                ),
+                "目标指纹不符时必须拒绝"
+            );
+            let generation = encode(&body_with_generation(3), &frames).expect("编码应成立");
+            assert!(
+                matches!(
+                    recover(&generation, expectation(TARGET)),
+                    RecoveryPlan::NeedsManual { .. }
+                ),
+                "几何代次不符时必须拒绝"
+            );
         }
     }
 
@@ -250,8 +429,9 @@ mod tests {
         let mut bytes = bytes_with(&all_frames());
         bytes[0] = b'Z';
         assert_eq!(
-            recover(&bytes, TARGET),
-            RecoveryPlan::Foreign { magic: *b"ZRB2" }
+            recover(&bytes, expectation(TARGET)),
+            RecoveryPlan::Foreign { magic: *b"ZREC" },
+            "首个字节被改写的记录按外来格式报告，且不读后续帧"
         );
     }
 
@@ -260,7 +440,7 @@ mod tests {
         let bytes = bytes_with(&all_frames());
         let other = Fingerprint::strong([0x99; 32]);
         assert!(matches!(
-            recover(&bytes, other),
+            recover(&bytes, expectation(other)),
             RecoveryPlan::NeedsManual { .. }
         ));
     }
@@ -270,7 +450,7 @@ mod tests {
         let gap = vec![frame(1, FrameKind::Preimage, false)];
         let bytes = bytes_with(&gap);
         assert!(matches!(
-            recover(&bytes, TARGET),
+            recover(&bytes, expectation(TARGET)),
             RecoveryPlan::NeedsManual { .. }
         ));
     }
@@ -281,7 +461,7 @@ mod tests {
         all.push(frame(3, FrameKind::Progress, true));
         let bytes = bytes_with(&all);
         assert!(matches!(
-            recover(&bytes, TARGET),
+            recover(&bytes, expectation(TARGET)),
             RecoveryPlan::NeedsManual { .. }
         ));
     }

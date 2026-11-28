@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use diskedit::app::decide::step::TableSegment;
-use diskedit::app::decide::{Plan, Report, Step, StepKind, confirm};
+use diskedit::app::decide::{Plan, Refusal, Report, Step, StepKind, confirm};
 use diskedit::app::execute::{ExecutionState, filesystem, resize};
 use diskedit::app::observe::records::RecordState;
 use diskedit::app::observe::resize::{LvmFacts, OnlineFacts, ResizeSnapshot};
@@ -228,7 +228,7 @@ fn plan_for(filesystem: FsKind) -> diskedit::app::decide::ConfirmedPlan {
             filesystem,
             bytes: 64 << 20,
         },
-        Vec::new(),
+        vec![Region::sized(0, 64 << 20).expect("在线区间可构造")],
     );
     let plan = Plan::external(vec![step], IDENTITY).expect("在线计划可构造");
     let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
@@ -239,7 +239,29 @@ fn geometry(blocks: u64, size: u64) -> String {
     format!("Block count: {blocks}\nBlock size: {size}\n")
 }
 
-// covers: B28, I12
+#[test]
+fn an_online_filesystem_step_without_declared_regions_is_refused() {
+    let step = Step::new(
+        StepKind::GrowFilesystemOnline {
+            mount_point: PathBuf::from("/mnt"),
+            device: PathBuf::from("/dev/sda1"),
+            disk: PathBuf::from("/dev/sda"),
+            partition: 1,
+            filesystem: FsKind::Ext,
+            bytes: 64 << 20,
+        },
+        Vec::new(),
+    );
+    assert!(matches!(
+        Plan::external(vec![step.clone()], IDENTITY),
+        Err(Refusal::PlanDigestMismatch)
+    ));
+    assert!(matches!(
+        Plan::write(vec![step], IDENTITY),
+        Err(Refusal::PlanDigestMismatch)
+    ));
+}
+
 #[test]
 fn online_grow_succeeds_only_after_the_read_back_reaches_the_partition() {
     let fake = Fake::new(vec![
@@ -252,7 +274,6 @@ fn online_grow_succeeds_only_after_the_read_back_reaches_the_partition() {
     assert_eq!(fake.calls(), vec![Program::Resize2fs, Program::Dumpe2fs]);
 }
 
-// covers: I12
 #[test]
 fn a_tool_without_an_exit_status_is_indeterminate_and_needs_recovery() {
     let fake = Fake::new(vec![Call::Exits(None, String::new())]);
@@ -262,7 +283,6 @@ fn a_tool_without_an_exit_status_is_indeterminate_and_needs_recovery() {
     assert_eq!(fake.calls(), vec![Program::Resize2fs]);
 }
 
-// covers: I12
 #[test]
 fn a_failed_read_back_is_partial_even_when_the_tool_exited_zero() {
     let fake = Fake::new(vec![
@@ -275,7 +295,6 @@ fn a_failed_read_back_is_partial_even_when_the_tool_exited_zero() {
     assert_eq!(fake.calls(), vec![Program::Resize2fs, Program::Dumpe2fs]);
 }
 
-// covers: B28, I12
 #[test]
 fn a_short_filesystem_after_the_tool_is_partial() {
     let fake = Fake::new(vec![
@@ -287,7 +306,6 @@ fn a_short_filesystem_after_the_tool_is_partial() {
     assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
 }
 
-// covers: R0792
 #[test]
 fn a_sector_size_on_a_block_device_is_refused_before_it_is_opened() {
     let mut fake = Fake::new(Vec::new());
@@ -300,7 +318,6 @@ fn a_sector_size_on_a_block_device_is_refused_before_it_is_opened() {
     assert!(fake.calls().is_empty(), "rejection precedes any tool");
 }
 
-// covers: B28
 #[test]
 fn a_host_without_the_tool_hands_the_grow_to_the_carrier() {
     let fake = Fake::with_carrier(OnlineReport {
@@ -323,7 +340,6 @@ fn superblock(total: u64, sectorsize: u64) -> String {
     )
 }
 
-// covers: B28, I12
 #[test]
 fn an_online_btrfs_grow_is_verified_from_the_superblock() {
     let fake = Fake::new(vec![
@@ -336,7 +352,6 @@ fn an_online_btrfs_grow_is_verified_from_the_superblock() {
     assert_eq!(fake.calls(), vec![Program::Btrfs, Program::Btrfs]);
 }
 
-// covers: B28, I12
 #[test]
 fn an_online_btrfs_grow_that_stopped_short_is_partial() {
     let fake = Fake::new(vec![
@@ -346,6 +361,17 @@ fn an_online_btrfs_grow_that_stopped_short_is_partial() {
     let outcome = filesystem::run_online(&fake, &plan_for(FsKind::Btrfs));
     assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
     assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+}
+
+#[test]
+fn an_online_grow_the_matrix_does_not_offer_is_refused_without_running_a_tool() {
+    // ntfs 在档案表里没有在线扩容方式：执行层不得凭"工具在 PATH 里"就试一把。
+    let fake = Fake::new(Vec::new());
+    let outcome = filesystem::run_online(&fake, &plan_for(FsKind::Ntfs));
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    assert_eq!(exit::exit_of(&outcome), exit::UNSUPPORTED);
+    assert!(fake.calls().is_empty(), "档案表判不支持时不得调用任何工具");
+    assert_eq!(fake.carrier_calls(), 0, "档案表判不支持时不得试探载体");
 }
 
 // --- 已挂载分区的几何调整（在线 `resize`） ---------------------------------
@@ -463,8 +489,6 @@ fn resize_request(size: Option<SizeSpec>, end: Option<u64>) -> Request {
     request_for(resize_command(size, end))
 }
 
-// covers: R0421, R0422, R0423, R0424, R0425, R0426, R0427, R0428, R0429, R0430, R0431, R0432,
-// covers: R0433, R0434
 #[test]
 fn online_resize_plans_table_then_kernel_view_then_filesystem() {
     let snapshot = online_snapshot(2048, 1024);
@@ -502,9 +526,14 @@ fn online_resize_plans_table_then_kernel_view_then_filesystem() {
     assert_eq!(disk, &PathBuf::from("/dev/sda"));
     assert_eq!(*partition, 1);
     assert_eq!(*bytes, 6144 * 512);
+    let declared = &plan.steps()[2].regions;
+    assert_eq!(declared.len(), 1, "{declared:?}");
+    assert!(
+        declared[0].contains_region(Region::sized(2048 * 512, 6144 * 512).expect("写入区间")),
+        "the grow step must declare the partition it writes: {declared:?}"
+    );
 }
 
-// covers: R0428, R0429, R0430
 #[test]
 fn online_resize_refuses_flags_the_online_path_cannot_honour() {
     let cases: [fn(&mut ResizeRequest); 3] = [
@@ -526,7 +555,6 @@ fn online_resize_refuses_flags_the_online_path_cannot_honour() {
     }
 }
 
-// covers: R0742, R0743
 #[test]
 fn online_resize_refuses_shrinking_a_mounted_partition_with_a_non_btrfs_filesystem() {
     let snapshot = online_snapshot(2048, 1024);
@@ -562,7 +590,6 @@ fn offline_ext_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
     snapshot
 }
 
-// covers: R0211, R0382, R0416
 #[test]
 fn offline_ext_shrink_below_the_probed_minimum_is_refused_before_any_write() {
     let mut snapshot = offline_ext_snapshot(2048, 1024);
@@ -585,7 +612,6 @@ fn offline_ext_shrink_below_the_probed_minimum_is_refused_before_any_write() {
     );
 }
 
-// covers: R0211, R0382, R0416
 #[test]
 fn offline_ext_shrink_with_an_unreadable_minimum_is_refused_as_unknown() {
     let mut snapshot = offline_ext_snapshot(2048, 1024);
@@ -604,7 +630,6 @@ fn offline_ext_shrink_with_an_unreadable_minimum_is_refused_as_unknown() {
     );
 }
 
-// covers: R0211, R0382, R0416
 #[test]
 fn offline_ext_shrink_above_the_probed_minimum_plans_the_shrink() {
     let mut snapshot = offline_ext_snapshot(2048, 1024);
@@ -626,7 +651,6 @@ fn offline_ext_shrink_above_the_probed_minimum_plans_the_shrink() {
     );
 }
 
-// covers: B28, R0742
 #[test]
 fn online_btrfs_shrink_plans_filesystem_then_table_then_kernel_view() {
     let snapshot = btrfs_snapshot(2048, 1024);
@@ -659,9 +683,14 @@ fn online_btrfs_shrink_plans_filesystem_then_table_then_kernel_view() {
         panic!("the kernel view must follow the table: {kinds:?}");
     };
     assert_eq!(*synced, 453 * 512);
+    let declared = &plan.steps()[0].regions;
+    assert_eq!(declared.len(), 1, "{declared:?}");
+    assert!(
+        declared[0].contains_region(Region::sized(2048 * 512, 453 * 512).expect("写入区间")),
+        "the shrink step must declare the partition it writes: {declared:?}"
+    );
 }
 
-// covers: B28, R0742
 #[test]
 fn online_btrfs_shrink_without_the_tool_is_refused_before_any_write() {
     let mut snapshot = btrfs_snapshot(2048, 1024);
@@ -675,7 +704,6 @@ fn online_btrfs_shrink_without_the_tool_is_refused_before_any_write() {
     assert_eq!(exit::exit_of_refusal(&refusal), exit::UNSUPPORTED);
 }
 
-// covers: B28, R0742
 #[test]
 fn an_online_btrfs_shrink_preview_reports_the_shrink_direction() {
     let snapshot = btrfs_snapshot(2048, 1024);
@@ -698,7 +726,6 @@ fn an_online_btrfs_shrink_preview_reports_the_shrink_direction() {
     );
 }
 
-// covers: R0432
 #[test]
 fn online_grow_without_free_space_is_refused() {
     let snapshot = online_snapshot(2048, 6144);
@@ -995,14 +1022,13 @@ fn online_execution_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPlan {
             filesystem: FsKind::Ext,
             bytes: 6144 * 512,
         },
-        Vec::new(),
+        vec![Region::sized(2048 * 512, 6144 * 512).expect("在线区间可构造")],
     );
     let plan = Plan::write(vec![table, refresh, grow], IDENTITY).expect("在线计划可构造");
     let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
     confirm(plan, true, &current).expect("计划可确认")
 }
 
-// covers: R0760
 #[test]
 fn online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesystem() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1024,7 +1050,6 @@ fn online_resize_writes_the_table_then_resizes_the_kernel_view_then_the_filesyst
     );
 }
 
-// covers: R0760
 #[test]
 fn a_failed_kernel_view_update_after_the_table_write_is_partial() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1054,7 +1079,7 @@ fn online_shrink_execution_plan(bytes: &[u8]) -> diskedit::app::decide::Confirme
             filesystem: FsKind::Btrfs,
             bytes: SHRUNK_BYTES,
         },
-        Vec::new(),
+        vec![Region::sized(2048 * 512, SHRUNK_BYTES).expect("在线区间可构造")],
     );
     let table = Step::new(
         StepKind::WriteTable {
@@ -1082,7 +1107,6 @@ fn online_shrink_execution_plan(bytes: &[u8]) -> diskedit::app::decide::Confirme
     confirm(plan, true, &current).expect("计划可确认")
 }
 
-// covers: B28, R0742, R0760
 #[test]
 fn online_btrfs_shrink_shrinks_the_filesystem_before_writing_the_table() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1101,7 +1125,6 @@ fn online_btrfs_shrink_shrinks_the_filesystem_before_writing_the_table() {
     assert_eq!(platform.live_calls(), vec![(1, 2048 * 512, SHRUNK_BYTES)]);
 }
 
-// covers: B28, R0742
 #[test]
 fn a_failed_btrfs_shrink_leaves_the_table_and_kernel_view_alone() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1117,7 +1140,6 @@ fn a_failed_btrfs_shrink_leaves_the_table_and_kernel_view_alone() {
     );
 }
 
-// covers: B28, R0742
 #[test]
 fn a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1139,7 +1161,7 @@ fn a_btrfs_shrink_that_stopped_short_never_shrinks_the_partition() {
     );
 }
 
-// --- swap 重建（B28） -------------------------------------------------------
+// --- swap 重建 -------------------------------------------------------------
 
 /// 离线的 swap 分区现场：分区 1 的内容识别为 swap，工具只有 mkswap。
 fn swap_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
@@ -1156,7 +1178,6 @@ fn swap_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
     snapshot
 }
 
-// covers: B28
 #[test]
 fn resizing_a_swap_partition_plans_a_mkswap_rebuild_after_the_table() {
     let snapshot = swap_snapshot(2048, 1024);
@@ -1181,7 +1202,6 @@ fn resizing_a_swap_partition_plans_a_mkswap_rebuild_after_the_table() {
     assert_eq!(*bytes, 6144 * 512);
 }
 
-// covers: B28
 #[test]
 fn shrinking_a_swap_partition_is_unsupported() {
     let snapshot = swap_snapshot(2048, 1024);
@@ -1209,7 +1229,6 @@ fn swap_rebuild_plan() -> diskedit::app::decide::ConfirmedPlan {
     confirm(plan, true, &current).expect("计划可确认")
 }
 
-// covers: B28
 #[test]
 fn a_swap_rebuild_keeps_the_old_uuid_and_label_on_the_device() {
     let mut image = vec![0u8; DISK_BYTES as usize];
@@ -1231,6 +1250,81 @@ fn a_swap_rebuild_keeps_the_old_uuid_and_label_on_the_device() {
                 "/dev/sda".to_owned(),
             ]
         )]
+    );
+}
+
+#[test]
+fn a_swap_rebuild_that_fails_keeps_the_identity_it_passed_and_needs_recovery() {
+    // 工具中途失败：旧首部的 UUID 与卷标在调用前已读出并原样传给它，失败按
+    // "已写、待恢复"归档，而不是悄悄换一个随机身份继续。
+    let mut image = vec![0u8; DISK_BYTES as usize];
+    image[1036..1052].copy_from_slice(&[0x22; 16]);
+    image[1052..1056].copy_from_slice(b"SWAP");
+    let platform = LivePlatform::new(image, vec![Call::Exits(Some(1), String::new())]);
+    let outcome = filesystem::run(&platform, Path::new("/dev/sda"), &swap_rebuild_plan());
+    assert_eq!(outcome.state(), ExecutionState::NeedsRecovery);
+    assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
+    let args = platform.arg_calls();
+    assert_eq!(args.len(), 1, "只跑一次重建：{args:?}");
+    assert_eq!(args[0].0, Program::Mkswap);
+    assert!(
+        args[0].1.contains(&"-U".to_owned()) && args[0].1.contains(&"-L".to_owned()),
+        "重建必须带上旧首部的身份：{:?}",
+        args[0].1
+    );
+    assert!(
+        args[0].1[1] == "22222222-2222-2222-2222-222222222222",
+        "UUID 必须取自旧首部：{:?}",
+        args[0].1
+    );
+}
+
+/// 先写表、再重建 swap 的计划；swap 首部在 `start_bytes`。
+fn swap_resize_plan(bytes: &[u8], start_bytes: u64) -> diskedit::app::decide::ConfirmedPlan {
+    let table_region = Region::sized(0, 512).expect("表区区间可构造");
+    let table = Step::new(
+        StepKind::WriteTable {
+            format: TableFormat::Mbr,
+            segment_size: 512,
+            stamp: image_stamp(bytes),
+            segments: vec![TableSegment {
+                region: table_region,
+                bytes: vec![0xAA; 512],
+            }],
+        },
+        vec![table_region],
+    );
+    let swap_region = Region::sized(start_bytes, 512).expect("首部区间可构造");
+    let swap = Step::new(
+        StepKind::RebuildSwap {
+            partition: 1,
+            start_bytes,
+            bytes: start_bytes + 512,
+        },
+        vec![swap_region],
+    );
+    let plan = Plan::write(vec![table, swap], IDENTITY).expect("换区计划可构造");
+    let current = Observation::known(IDENTITY, Source::new("test"), Generation::FIRST);
+    confirm(plan, true, &current).expect("计划可确认")
+}
+
+#[test]
+fn an_unreadable_old_swap_header_stops_before_the_table_is_written() {
+    // 旧首部读不出来时不能在写表之后再发现：那会留下"表已扩、重建身份丢了"的
+    // 待恢复状态。预检必须在表写入之前停下，且不留下任何记录。
+    let image = vec![0u8; 512];
+    let platform = LivePlatform::new(image.clone(), Vec::new());
+    let plan = swap_resize_plan(&image, 4096);
+    let outcome = resize::run(&platform, Path::new("/dev/sda"), &plan);
+    assert_eq!(outcome.state(), ExecutionState::Unwritten);
+    assert!(
+        platform.calls().is_empty(),
+        "首部不可读时不得调用重建工具：{:?}",
+        platform.calls()
+    );
+    assert!(
+        platform.files.lock().unwrap().is_empty(),
+        "预检失败发生在写表之前，不得留下记录"
     );
 }
 
@@ -1261,7 +1355,6 @@ fn pv_online_snapshot(start: u64, sectors: u64) -> ResizeSnapshot {
     snapshot
 }
 
-// covers: B28
 #[test]
 fn pv_online_grow_plans_table_then_kernel_view_then_pv_chain() {
     let snapshot = pv_online_snapshot(2048, 1024);
@@ -1304,7 +1397,6 @@ fn pv_online_grow_plans_table_then_kernel_view_then_pv_chain() {
     assert!(!*grow_lv);
 }
 
-// covers: B28
 #[test]
 fn pv_online_shrink_is_refused() {
     let snapshot = pv_online_snapshot(2048, 1024);
@@ -1317,7 +1409,6 @@ fn pv_online_shrink_is_refused() {
     assert_eq!(exit::exit_of_refusal(&refusal), exit::REFUSED);
 }
 
-// covers: B28
 #[test]
 fn pv_online_refuses_move_chunk_and_no_fs() {
     let cases: [fn(&mut ResizeRequest); 3] = [
@@ -1381,7 +1472,6 @@ fn pv_online_execution_plan(bytes: &[u8]) -> diskedit::app::decide::ConfirmedPla
     confirm(plan, true, &current).expect("计划可确认")
 }
 
-// covers: B28
 #[test]
 fn pv_online_runs_the_pv_chain_only_after_the_kernel_view() {
     let bytes = vec![0u8; DISK_BYTES as usize];
@@ -1400,7 +1490,6 @@ fn pv_online_runs_the_pv_chain_only_after_the_kernel_view() {
     assert_eq!(exit::exit_of(&outcome), exit::PARTIAL);
 }
 
-// covers: B28
 #[test]
 fn pv_online_without_kernel_sync_skips_the_pv_chain() {
     let bytes = vec![0u8; DISK_BYTES as usize];

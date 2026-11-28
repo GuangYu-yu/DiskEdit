@@ -22,6 +22,8 @@ struct Memory {
     files: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
     target: Arc<Mutex<Vec<u8>>>,
     fail_writes: Arc<std::sync::atomic::AtomicUsize>,
+    /// 目标现在给出的身份；`None` 表示仍是计划绑定的那个。
+    identity: Option<Fingerprint>,
 }
 
 struct Lock;
@@ -34,6 +36,7 @@ impl Memory {
             files: Mutex::new(BTreeMap::new()),
             target: Arc::new(Mutex::new(bytes)),
             fail_writes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            identity: None,
         }
     }
 
@@ -43,6 +46,12 @@ impl Memory {
 
     fn get(&self, path: &Path) -> Option<Vec<u8>> {
         self.files.lock().unwrap().get(path).cloned()
+    }
+
+    /// 目标当前总字节数对应的几何代次下编码的记录。
+    fn record_bytes(&self, frames: &[Frame]) -> Vec<u8> {
+        let total_bytes = self.target.lock().unwrap().len() as u64;
+        encode(&body(total_bytes), frames).expect("记录可编码")
     }
 
     fn names(&self) -> Vec<String> {
@@ -134,7 +143,7 @@ impl Platform for Memory {
         false
     }
     fn identity(&self, _path: &Path) -> PlatformResult<Fingerprint> {
-        Ok(IDENTITY)
+        Ok(self.identity.unwrap_or(IDENTITY))
     }
     fn occupancy(&self, _path: &Path) -> PlatformResult<Occupancy> {
         Ok(Occupancy::Idle)
@@ -212,10 +221,10 @@ fn record_path() -> PathBuf {
         .join(RECORD_FILE)
 }
 
-fn body() -> RecordBody {
+fn body(total_bytes: u64) -> RecordBody {
     RecordBody {
         target: IDENTITY,
-        geometry_generation: 1,
+        legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
         plan_digest: [0x11; 32],
     }
 }
@@ -254,10 +263,6 @@ fn intent_frame() -> Frame {
     }
 }
 
-fn record_bytes(frames: &[Frame]) -> Vec<u8> {
-    encode(&body(), frames).expect("记录可编码")
-}
-
 fn confirmed(mode: RecoverMode, regions: Vec<Region>) -> ConfirmedPlan {
     let step = Step::new(StepKind::RecoverRecords { mode }, regions);
     let plan = Plan::write(vec![step], IDENTITY).expect("写计划需要强身份");
@@ -286,14 +291,13 @@ fn recovered(outcome: &Outcome) -> bool {
     )
 }
 
-// covers: B7, B9
 #[test]
 fn rollback_verifies_the_preimage_and_cleans_the_record() {
     let original = vec![0xAAu8; SECTOR];
     let memory = Memory::with_target(original.clone());
     memory.put(
         &record_path(),
-        record_bytes(&[
+        memory.record_bytes(&[
             Frame {
                 seq: 0,
                 kind: FrameKind::Intent,
@@ -318,14 +322,13 @@ fn rollback_verifies_the_preimage_and_cleans_the_record() {
     assert!(memory.get(&record_path()).is_none(), "清理后记录不应存在");
 }
 
-// covers: B24
 #[test]
 fn a_mismatched_region_is_refused_and_kept() {
     let original = vec![0xAAu8; SECTOR];
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[
+        memory.record_bytes(&[
             Frame {
                 seq: 0,
                 kind: FrameKind::Intent,
@@ -351,7 +354,6 @@ fn a_mismatched_region_is_refused_and_kept() {
     assert!(memory.get(&record_path()).is_some(), "拒绝后必须保留记录");
 }
 
-// covers: B6, B24
 #[test]
 fn a_fully_written_table_is_replayed_back_to_the_preimage() {
     let original = vec![0xAAu8; SECTOR];
@@ -359,7 +361,7 @@ fn a_fully_written_table_is_replayed_back_to_the_preimage() {
     let memory = Memory::with_target(after.clone());
     memory.put(
         &record_path(),
-        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+        memory.record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
     );
     let plan = confirmed(
         RecoverMode::ReplayTableOnly,
@@ -375,7 +377,91 @@ fn a_fully_written_table_is_replayed_back_to_the_preimage() {
     assert!(memory.get(&record_path()).is_none());
 }
 
-// covers: B6, B24
+#[test]
+fn a_torn_record_prefix_is_decided_without_consulting_the_target() {
+    // 记录停在原像帧中间：那一帧对应的写入尚未发生。目标里这段即使已被别的程序
+    // 改过，也不能被当成"本工具写了一半"而回写；结论只由记录前缀给出。
+    let original = vec![0xAAu8; SECTOR];
+    let after = vec![0xBBu8; SECTOR];
+    let foreign = vec![0x5Au8; SECTOR];
+    let memory = Memory::with_target(foreign.clone());
+    let mut bytes = memory.record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]);
+    let cut = bytes.len() - 8;
+    bytes.truncate(cut);
+    memory.put(&record_path(), bytes);
+    let outcome = run_mode(&memory, RecoverMode::Undo);
+    assert!(
+        recovered(&outcome),
+        "不完整的原像帧不构成回写依据，清理记录即可：{:?}",
+        outcome.reason()
+    );
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        foreign.as_slice(),
+        "外部改动不得被当成写了一半的字节覆盖"
+    );
+    assert!(memory.get(&record_path()).is_none(), "记录应被清理");
+}
+
+#[test]
+fn two_writes_to_one_region_roll_back_to_the_first_preimage() {
+    // 同一区间被连续写过两次：第一次的原像是 A（写后 B），第二次的原像是 B（写后 C）。
+    // 回滚必须落到 A——后登记的原像不能顶掉更早的那个。
+    let a = vec![0xAAu8; SECTOR];
+    let b = vec![0xBBu8; SECTOR];
+    let c = vec![0xCCu8; SECTOR];
+    let memory = Memory::with_target(c.clone());
+    let mut second = preimage_frame_with(&b, &c);
+    second.seq = 2;
+    memory.put(
+        &record_path(),
+        memory.record_bytes(&[intent_frame(), preimage_frame_with(&a, &b), second]),
+    );
+    let plan = confirmed(
+        RecoverMode::Undo,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert!(recovered(&outcome), "{:?}", outcome.reason());
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        a.as_slice(),
+        "回滚必须落到第一次写入之前的字节，而不是第二次写入之前的字节"
+    );
+    assert!(memory.get(&record_path()).is_none());
+}
+
+#[test]
+fn a_target_that_no_longer_proves_its_identity_is_not_rolled_back() {
+    // 计划绑定的是一个身份，持锁后重探发现目标给出了另一个强身份：回滚必须在写
+    // 任何字节之前停下，并保留记录。
+    let original = vec![0xAAu8; SECTOR];
+    let after = vec![0xBBu8; SECTOR];
+    let mut memory = Memory::with_target(after.clone());
+    memory.put(
+        &record_path(),
+        memory.record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+    );
+    memory.identity = Some(Fingerprint::strong([0x99; 32]));
+    let plan = confirmed(
+        RecoverMode::Undo,
+        vec![Region::sized(0, SECTOR as u64).unwrap()],
+    );
+    let outcome = run(&memory, Path::new("memory"), &plan);
+    assert_eq!(
+        outcome.state(),
+        ExecutionState::Unwritten,
+        "{:?}",
+        outcome.reason()
+    );
+    assert_eq!(
+        memory.target.lock().unwrap().as_slice(),
+        after.as_slice(),
+        "写前重读归属不符时不得写目标"
+    );
+    assert!(memory.get(&record_path()).is_some(), "拒绝后必须保留记录");
+}
+
 #[test]
 fn a_torn_write_with_one_break_point_is_replayed() {
     let original = vec![0xAAu8; SECTOR];
@@ -385,7 +471,7 @@ fn a_torn_write_with_one_break_point_is_replayed() {
     let memory = Memory::with_target(torn);
     memory.put(
         &record_path(),
-        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+        memory.record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
     );
     let plan = confirmed(
         RecoverMode::ReplayTableOnly,
@@ -400,7 +486,6 @@ fn a_torn_write_with_one_break_point_is_replayed() {
     assert!(memory.get(&record_path()).is_none());
 }
 
-// covers: B24
 #[test]
 fn bytes_that_match_neither_side_are_refused_before_any_write() {
     let original = vec![0xAAu8; SECTOR];
@@ -408,7 +493,7 @@ fn bytes_that_match_neither_side_are_refused_before_any_write() {
     let memory = Memory::with_target(vec![0x5Au8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
+        memory.record_bytes(&[intent_frame(), preimage_frame_with(&original, &after)]),
     );
     let plan = confirmed(
         RecoverMode::ReplayTableOnly,
@@ -454,13 +539,12 @@ fn recorded_write_classifies_after_torn_and_original() {
     );
 }
 
-// covers: B8
 #[test]
 fn release_archives_instead_of_touching_the_target() {
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
+        memory.record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
     );
     let outcome = run_mode(
         &memory,
@@ -478,13 +562,12 @@ fn release_archives_instead_of_touching_the_target() {
     );
 }
 
-// covers: B8
 #[test]
 fn a_second_release_does_not_overwrite_the_first_archive() {
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
+        memory.record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
     );
     let first = run_mode(
         &memory,
@@ -495,7 +578,7 @@ fn a_second_release_does_not_overwrite_the_first_archive() {
     assert!(recovered(&first));
     memory.put(
         &record_path(),
-        record_bytes(&[preimage_frame(&vec![0xBBu8; SECTOR])]),
+        memory.record_bytes(&[preimage_frame(&vec![0xBBu8; SECTOR])]),
     );
     let second = run_mode(
         &memory,
@@ -515,13 +598,12 @@ fn a_second_release_does_not_overwrite_the_first_archive() {
     );
 }
 
-// covers: B23
 #[test]
 fn cleanup_refuses_when_the_record_changed_under_the_lock() {
     let original = vec![0xAAu8; SECTOR];
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     // Committed 记录：回复只清理、不写目标。
-    let bytes = record_bytes(&[
+    let bytes = memory.record_bytes(&[
         Frame {
             seq: 0,
             kind: FrameKind::Intent,
@@ -547,18 +629,17 @@ fn cleanup_refuses_when_the_record_changed_under_the_lock() {
     assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
 }
 
-// covers: B3
 #[test]
 fn only_the_directory_derived_from_the_identity_is_consulted() {
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
+        memory.record_bytes(&[preimage_frame(&vec![0xAAu8; SECTOR])]),
     );
     let elsewhere = PathBuf::from("/state/images/deadbeef/record");
     memory.put(
         &elsewhere,
-        record_bytes(&[preimage_frame(&vec![0xCCu8; SECTOR])]),
+        memory.record_bytes(&[preimage_frame(&vec![0xCCu8; SECTOR])]),
     );
     let outcome = run_mode(
         &memory,
@@ -574,7 +655,6 @@ fn only_the_directory_derived_from_the_identity_is_consulted() {
     );
 }
 
-// covers: B24
 #[test]
 fn a_failed_rollback_write_keeps_the_rest_of_the_record_and_reports_partial() {
     let mut before = vec![0xAAu8; SECTOR];
@@ -609,7 +689,10 @@ fn a_failed_rollback_write_keeps_the_rest_of_the_record_and_reports_partial() {
         ],
     };
     let memory = Memory::with_target(after.clone());
-    memory.put(&record_path(), record_bytes(&[intent_frame(), frame]));
+    memory.put(
+        &record_path(),
+        memory.record_bytes(&[intent_frame(), frame]),
+    );
     memory
         .fail_writes
         .store(2, std::sync::atomic::Ordering::SeqCst);
@@ -640,14 +723,16 @@ fn a_failed_rollback_write_keeps_the_rest_of_the_record_and_reports_partial() {
     );
 }
 
-// covers: B24
 #[test]
 fn a_record_with_non_monotonic_frames_is_refused_before_writing() {
     let bytes = vec![0xCCu8; SECTOR];
     let memory = Memory::with_target(bytes.clone());
     let mut second = preimage_frame(&bytes);
     second.seq = 0;
-    memory.put(&record_path(), record_bytes(&[intent_frame(), second]));
+    memory.put(
+        &record_path(),
+        memory.record_bytes(&[intent_frame(), second]),
+    );
     let plan = confirmed(
         RecoverMode::Undo,
         vec![Region::sized(0, SECTOR as u64).unwrap()],
@@ -666,7 +751,6 @@ fn a_record_with_non_monotonic_frames_is_refused_before_writing() {
     );
 }
 
-// covers: F2
 #[test]
 fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
     // 不可逆步骤（建卷、改数据区）没有原像可回滚。若在外部动作之后、终态帧之前中断，
@@ -674,7 +758,7 @@ fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[Frame {
+        memory.record_bytes(&[Frame {
             seq: 0,
             kind: FrameKind::Intent,
             completed: false,
@@ -697,7 +781,6 @@ fn an_unfinished_irreversible_record_is_not_reported_as_rollback() {
     assert_eq!(memory.target.lock().unwrap().as_slice(), &[0x55u8; SECTOR]);
 }
 
-// covers: F2
 #[test]
 fn a_completed_irreversible_step_is_not_undone() {
     // 外部动作成功后驱动追加了完成帧；记录因此可以被识别为"不可逆步骤已完成"，
@@ -705,7 +788,7 @@ fn a_completed_irreversible_step_is_not_undone() {
     let memory = Memory::with_target(vec![0x55u8; SECTOR]);
     memory.put(
         &record_path(),
-        record_bytes(&[
+        memory.record_bytes(&[
             Frame {
                 seq: 0,
                 kind: FrameKind::Intent,

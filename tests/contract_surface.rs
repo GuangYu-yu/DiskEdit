@@ -1,4 +1,4 @@
-//! 导出命令面：把声明的形状写到 `target/command-surface.json`，供门禁与旧版对照。
+//! 导出命令面：把声明的形状写到 `target/command-surface.json`，供门禁核对命令面。
 
 #[test]
 fn command_surface_is_exported() {

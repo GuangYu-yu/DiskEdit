@@ -1,7 +1,6 @@
-//! 旧版拒绝点的簇级认领：按旧文件成簇，用库的公开入口复现同一拒绝。
+//! 拒绝点的簇级覆盖：按拒绝类别成簇，用库的公开入口复现同一拒绝。
 //!
-//! 每条用例断言具体错误形态，不依赖实现细节；`// covers: R*` 标注它认领的
-//! 旧版拒绝点，其余接口由 `tests/case_runner.rs` 从命令行入口覆盖。
+//! 每条用例断言具体错误形态，不依赖实现细节；命令行入口由 `tests/case_runner.rs` 覆盖。
 
 use diskedit_core::table::edit::{
     add_mbr, delete_mbr, mbr_last_live, resize_mbr, set_mbr_hidden, set_mbr_type,
@@ -73,7 +72,6 @@ fn gpt_table(entries: Vec<PartitionEntry>) -> GptTable {
     }
 }
 
-// covers: R0881, R0882, R0889, R0892, R0896
 #[test]
 fn mbr_parse_rejects_unsigned_and_short_sectors() {
     let unsigned = [0u8; 512];
@@ -86,7 +84,6 @@ fn mbr_parse_rejects_unsigned_and_short_sectors() {
     assert!(parse(&short).is_err(), "短缓冲区必须被拒绝");
 }
 
-// covers: R0907, R0908, R0909, R0910, R0911, R0912, R0913, R0915
 #[test]
 fn mbr_add_rejects_types_ranges_and_overlaps() {
     let sector = mbr_sector(&[(0, 0x83, 2048, 1024)]);
@@ -134,7 +131,6 @@ fn mbr_add_rejects_types_ranges_and_overlaps() {
     ));
 }
 
-// covers: R0887, R0891, R0914, R0916, R0917, R0918
 #[test]
 fn mbr_add_rejects_slot_limits_and_invisible_entries() {
     let occupied = mbr_sector(&[(0, 0x83, 2048, 1024)]);
@@ -166,7 +162,6 @@ fn mbr_add_rejects_slot_limits_and_invisible_entries() {
     ));
 }
 
-// covers: R0622, R0890, R0894, R0919, R0920, R0921
 #[test]
 fn mbr_delete_rejects_empty_structural_and_out_of_range_slots() {
     let empty = mbr_sector(&[]);
@@ -196,9 +191,6 @@ fn mbr_delete_rejects_empty_structural_and_out_of_range_slots() {
     ));
 }
 
-// covers: R0399, R0404, R0411, R0413, R0898, R0899, R0901, R0902
-// covers: R0623
-// covers: R0903, R0904
 #[test]
 fn mbr_resize_rejects_structural_and_out_of_bounds_ranges() {
     let protective = mbr_sector(&[(0, 0xEE, 1, 8191)]);
@@ -238,7 +230,6 @@ fn mbr_resize_rejects_structural_and_out_of_bounds_ranges() {
     ));
 }
 
-// covers: R0922, R0923, R0924, R0925, R0926, R0927
 #[test]
 fn mbr_type_and_hidden_reject_structural_types() {
     let sector = mbr_sector(&[(0, 0x83, 2048, 1024)]);
@@ -274,7 +265,6 @@ fn mbr_type_and_hidden_reject_structural_types() {
     ));
 }
 
-// covers: R0616, R0617, R0618, R0619, R0660, R0662
 #[test]
 fn partition_lookup_rejects_empty_and_missing_entries() {
     let table = gpt_table(vec![entry(1, 34, 40, false)]);
@@ -292,9 +282,6 @@ fn partition_lookup_rejects_empty_and_missing_entries() {
     assert_eq!(mbr_last_live(&mbr).expect("空 MBR 应可解析"), None);
 }
 
-// covers: R0628, R0629, R0630, R0631, R0632
-// covers: R0183, R0184
-// covers: R0654, R0655
 #[test]
 fn gpt_add_slot_rejects_bounds_overlap_slots_and_full_table() {
     let table = gpt_table(vec![
@@ -332,7 +319,6 @@ fn gpt_add_slot_rejects_bounds_overlap_slots_and_full_table() {
     ));
 }
 
-// covers: R0625
 #[test]
 fn gpt_usable_range_rejects_inverted_bounds() {
     let mut header = gpt_header();
@@ -341,14 +327,12 @@ fn gpt_usable_range_rejects_inverted_bounds() {
     assert!(diskedit_core::policy::gpt::usable_range(&header).is_err());
 }
 
-// covers: R0639
 #[test]
 fn gpt_flag_names_reject_unknown_values() {
     assert!(GptFlag::parse("hidden").is_some());
     assert!(GptFlag::parse("no-such-flag").is_none());
 }
 
-// covers: R0671, R0682, R0709, R0717
 #[test]
 fn relocation_layout_rejects_zero_geometry_and_unaddressable_shifts() {
     use diskedit_core::table::relocate::layout;
@@ -360,7 +344,6 @@ fn relocation_layout_rejects_zero_geometry_and_unaddressable_shifts() {
     );
 }
 
-// covers: R0796
 #[test]
 fn recovery_text_reports_the_possible_change_and_the_cause() {
     let text = diskedit::app::report::text::recovery("the write barrier failed");
@@ -371,14 +354,13 @@ fn recovery_text_reports_the_possible_change_and_the_cause() {
     assert!(text.contains("cause: the write barrier failed"), "{text}");
 }
 
-// covers: R0805, R0808
 #[test]
 fn a_record_for_another_target_is_not_resumed() {
     use diskedit_core::fingerprint::Fingerprint;
     use diskedit_core::record::{RecordBody, RecoveryPlan, encode, recover};
     let body = RecordBody {
         target: Fingerprint::strong([0x11; 32]),
-        geometry_generation: 1,
+        legacy_generation: 0,
         plan_digest: [0u8; 32],
     };
     let bytes = encode(&body, &[]).expect("记录可编码");
@@ -389,7 +371,6 @@ fn a_record_for_another_target_is_not_resumed() {
     );
 }
 
-// covers: R0863
 #[test]
 fn alignment_overflow_rejects_the_start() {
     use diskedit_core::geometry::align;
@@ -399,9 +380,6 @@ fn alignment_overflow_rejects_the_start() {
     );
 }
 
-// covers: R0182, R0185, R0222, R0223, R0227, R0228, R0236, R0242
-// covers: R0642, R0643
-// covers: R0653, R0665, R0666, R0730
 #[test]
 fn gpt_placement_rejects_address_space_overflow() {
     assert!(matches!(
@@ -422,7 +400,6 @@ fn gpt_placement_rejects_address_space_overflow() {
     ));
 }
 
-// covers: B2
 #[test]
 fn an_unusable_identity_cannot_plan_a_write() {
     use diskedit::app::decide::{Plan, Refusal};
@@ -439,7 +416,6 @@ fn an_unusable_identity_cannot_plan_a_write() {
     assert_eq!(exit_of_refusal(&error), UNSUPPORTED);
 }
 
-// covers: R0895, R0897, R0900, R0905
 #[test]
 fn mbr_resize_rejects_short_empty_invisible_and_overlapping_states() {
     // 快照短于一条 MBR 记录区：不可当作表使用。
@@ -469,7 +445,6 @@ fn mbr_resize_rejects_short_empty_invisible_and_overlapping_states() {
     assert!(resize_mbr(&two, 1, 2048, 4000, 8192).is_ok());
 }
 
-// covers: R0868, R0869, R0873, R0874, R0875, R0876, R0877
 #[test]
 fn table_capacity_refuses_disks_too_small_for_gpt_or_mbr() {
     use diskedit_core::table::{CapacityError, Format, check_capacity};

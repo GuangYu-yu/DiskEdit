@@ -758,7 +758,14 @@ pub fn grow_chain(platform: &dyn Platform, chain: &GrowChain<'_>) -> Result<(), 
     let Some(selection) = selection else {
         return Ok(());
     };
-    let free = report.pv_pe_count.saturating_sub(report.pv_pe_alloc_count);
+    // 分配数大于总数说明 PV 报表自身矛盾；饱和成 0 会把"报表不可信"伪装成
+    // "没有空闲 extent"，这里按失败处理。
+    let free = report.pv_pe_count.checked_sub(report.pv_pe_alloc_count).ok_or_else(|| {
+        LvmError::Failed(format!(
+            "{dev} reports {} allocated extents out of {} — the PV report contradicts itself, so the free extent count cannot be trusted",
+            report.pv_pe_alloc_count, report.pv_pe_count
+        ))
+    })?;
     if chain.delta_bytes == 0 {
         if free == 0 {
             return Ok(());

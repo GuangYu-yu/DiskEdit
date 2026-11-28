@@ -1,6 +1,6 @@
 //! `release` 的唯一执行器：持锁、锁内重探身份、归档记录。
 //!
-//! 放弃不写目标字节（B8）：记录同目录归档为 `record.<N>.abandoned`，编号顺延
+//! 放弃不写目标字节：记录同目录归档为 `record.<N>.abandoned`，编号顺延
 //! 不覆盖，目录 `fsync`。锁内现场与错误归档与 `undo` 共用。
 
 use std::path::Path;
@@ -28,45 +28,60 @@ fn execute(
     plan: &ConfirmedPlan,
 ) -> Result<Outcome, (ExecError, bool)> {
     let mode = super::undo::mode_of(plan)?;
-    match mode {
-        RecoverMode::Release { .. } => {}
+    let discard_replay = match mode {
+        RecoverMode::Release { discard_replay } => discard_replay,
         RecoverMode::Undo | RecoverMode::ReplayTableOnly => {
             return Err((
                 ExecError::InvalidPlan("the plan asks for a rollback, not a release".to_owned()),
                 false,
             ));
         }
-    }
+    };
     let identity = plan.identity();
     let site = prepare(platform, target, plan)?;
-    release(platform, &site.directory, &site.file, site.bytes, identity)
+    let Some(bytes) = site.bytes else {
+        return Ok(Outcome::completed());
+    };
+    let total_bytes = platform
+        .open_target_read_only(target)
+        .map_err(|error| (ExecError::from(error), false))?
+        .len();
+    release(
+        platform,
+        &site.directory,
+        &site.file,
+        bytes,
+        identity,
+        discard_replay,
+        total_bytes,
+    )
 }
 
-/// B8 放弃：只看对象与归属，目标字节不变。
+/// 锁内放弃记录：记录先过四道准入，再归档；目标字节不变。
 fn release(
     platform: &dyn Platform,
     directory: &Path,
     file: &Path,
-    bytes: Option<Vec<u8>>,
+    bytes: Vec<u8>,
     identity: diskedit_core::fingerprint::Fingerprint,
+    discard_replay: bool,
+    total_bytes: u64,
 ) -> Result<Outcome, (ExecError, bool)> {
-    let Some(bytes) = bytes else {
-        return Ok(Outcome::completed());
-    };
-    // B8：放弃只看对象与归属。若记录能解码且属于别的载体，拒绝动它。
-    if let Ok(decoded) = diskedit_core::record::decode(&bytes)
-        && !decoded.body.target.matches(identity)
+    // 锁内重读的记录可能已不是判定时看到的那一份：四道准入在这里重跑一遍。
+    let plan = diskedit_core::record::recover(
+        &bytes,
+        diskedit_core::record::RecoveryExpectation::new(identity, total_bytes),
+    );
+    if let Err(refusal) =
+        crate::app::decide::release::admit(plan, discard_replay, &file.display().to_string())
     {
-        return Err((
-            ExecError::Record("the record belongs to a different target".to_owned()),
-            false,
-        ));
+        return Err((ExecError::Record(refusal.describe()), false));
     }
     abandon(platform, directory, file, &bytes).map_err(|error| (error, false))?;
     Ok(Outcome::completed())
 }
 
-/// B8 放弃：同目录归档为 `record.<N>.abandoned`，编号顺延不覆盖，目录 `fsync`。
+/// 放弃：同目录归档为 `record.<N>.abandoned`，编号顺延不覆盖，目录 `fsync`。
 fn abandon(
     platform: &dyn Platform,
     directory: &Path,

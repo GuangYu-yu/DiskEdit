@@ -316,7 +316,6 @@ mod tests {
         path
     }
 
-    // covers: I5
     #[test]
     fn an_image_identity_is_stable_and_distinct_per_file() {
         let first = temporary_file("identity");
@@ -341,7 +340,6 @@ mod tests {
         drop(std::fs::remove_file(&second));
     }
 
-    // covers: I5
     #[test]
     fn a_directory_has_no_file_identity() {
         let directory = std::env::temp_dir();
@@ -355,7 +353,6 @@ mod tests {
         );
     }
 
-    // covers: I3
     #[test]
     fn a_write_past_the_target_length_is_refused() {
         let path = temporary_file("bounded");
@@ -372,7 +369,6 @@ mod tests {
         drop(std::fs::remove_file(&path));
     }
 
-    // covers: I11
     #[test]
     fn a_record_round_trips_and_a_directory_is_not_a_record() {
         let path = temporary_file("record");
@@ -407,7 +403,6 @@ mod tests {
         );
     }
 
-    // covers: I5
     #[test]
     fn entropy_is_not_a_constant() {
         let first = WindowsPlatform.entropy(16).expect("随机源可用");

@@ -3,7 +3,7 @@
 //! 解析是严格的：每帧必须带 `v` 与已知 `type`；结果帧必须同时带结论与几何，
 //! 缺项按协议错误结束，不按缺省值补成某一类。
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use diskedit_core::fs::FsKind;
 use serde_json::{Value, json};
@@ -24,10 +24,14 @@ pub fn emit(out: &mut impl Write, frame: &Value) -> std::io::Result<()> {
 }
 
 /// 有界行读取：只接受以 `{` 开头且版本相符的帧。
+///
+/// 读取本身就按 [`MAX_FRAME`] 截断：对端一直不换行时，缓冲最多增长到上限
+/// 再多一个字节，随后按超限拒绝，而不是先把整条流读进内存再判断。
 pub fn read_frame(reader: &mut impl BufRead) -> PlatformResult<Value> {
-    let mut line = String::new();
-    let read = reader
-        .read_line(&mut line)
+    let mut line = Vec::new();
+    let mut limited = reader.take(MAX_FRAME as u64 + 1);
+    let read = limited
+        .read_until(b'\n', &mut line)
         .map_err(|error| PlatformError::parse(format!("cannot read a carrier frame: {error}")))?;
     if read == 0 {
         return Err(PlatformError::parse("the carrier closed its output"));
@@ -37,7 +41,9 @@ pub fn read_frame(reader: &mut impl BufRead) -> PlatformResult<Value> {
             "a carrier frame exceeds the size limit",
         ));
     }
-    let text = line.trim();
+    let text = String::from_utf8(line)
+        .map_err(|_| PlatformError::parse("a carrier frame is not valid UTF-8"))?;
+    let text = text.trim();
     if !text.starts_with('{') {
         return Err(PlatformError::parse(format!(
             "the carrier sent a non-frame line: {text}"
@@ -302,6 +308,30 @@ pub fn decode_request(frame: &Value, sid: &str) -> PlatformResult<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_without_a_newline_is_read_up_to_the_limit_only() {
+        // 对端一直不换行：读取必须在 MAX_FRAME + 1 字节处停下，剩下的一次都没读。
+        let mut stream = std::io::Cursor::new(vec![b'x'; MAX_FRAME * 3]);
+        let error = read_frame(&mut stream).expect_err("超限帧必须拒绝");
+        assert!(error.to_string().contains("size limit"), "{error}");
+        assert_eq!(
+            stream.position(),
+            MAX_FRAME as u64 + 1,
+            "读取必须在上限处截断，而不是把整条流读进内存"
+        );
+    }
+
+    #[test]
+    fn an_over_long_frame_that_ends_with_a_newline_is_still_refused() {
+        // 行最终会有换行，但整行超过上限：读取停在上限 + 1 字节并按超限拒绝。
+        let mut bytes = vec![b'{'; MAX_FRAME + 100];
+        bytes.push(b'\n');
+        let mut stream = std::io::Cursor::new(bytes);
+        let error = read_frame(&mut stream).expect_err("超限帧必须拒绝");
+        assert!(error.to_string().contains("size limit"), "{error}");
+        assert_eq!(stream.position(), MAX_FRAME as u64 + 1);
+    }
 
     #[test]
     fn write_disk_round_trips_absolute_segments() {

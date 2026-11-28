@@ -1,7 +1,7 @@
 //! `replay` 的判定：补完已搬移作业的表区写入。
 //!
-//! 与 `undo` 同一条回滚通路；差别只在两处：数据区步骤不再触发拒绝（B7 的
-//! 表区回放语义），缺记录的文案说"nothing to replay"。
+//! 与 `undo` 同一条回滚通路；差别只在两处：数据区步骤不再触发拒绝（表区回放
+//! 语义），缺记录的文案说"nothing to replay"。
 
 use crate::app::observe::{Command, RecoverMode, RecoverSnapshot, Request};
 

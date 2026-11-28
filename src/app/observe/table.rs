@@ -4,6 +4,8 @@
 //! 计，MBR 条目以容器的大小计。这里把两者的换算各留在产生它的那一层。
 
 use diskedit_core::fs::ContentKind;
+use diskedit_core::geometry::SectorSize;
+use diskedit_core::table::create::MBR_SECTOR_BYTES;
 use diskedit_core::table::gpt::entries::PartitionEntry;
 use diskedit_core::table::gpt::header::GptHeader;
 use diskedit_core::table::gpt::parse::{GptEvidence, classify};
@@ -12,6 +14,18 @@ use diskedit_core::table::mbr::primary::{self as mbr_primary, MbrEntry};
 use diskedit_core::table::{Guid, MAX_ENTRIES, PRIMARY_HEADER_LBA, TableError};
 
 use crate::platform::{PlatformError, PlatformResult, TargetHandle, probe};
+
+/// MBR 的扇区尺寸：LBA 与签名的位置由磁盘 MBR 规范固定在 512 字节上。
+const MBR_SECTOR: u64 = MBR_SECTOR_BYTES as u64;
+
+/// 没有用户值也没有内核值时的候选顺序：512 最常见，其后是 1 MiB 对齐下常见的
+/// 4096、2048、1024。四个值都取自 [`SectorSize::ALLOWED`]，不另立一份集合。
+const DEFAULT_CANDIDATES: [u64; 4] = [
+    SectorSize::ALLOWED[0],
+    SectorSize::ALLOWED[3],
+    SectorSize::ALLOWED[2],
+    SectorSize::ALLOWED[1],
+];
 
 /// 一个分区在目标上的视图。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,19 +111,29 @@ enum GptRead {
 }
 
 /// 观察目标的表；`preferred` 是用户显式给出的逻辑块大小。
+///
+/// 单个候选读取失败不影响其余候选：失败被记下，循环继续。只有全部候选都读取
+/// 失败时才返回错误，并把每个候选与它的失败原因一并带出。读成功但内容判为损坏
+/// 的候选仍记进 `damaged`，与"读取失败"分开。
 pub fn observe(
     handle: &dyn TargetHandle,
     preferred: Option<u64>,
     kernel_sector: Option<u64>,
 ) -> PlatformResult<TableView> {
     let len = handle.len();
+    let candidates = candidate_sizes(preferred, kernel_sector, len);
     let mut damaged: Option<(u64, String)> = None;
-    for sector_size in candidate_sizes(preferred, kernel_sector, len) {
-        match read_gpt(handle, sector_size)? {
-            GptRead::Hit(view) => return Ok(TableView::Gpt(view)),
-            GptRead::Absent => {}
-            GptRead::Damaged(why) => damaged = Some((sector_size, why)),
+    let mut failures: Vec<(u64, PlatformError)> = Vec::new();
+    for sector_size in &candidates {
+        match read_gpt(handle, *sector_size) {
+            Ok(GptRead::Hit(view)) => return Ok(TableView::Gpt(view)),
+            Ok(GptRead::Absent) => {}
+            Ok(GptRead::Damaged(why)) => damaged = Some((*sector_size, why)),
+            Err(error) => failures.push((*sector_size, error)),
         }
+    }
+    if !failures.is_empty() && failures.len() == candidates.len() {
+        return Err(candidates_unreadable(handle, &failures));
     }
     match read_mbr(handle)? {
         Some(view) => Ok(TableView::Mbr(view)),
@@ -120,15 +144,34 @@ pub fn observe(
     }
 }
 
-/// 尝试的顺序：用户值、内核值、512、4096、2048、1024；去重且只保留目标能容纳的。
+/// 全部候选都读取失败时的错误：逐个列出试过的候选与其失败原因。
+fn candidates_unreadable(
+    handle: &dyn TargetHandle,
+    failures: &[(u64, PlatformError)],
+) -> PlatformError {
+    let tried = failures
+        .iter()
+        .map(|(sector_size, error)| format!("{sector_size}-byte sectors: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    PlatformError::io(
+        handle.path(),
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("no GPT candidate could be read, tried {tried}"),
+        ),
+    )
+}
+
+/// 尝试的顺序：用户值、内核值、[`DEFAULT_CANDIDATES`]；去重且只保留目标能容纳的。
 fn candidate_sizes(preferred: Option<u64>, kernel: Option<u64>, len: u64) -> Vec<u64> {
     let mut sizes = Vec::new();
     for size in preferred
         .into_iter()
         .chain(kernel)
-        .chain([512, 4096, 2048, 1024])
+        .chain(DEFAULT_CANDIDATES)
     {
-        if size >= 512 && size.is_power_of_two() && len >= size && !sizes.contains(&size) {
+        if SectorSize::new(size).is_ok() && len >= size && !sizes.contains(&size) {
             sizes.push(size);
         }
     }
@@ -268,8 +311,8 @@ fn read_or_empty(handle: &dyn TargetHandle, offset: u64, len: usize) -> Platform
 }
 
 fn read_mbr(handle: &dyn TargetHandle) -> PlatformResult<Option<MbrView>> {
-    let sector = read_or_empty(handle, 0, 512)?;
-    if sector.len() < 512 {
+    let sector = read_or_empty(handle, 0, MBR_SECTOR_BYTES)?;
+    if sector.len() < MBR_SECTOR_BYTES {
         return Ok(None);
     }
     let mbr = match mbr_primary::parse(&sector) {
@@ -294,8 +337,8 @@ fn read_mbr(handle: &dyn TargetHandle) -> PlatformResult<Option<MbrView>> {
     }
     if let Some(extended) = mbr.extended() {
         let logicals = walk_extended(extended.start_lba.into(), |lba| {
-            let offset = lba * 512;
-            let mut buffer = vec![0u8; 512];
+            let offset = lba * MBR_SECTOR;
+            let mut buffer = vec![0u8; MBR_SECTOR_BYTES];
             read_exact(handle, offset, &mut buffer)
                 .map_err(|_| TableError::InvalidGeometry("cannot read extended boot record"))?;
             Ok(buffer)
@@ -310,7 +353,7 @@ fn read_mbr(handle: &dyn TargetHandle) -> PlatformResult<Option<MbrView>> {
         }
     }
     Ok(Some(MbrView {
-        sector_size: 512,
+        sector_size: MBR_SECTOR,
         partitions,
     }))
 }
@@ -321,8 +364,8 @@ fn mbr_partition(
     entry: MbrEntry,
 ) -> PlatformResult<PartitionView> {
     let first_lba = u64::from(entry.start_lba);
-    let bytes = u64::from(entry.size_lba) * 512;
-    let base_bytes = first_lba * 512;
+    let bytes = u64::from(entry.size_lba) * MBR_SECTOR;
+    let base_bytes = first_lba * MBR_SECTOR;
     let content = probe::identify(handle, base_bytes, bytes)?;
     Ok(PartitionView {
         number,
@@ -393,7 +436,6 @@ mod tests {
         assert_eq!(guid_text(guid), "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
     }
 
-    // covers: B18
     #[test]
     fn candidate_order_is_preferred_then_kernel_then_defaults() {
         assert_eq!(

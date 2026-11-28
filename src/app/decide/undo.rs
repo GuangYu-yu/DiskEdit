@@ -1,14 +1,14 @@
 //! `undo` 的判定：把纯恢复器的结论落到一条回滚命令决策上。
 //!
-//! 判定只读快照，不碰目标字节，也不取锁。它负责三件事：按 B22 的占用闸与
-//! 身份等级拒绝不合格的目标；按 B9 的次序产出一条外部状态或写目标计划；
-//! 按 B7 / B8 / B23 的口径把记录分成"可回滚""只能回放表区""只能放弃"
+//! 判定只读快照，不碰目标字节，也不取锁。它负责三件事：按占用闸与
+//! 身份等级拒绝不合格的目标；产出一条外部状态或写目标计划；
+//! 把记录分成"可回滚""只能回放表区""只能放弃"
 //! 三类，其余一律拒绝并保留原记录。真正的锁内复核与写入由执行层完成。
 //! `replay` 复用这里的回滚通路（形态只放宽数据区步骤的拒绝），`release`
 //! 复用这里的闸门。
 
 use diskedit_core::fingerprint::{Fingerprint, Strength};
-use diskedit_core::record::{Frame, RecoveryPlan, recover};
+use diskedit_core::record::{Frame, RecoveryExpectation, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
 use crate::app::observe::{Command, RecoverMode, RecoverSnapshot, Request};
@@ -27,7 +27,7 @@ pub fn decide(snapshot: &RecoverSnapshot, request: &Request) -> Decision {
     rollback_entry(snapshot, RecoverMode::Undo, "undo")
 }
 
-/// 三个恢复入口共用的闸门：分区节点、身份等级与占用（B22）。
+/// 三个恢复入口共用的闸门：分区节点、身份等级与占用。
 /// 成功时返回可用于计划绑定的 Strong 身份。
 pub(crate) fn gates(snapshot: &RecoverSnapshot, command: &str) -> Result<Fingerprint, Refusal> {
     if snapshot.is_partition_node {
@@ -44,7 +44,7 @@ pub(crate) fn gates(snapshot: &RecoverSnapshot, command: &str) -> Result<Fingerp
             });
         }
     };
-    // B22：回滚、表区回放与放弃都不豁免占用闸。
+    // 回滚、表区回放与放弃都不豁免占用闸。
     match &snapshot.occupancy {
         Occupancy::Idle => {}
         Occupancy::Used { evidence } => {
@@ -59,7 +59,7 @@ pub(crate) fn gates(snapshot: &RecoverSnapshot, command: &str) -> Result<Fingerp
     Ok(identity)
 }
 
-/// 读记录字节并走回滚分类；缺记录按拒绝报告（与基线一致）。
+/// 读记录字节并走回滚分类；缺记录按拒绝报告。
 /// `replay` 与 `undo` 共用这条通路：形态只放宽数据区步骤的拒绝、并改变缺记录文案。
 pub(crate) fn rollback_entry(
     snapshot: &RecoverSnapshot,
@@ -72,14 +72,21 @@ pub(crate) fn rollback_entry(
     };
     let path = record_path(snapshot);
     let Some(bytes) = snapshot.record.bytes.as_deref() else {
-        return Decision::Refuse(Refusal::RecoveryRefused {
-            why: format!(
-                "no recovery record on {} — nothing to {command}",
-                snapshot.target.display
-            ),
-        });
+        // 记录位置已知而读取失败时不能当成"没有记录"：只有确认不存在才继续。
+        return match snapshot.record.unavailable.as_deref() {
+            Some(_) => Decision::Refuse(Refusal::RecordUnreadable { path }),
+            None => Decision::Refuse(Refusal::RecoveryRefused {
+                why: format!(
+                    "no recovery record on {} — nothing to {command}",
+                    snapshot.target.display
+                ),
+            }),
+        };
     };
-    let plan = recover(bytes, identity);
+    let plan = recover(
+        bytes,
+        RecoveryExpectation::new(identity, snapshot.target.bytes),
+    );
     rollback(plan, mode, identity, &path, snapshot.target.bytes, command)
 }
 
@@ -139,7 +146,7 @@ fn rollback(
                     "the record held no written ranges — the recovery record was removed",
                 );
             }
-            // B24 / A1-17：记录里登记的区间必须仍落在当前目标长度内；越界是几何
+            // 记录里登记的区间必须仍落在当前目标长度内；越界是几何
             // 漂移，按拒绝处理，不拿旧偏移去写。
             for region in &regions {
                 if region.end() > target_bytes {
@@ -214,6 +221,7 @@ mod tests {
     use diskedit_core::record::{FrameKind, Preimage, RecordBody, encode};
 
     use super::*;
+    use crate::app::decide::MIB;
     use crate::app::observe::TargetFacts;
     use crate::app::observe::records::RecordState;
     use crate::platform::{Occupancy, TargetKind};
@@ -225,7 +233,7 @@ mod tests {
             target: TargetFacts {
                 display: "disk.img".to_owned(),
                 path: "disk.img".into(),
-                bytes: 1 << 20,
+                bytes: MIB,
                 kind: TargetKind::File,
                 sector_size: 512,
                 identity: Some(TARGET),
@@ -250,10 +258,10 @@ mod tests {
         .with_confirmation(true)
     }
 
-    fn body() -> RecordBody {
+    fn body(total_bytes: u64) -> RecordBody {
         RecordBody {
             target: TARGET,
-            geometry_generation: 1,
+            legacy_generation: diskedit_core::record::geometry_generation(total_bytes),
             plan_digest: [0x11; 32],
         }
     }
@@ -279,7 +287,6 @@ mod tests {
         }
     }
 
-    // covers: B22
     #[test]
     fn a_used_target_is_refused_before_any_recovery() {
         let plan = decide(
@@ -294,7 +301,6 @@ mod tests {
         assert!(matches!(plan, Decision::Refuse(Refusal::Occupied { .. })));
     }
 
-    // covers: D6
     #[test]
     fn an_undecidable_occupancy_is_not_treated_as_idle() {
         let plan = decide(
@@ -312,10 +318,13 @@ mod tests {
         ));
     }
 
-    // covers: D2
     #[test]
     fn a_foreign_record_is_refused_and_never_rolled_back() {
-        let mut bytes = encode(&body(), &[frame(0, FrameKind::Intent, false, false, &[])]).unwrap();
+        let mut bytes = encode(
+            &body(MIB),
+            &[frame(0, FrameKind::Intent, false, false, &[])],
+        )
+        .unwrap();
         bytes[0] = b'Z';
         let plan = decide(
             &snapshot(Some(bytes), Occupancy::Idle),
@@ -327,11 +336,10 @@ mod tests {
         ));
     }
 
-    // covers: F2, B7
     #[test]
     fn undo_refuses_an_irreversible_step_that_did_not_complete() {
         let frames = [frame(0, FrameKind::Intent, false, true, &[])];
-        let bytes = encode(&body(), &frames).unwrap();
+        let bytes = encode(&body(MIB), &frames).unwrap();
         let decision = decide(
             &snapshot(Some(bytes), Occupancy::Idle),
             &request(Command::Undo),
@@ -342,7 +350,6 @@ mod tests {
         ));
     }
 
-    // covers: B7, B9
     #[test]
     fn data_region_steps_block_the_default_and_allow_table_only() {
         let frames = [
@@ -350,7 +357,7 @@ mod tests {
             frame(1, FrameKind::Preimage, true, false, &[0xAA; 4]),
             frame(2, FrameKind::Progress, true, true, &[]),
         ];
-        let bytes = encode(&body(), &frames).unwrap();
+        let bytes = encode(&body(MIB), &frames).unwrap();
         let blocked = decide(
             &snapshot(Some(bytes.clone()), Occupancy::Idle),
             &request(Command::Undo),
@@ -379,14 +386,13 @@ mod tests {
         }
     }
 
-    // covers: B24
     #[test]
     fn a_recorded_range_past_the_target_is_refused() {
         let frames = [
             frame(0, FrameKind::Intent, false, false, &[]),
             frame(1, FrameKind::Preimage, true, false, &[0xAA; 4]),
         ];
-        let bytes = encode(&body(), &frames).unwrap();
+        let bytes = encode(&body(512), &frames).unwrap();
         let mut snapshot = snapshot(Some(bytes), Occupancy::Idle);
         snapshot.target.bytes = 512; // the recorded range [512, 516) is now past the end
         let decision = decide(&snapshot, &request(Command::Undo));

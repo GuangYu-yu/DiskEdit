@@ -215,7 +215,6 @@ mod tests {
         assert_eq!(Program::ALL.len(), Program::COUNT);
     }
 
-    // covers: I9
     #[test]
     fn every_program_declares_an_access_and_a_determinism() {
         // 注册表的每一行都必须落在两类里：访问方式决定是否需要写令牌，

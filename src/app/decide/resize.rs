@@ -1,7 +1,7 @@
 //! `resize` 的判定：把分区（与其中的文件系统）扩到或缩到请求的终点。
 //!
 //! 判定层先按锁前现场算出新终点与方向，再决定是否需要文件系统步骤：
-//! 扩容时先写表、后扩文件系统；收缩时先缩文件系统、后写表（`B13`）。
+//! 扩容时先写表、后扩文件系统；收缩时先缩文件系统、后写表。
 //! 表字节由纯核的编辑判据生成，执行层只消费由此得到的写段。
 
 use diskedit_core::fs::{ContentKind, FsKind, Program, Support, Verb, catalog};
@@ -18,14 +18,12 @@ use crate::platform::Occupancy;
 
 use super::filesystem as fsops;
 use super::report::{Report, ResizePreview};
-use super::step::{Step, StepKind, TableSegment};
-use super::{Decision, Plan, Refusal};
-
-/// 1 MiB 的字节数：百分比增量与 `--align mib` 的对齐单位。
-const MIB: u64 = 1 << 20;
-
-/// 搬移挡路分区时的默认块大小，与 `move` 命令一致。
-const DEFAULT_CHUNK: u64 = 4 << 20;
+use super::step::{
+    Displacement, Step, StepKind, TableSegment, lba_bytes, sectors_floor, span_bytes, span_sectors,
+};
+use super::{
+    DEFAULT_CHUNK, Decision, MIB, OccupancyScope, OccupancySnapshot, PartitionUsage, Plan, Refusal,
+};
 
 /// 判定一次 `resize`。
 pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
@@ -92,7 +90,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     };
 
     // MBR 主表没有可搬移的数据通道：`--allow-move` 与 `--chunk` 在 MBR 上无从执行，
-    // 与基线一致地拒绝（退出码 3），而不是静默忽略后按普通扩缩继续。
+    // 拒绝（退出码 3），而不是静默忽略后按普通扩缩继续。
     if matches!(table, Resizable::Mbr { .. }) {
         if resize.allow_move {
             return Decision::Refuse(Refusal::TableEdit {
@@ -114,7 +112,10 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let start = partition.first_lba;
     let old_end = partition.last_lba;
     let current = partition.bytes;
-    let last_usable = table.last_usable();
+    let last_usable = match table.last_usable() {
+        Ok(last_usable) => last_usable,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
     let free = free_right(&table.used_ranges(), old_end, last_usable);
 
     // `--allow-move` 只在 GPT 上成立（MBR 已在上面拒绝）：让 `grow` 能吃掉右侧被
@@ -133,7 +134,17 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
             .filter(|&end| end > old_end)
             .max()
             .map_or(last_usable, |end| last_usable.checked_sub(end).unwrap_or(0));
-        Some(old_end + free + tail)
+        match old_end
+            .checked_add(free)
+            .and_then(|sum| sum.checked_add(tail))
+        {
+            Some(ceiling) => Some(ceiling),
+            None => {
+                return Decision::Refuse(Refusal::TableEdit {
+                    why: "the relocation ceiling overflows the LBA range".to_owned(),
+                });
+            }
+        }
     } else {
         None
     };
@@ -161,7 +172,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     let shrink = new_end < old_end;
 
     // `grow` 请求无空间可扩不是"原样重跑"：顶到 last usable 与右侧被占是两种拒绝，
-    // 退出码 3（基线 cmd/resize.rs:491、:500）。显式 SIZE/--end 等于现状才是空操作。
+    // 退出码 3。显式 SIZE/--end 等于现状才是空操作。
     if resize.size.as_ref() == Some(&SizeSpec::Grow) && !grow && !shrink {
         let why = if old_end >= last_usable {
             format!("partition already ends at last_usable_lba {last_usable} — nothing to grow")
@@ -174,7 +185,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     }
 
     // 右侧被挡时的搬移计划：把 `old_end` 之后的分区整体右移，腾出的空间恰好够
-    // 目标终点。没有 `--allow-move` 时保持基线的拒绝。
+    // 目标终点。没有 `--allow-move` 时拒绝。
     let mut moves: Vec<Relocation> = Vec::new();
     if grow && new_end - old_end > free {
         if !resize.allow_move {
@@ -195,15 +206,25 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
             Ok(planned) => moves = planned,
             Err(refusal) => return Decision::Refuse(refusal),
         }
+        // 被搬分区的内容类型取自本次观察：NTFS 的 HiddenSectors 必须跟着新起点走。
+        for relocation in &mut moves {
+            relocation.ntfs_hidden =
+                snapshot
+                    .view
+                    .find(relocation.number)
+                    .is_some_and(|partition| {
+                        partition.content == ContentKind::Filesystem(FsKind::Ntfs)
+                    });
+        }
     } else if resize.allow_move && grow {
-        // 右侧本来就空：`--allow-move` 没有可搬的对象，按基线拒绝而不是静默忽略。
+        // 右侧本来就空：`--allow-move` 没有可搬的对象，拒绝而不是静默忽略。
         return Decision::Refuse(Refusal::TableEdit {
             why: "no partition to relocate (right side is free — no --allow-move needed)"
                 .to_owned(),
         });
     }
 
-    let Some(new_bytes) = (new_end - start + 1).checked_mul(sector) else {
+    let Some(new_bytes) = span_bytes(start, new_end, sector) else {
         return Decision::Refuse(Refusal::TableEdit {
             why: "the new partition size overflows a 64-bit byte count".to_owned(),
         });
@@ -217,7 +238,7 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     };
     // ext 收缩写前闸：最小尺寸在离线采集阶段由只读探针取到。
     // 目标小于最小值即拒绝，探针本身失败按"最小值未知"拒绝；两者都发生在任何
-    // 写盘之前。基线在 layout/dry_run/MBR 三处各有一份，判据相同（R0211/R0382/R0416）。
+    // 写盘之前。layout、dry-run 与 MBR 路径共用同一判据。
     if shrink && !resize.no_fs && partition.content == ContentKind::Filesystem(FsKind::Ext) {
         match &snapshot.min_bytes {
             Some(Ok(minimum)) if geometry.new_bytes < *minimum => {
@@ -303,7 +324,10 @@ pub fn decide(snapshot: &ResizeSnapshot, request: &Request) -> Decision {
     } else {
         // 扩容：先把挡路分区搬到新位置，再写表，最后扩 PV/文件系统。
         for relocation in &moves {
-            steps.push(relocation.step(sector));
+            match relocation.step(sector) {
+                Ok(step) => steps.push(step),
+                Err(refusal) => return Decision::Refuse(refusal),
+            }
         }
         steps.push(table_step);
         if let Some(step) = filesystem_step {
@@ -351,10 +375,16 @@ impl Resizable {
         }
     }
 
-    fn last_usable(&self) -> u64 {
+    fn last_usable(&self) -> Result<u64, Refusal> {
         match self {
-            Self::Gpt(table) => table.header.last_usable_lba,
-            Self::Mbr { total_lba, .. } => total_lba.checked_sub(1).unwrap_or(0),
+            Self::Gpt(table) => Ok(table.header.last_usable_lba),
+            Self::Mbr { total_lba, .. } => {
+                total_lba
+                    .checked_sub(1)
+                    .ok_or_else(|| Refusal::GeometryUnknown {
+                        why: "the MBR total sector count is zero".to_owned(),
+                    })
+            }
         }
     }
 
@@ -381,8 +411,11 @@ impl Resizable {
                 let mut entries = table.entries.clone();
                 entries[index].ending_lba = new_end;
                 for relocation in moves {
+                    let new_end = relocation.new_end().ok_or_else(|| {
+                        "the relocation target overflows the LBA range".to_owned()
+                    })?;
                     entries[relocation.index].starting_lba = relocation.new_start;
-                    entries[relocation.index].ending_lba = relocation.new_end();
+                    entries[relocation.index].ending_lba = new_end;
                 }
                 table.segments(&entries).map_err(|error| error.to_string())
             }
@@ -428,7 +461,12 @@ fn resolve_end(resize: &ResizeRequest, context: EndContext) -> Result<u64, Refus
         end
     } else if let Some(size) = &resize.size {
         if *size == SizeSpec::Grow {
-            grow_ceiling.unwrap_or(old_end + free)
+            match grow_ceiling {
+                Some(ceiling) => ceiling,
+                None => old_end
+                    .checked_add(free)
+                    .ok_or_else(|| beyond_table("the grow ceiling overflows the LBA range"))?,
+            }
         } else {
             let bytes = resolve_bytes(*size, current)?;
             if bytes < sector {
@@ -436,7 +474,8 @@ fn resolve_end(resize: &ResizeRequest, context: EndContext) -> Result<u64, Refus
                     "size {bytes} < one sector ({sector})"
                 )));
             }
-            let sectors = bytes / sector;
+            let sectors = sectors_floor(bytes, sector)
+                .ok_or_else(|| beyond_table("the sector size is zero"))?;
             start
                 .checked_add(sectors)
                 .and_then(|end| end.checked_sub(1))
@@ -447,7 +486,7 @@ fn resolve_end(resize: &ResizeRequest, context: EndContext) -> Result<u64, Refus
             "`resize` needs a size, --end or --grow-to-end",
         ));
     };
-    let end = align_down(end, resize.align, sector);
+    let end = align_down(end, resize.align, sector)?;
     if end > last_usable {
         return Err(Refusal::TableEdit {
             why: format!("the requested end {end} is past the last usable LBA {last_usable}"),
@@ -498,13 +537,22 @@ fn resolve_bytes(size: SizeSpec, current: u64) -> Result<u64, Refusal> {
     }
 }
 
-/// 按 `--align` 下取整新终点；未给出对齐时原样返回。对齐单位以字节给出，按扇区换算。
-fn align_down(end: u64, align: Option<u64>, sector: u64) -> u64 {
+/// 按 `--align` 下取整新终点；未给出对齐时原样返回。
+///
+/// 对齐单位以字节给出，必须正好是整数个扇区：不整倍的对齐会把"对齐到某边界"
+/// 悄悄降成"对齐到更弱的边界"，按拒绝处理。
+fn align_down(end: u64, align: Option<u64>, sector: u64) -> Result<u64, Refusal> {
     let Some(bytes) = align.filter(|bytes| *bytes > 1) else {
-        return end;
+        return Ok(end);
     };
-    let unit = (bytes / sector).max(1);
-    end / unit * unit
+    let unit =
+        sectors_floor(bytes, sector).ok_or_else(|| beyond_table("the sector size is zero"))?;
+    if unit == 0 || !bytes.is_multiple_of(sector) {
+        return Err(beyond_table(format!(
+            "the alignment unit {bytes} is not a whole number of {sector}-byte sectors"
+        )));
+    }
+    Ok(end / unit * unit)
 }
 
 /// 文件系统步骤的目标几何。
@@ -536,10 +584,8 @@ fn pv_chain_step(
             what: "the LVM PV facts were not captured".to_owned(),
         });
     };
-    let start_bytes = geometry
-        .start_lba
-        .checked_mul(geometry.sector)
-        .ok_or_else(|| Refusal::TableEdit {
+    let start_bytes =
+        lba_bytes(geometry.start_lba, geometry.sector).ok_or_else(|| Refusal::TableEdit {
             why: "the partition start overflows the byte offset".to_owned(),
         })?;
     if shrink {
@@ -548,19 +594,10 @@ fn pv_chain_step(
                 why: "--grow-lv cannot be combined with shrinking the PV".to_owned(),
             });
         }
-        let allocated = match &facts.allocated_end {
-            Ok(bytes) => *bytes,
-            Err(error) => return Err(lvm_refusal(error)),
-        };
-        if allocated > geometry.new_bytes {
-            return Err(Refusal::TableEdit {
-                why: format!(
-                    "the PV's allocated extents end at {allocated} bytes, past the requested {} \
-                     bytes — shrink the LV/filesystem inside it first",
-                    geometry.new_bytes
-                ),
-            });
-        }
+        // 缩 PV 的前提是"已分配 extent 的末端已被证明"：见证只有读到末端
+        // 才能构造，读取失败不折成"末端为零"。
+        let allocated = proven::ExtentEnd::prove(facts)?;
+        allocated.fits_within(geometry.new_bytes)?;
         return Ok(Some(Step::new(
             StepKind::LvmPvShrink {
                 partition: geometry.number,
@@ -630,6 +667,41 @@ fn pv_chain_step(
         },
         vec![region(start_bytes, geometry.new_bytes)],
     )))
+}
+
+/// 已分配 extent 末端的见证只在 [`proven`] 里构造，判定层拿不到它的字段。
+mod proven {
+    use super::{Refusal, lvm_refusal};
+    use crate::app::observe::resize::LvmFacts;
+
+    /// 已分配 extent 的末端已被证明。
+    ///
+    /// 字段对本模块外不可见：只有 [`Self::prove`] 能构造它，读取失败不折成零。
+    pub(super) struct ExtentEnd(u64);
+
+    impl ExtentEnd {
+        /// 从只读现场取末端；查询失败按环境或请求拒绝，缺失不当作零。
+        pub(super) fn prove(facts: &LvmFacts) -> Result<Self, Refusal> {
+            match &facts.allocated_end {
+                Ok(bytes) => Ok(Self(*bytes)),
+                Err(error) => Err(lvm_refusal(error)),
+            }
+        }
+
+        /// 末端必须落在缩后的长度之内，否则缩 PV 会切进已分配数据。
+        pub(super) fn fits_within(self, new_bytes: u64) -> Result<(), Refusal> {
+            if self.0 > new_bytes {
+                return Err(Refusal::TableEdit {
+                    why: format!(
+                        "the PV's allocated extents end at {} bytes, past the requested \
+                         {new_bytes} bytes — shrink the LV/filesystem inside it first",
+                        self.0
+                    ),
+                });
+            }
+            Ok(())
+        }
+    }
 }
 
 /// PV 链所需的外部程序必须在现场采集时都可用。
@@ -720,10 +792,8 @@ fn filesystem_step(
                 });
             }
         }
-        let base = geometry
-            .start_lba
-            .checked_mul(geometry.sector)
-            .ok_or_else(|| Refusal::TableEdit {
+        let base =
+            lba_bytes(geometry.start_lba, geometry.sector).ok_or_else(|| Refusal::TableEdit {
                 why: "the partition start overflows the byte offset".to_owned(),
             })?;
         let region =
@@ -784,10 +854,8 @@ fn filesystem_step(
     let bytes = geometry.new_bytes;
     // 扩容时设备要暴露新的（更大的）区间；收缩时仍暴露原区间，工具按显式尺寸收缩。
     let device_len = if shrink { geometry.old_bytes } else { bytes };
-    let base = geometry
-        .start_lba
-        .checked_mul(geometry.sector)
-        .ok_or_else(|| Refusal::TableEdit {
+    let base =
+        lba_bytes(geometry.start_lba, geometry.sector).ok_or_else(|| Refusal::TableEdit {
             why: "the partition start overflows the byte offset".to_owned(),
         })?;
     let region =
@@ -854,7 +922,7 @@ fn table_step(
 
 /// 公共前置：分区节点、表形态、占用。
 /// 无分区表（superfloppy）的 resize：文件系统占整盘，唯一有意义的动作是把它撑到
-/// 容器末端；缩与"超过容器"都无分区边界可依，按基线拒绝。
+/// 容器末端；缩与"超过容器"都无分区边界可依，拒绝。
 fn superfloppy(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
     match &snapshot.occupancy {
         Occupancy::Idle => {}
@@ -1047,7 +1115,8 @@ fn mbr_resizable(lba0: &[u8], total_lba: u64) -> Result<Resizable, Refusal> {
 
 /// 在线路径之前的使用事实：别的命名空间里的挂载、活动 swap 都不能在本次处理。
 fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
-    if let Some(partition) = &snapshot.selected {
+    let selected = snapshot.selected.as_ref();
+    if let Some(partition) = selected {
         let in_use = matches!(
             snapshot.partition_mount,
             Some(
@@ -1066,6 +1135,9 @@ fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
             });
         }
     }
+    // 下面两条成因的文案写明被占用的分区号；选中分区读不到时不在这里判断，
+    // 交给调用方按既有的"分区缺失/无表"拒绝路径。
+    let number = selected.map(|partition| partition.number)?;
     if let Some(mount) = &snapshot.partition_mount {
         match mount {
             crate::platform::PartitionMount::Here { .. }
@@ -1073,13 +1145,9 @@ fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
             crate::platform::PartitionMount::Elsewhere { mount_point, pid } => {
                 return Some(Refusal::TableEdit {
                     why: format!(
-                        "partition {0} is mounted at {1} in another mount namespace{2} — it cannot \
-                         be resized from this one; unmount it there or run inside that namespace",
-                        snapshot
-                            .selected
-                            .as_ref()
-                            .map(|partition| partition.number)
-                            .unwrap_or(0),
+                        "partition {number} is mounted at {} in another mount namespace{} — it \
+                         cannot be resized from this one; unmount it there or run inside that \
+                         namespace",
                         mount_point.display(),
                         match pid {
                             Some(pid) => format!(" (pid {pid})"),
@@ -1099,21 +1167,14 @@ fn online_precondition(snapshot: &ResizeSnapshot) -> Option<Refusal> {
     }
     if snapshot.swap_active == Some(true) {
         return Some(Refusal::TableEdit {
-            why: format!(
-                "partition {} is active swap — run swapoff first",
-                snapshot
-                    .selected
-                    .as_ref()
-                    .map(|partition| partition.number)
-                    .unwrap_or(0)
-            ),
+            why: format!("partition {number} is active swap — run swapoff first"),
         });
     }
     None
 }
 
 /// 在线 PV 几何：块设备上的 LVM2 PV 分区被 device-mapper 持有（占用为 `Used`）但未挂载时，
-/// 旧版走在线路径——写表、按分区同步内核视图、再让 PV 吸收新空间。只扩不缩，与基线一致。
+/// 走在线路径——写表、按分区同步内核视图、再让 PV 吸收新空间。只扩不缩。
 ///
 /// 返回 `None` 表示这不是在线 PV 现场，交回常规判定：未持有的 PV 走离线链，未判定的占用
 /// 交给占用闸，别的主机形态维持既有拒绝。
@@ -1184,7 +1245,10 @@ fn pv_online_decide(
     let start = partition.first_lba;
     let old_end = partition.last_lba;
     let current = partition.bytes;
-    let last_usable = table.last_usable();
+    let last_usable = match table.last_usable() {
+        Ok(last_usable) => last_usable,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
     let free = free_right(&table.used_ranges(), old_end, last_usable);
     let new_end = match resolve_end(
         resize,
@@ -1228,7 +1292,7 @@ fn pv_online_decide(
                 .to_owned(),
         });
     }
-    let bytes = match (new_end - start + 1).checked_mul(sector) {
+    let bytes = match span_bytes(start, new_end, sector) {
         Some(bytes) => bytes,
         None => {
             return Decision::Refuse(Refusal::GeometryUnknown {
@@ -1236,7 +1300,7 @@ fn pv_online_decide(
             });
         }
     };
-    let start_bytes = match start.checked_mul(sector) {
+    let start_bytes = match lba_bytes(start, sector) {
         Some(bytes) => bytes,
         None => {
             return Decision::Refuse(Refusal::GeometryUnknown {
@@ -1285,7 +1349,7 @@ fn pv_online_decide(
         },
         Vec::new(),
     );
-    // 扩容：先写表、再同步内核视图、最后让 PV 吸收新空间（B13、B28）。
+    // 扩容：先写表、再同步内核视图、最后让 PV 吸收新空间。
     let plan = match Plan::write(vec![table_step, refresh, lvm_step], identity) {
         Ok(plan) => plan,
         Err(refusal) => return Decision::Refuse(refusal),
@@ -1361,7 +1425,10 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
     let start = partition.first_lba;
     let old_end = partition.last_lba;
     let current = partition.bytes;
-    let last_usable = table.last_usable();
+    let last_usable = match table.last_usable() {
+        Ok(last_usable) => last_usable,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
     let free = free_right(&table.used_ranges(), old_end, last_usable);
     let new_end = match resolve_end(
         resize,
@@ -1402,7 +1469,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
         });
     }
     let filesystem = if shrink {
-        // 在线收缩只有 btrfs 支持；其余族仍按基线拒绝。
+        // 在线收缩只有 btrfs 支持；其余族仍拒绝。
         if !matches!(partition.content, ContentKind::Filesystem(FsKind::Btrfs)) {
             return Decision::Refuse(Refusal::OnlineShrink {
                 why: format!(
@@ -1428,20 +1495,16 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
             Err(refusal) => return Decision::Refuse(refusal),
         }
     };
-    let bytes = (new_end - start + 1)
-        .checked_mul(sector)
-        .ok_or_else(|| Refusal::GeometryUnknown {
-            why: "the grown partition length overflows the byte range".to_owned(),
-        });
+    let bytes = span_bytes(start, new_end, sector).ok_or_else(|| Refusal::GeometryUnknown {
+        why: "the grown partition length overflows the byte range".to_owned(),
+    });
     let bytes = match bytes {
         Ok(bytes) => bytes,
         Err(refusal) => return Decision::Refuse(refusal),
     };
-    let start_bytes = start
-        .checked_mul(sector)
-        .ok_or_else(|| Refusal::GeometryUnknown {
-            why: "the partition start overflows the byte offset".to_owned(),
-        });
+    let start_bytes = lba_bytes(start, sector).ok_or_else(|| Refusal::GeometryUnknown {
+        why: "the partition start overflows the byte offset".to_owned(),
+    });
     let start_bytes = match start_bytes {
         Ok(value) => value,
         Err(refusal) => return Decision::Refuse(refusal),
@@ -1485,7 +1548,7 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
                 filesystem,
                 bytes,
             },
-            Vec::new(),
+            vec![region(start_bytes, bytes)],
         )
     } else {
         Step::new(
@@ -1497,10 +1560,10 @@ fn online(snapshot: &ResizeSnapshot, resize: &ResizeRequest) -> Decision {
                 filesystem,
                 bytes,
             },
-            Vec::new(),
+            vec![region(start_bytes, bytes)],
         )
     };
-    // 收缩必须先缩文件系统，再写表与内核视图；扩容次序相反（B13）。
+    // 收缩必须先缩文件系统，再写表与内核视图；扩容次序相反。
     let steps = if shrink {
         vec![filesystem_step, table_step, refresh]
     } else {
@@ -1584,6 +1647,7 @@ fn admission(snapshot: &ResizeSnapshot) -> Option<Refusal> {
 }
 
 fn finish(snapshot: &ResizeSnapshot, plan: Plan, note: String) -> Decision {
+    let plan = plan.with_occupancy(occupancy_snapshot(snapshot));
     match &snapshot.prior {
         PriorState::Absent => {}
         PriorState::Unreadable => {
@@ -1610,6 +1674,40 @@ fn record_path(snapshot: &ResizeSnapshot) -> String {
         .unwrap_or_else(|| "(record path unresolved)".to_owned())
 }
 
+/// 本次观察得到的占用现场。
+///
+/// 整目标结论在 PV 路径上先按分区设备（DM 持有者）探到，口径随目标形态记录；
+/// 设备形态下所选分区的挂载与 swap 一并带上，执行层据此逐项比对。
+fn occupancy_snapshot(snapshot: &ResizeSnapshot) -> OccupancySnapshot {
+    let selected = snapshot.selected.as_ref();
+    let is_pv = selected.is_some_and(|partition| partition.content == ContentKind::Lvm2Pv);
+    let scope = if !is_pv {
+        OccupancyScope::Target
+    } else if snapshot.target.kind.is_block_device() {
+        match selected {
+            Some(partition) => OccupancyScope::TargetThenPartition {
+                number: partition.number,
+            },
+            None => OccupancyScope::TargetLvm,
+        }
+    } else {
+        OccupancyScope::TargetLvm
+    };
+    let partition = match (selected, &snapshot.partition_mount, snapshot.swap_active) {
+        (Some(partition), Some(mount), Some(swap_active)) => Some(PartitionUsage {
+            number: partition.number,
+            mount: mount.clone(),
+            swap_active,
+        }),
+        _ => None,
+    };
+    OccupancySnapshot {
+        scope,
+        occupancy: snapshot.occupancy.clone(),
+        partition,
+    }
+}
+
 fn unusable(snapshot: &ResizeSnapshot) -> Refusal {
     match &snapshot.view {
         TableView::None => Refusal::TableMissing,
@@ -1632,7 +1730,7 @@ fn refuse(why: &str) -> Decision {
     })
 }
 
-/// 尺寸请求越出表可以表达的区间：拒绝写表，退出码 3，与基线一致（不是用法错误）。
+/// 尺寸请求越出表可以表达的区间：拒绝写表，退出码 3（不是用法错误）。
 fn beyond_table(why: impl Into<String>) -> Refusal {
     Refusal::TableEdit { why: why.into() }
 }
@@ -1644,26 +1742,53 @@ struct Relocation {
     old_start: u64,
     new_start: u64,
     sectors: u64,
+    /// 被搬分区的内容是 NTFS：平移后要修正主备引导扇区里的 `HiddenSectors`。
+    ntfs_hidden: bool,
 }
 
 impl Relocation {
-    fn new_end(&self) -> u64 {
-        self.new_start + self.sectors - 1
+    fn new_end(&self) -> Option<u64> {
+        self.new_start.checked_add(self.sectors.checked_sub(1)?)
     }
 
-    fn step(&self, sector: u64) -> Step {
-        let shift = i64::try_from(i128::from(self.new_start) - i128::from(self.old_start))
-            .unwrap_or(i64::MAX);
-        Step::new(
+    fn step(&self, sector: u64) -> Result<Step, Refusal> {
+        // 位移必须能表示为带符号的扇区数；表示不了说明计划本身超出这条路径的
+        // 能力，按拒绝处理，不把位移截断成边界值。方向由同一个带符号位移导出。
+        let displacement =
+            Displacement::between(self.old_start, self.new_start).ok_or_else(|| {
+                beyond_table(format!(
+                    "the relocation of partition #{} exceeds the addressable displacement",
+                    self.number
+                ))
+            })?;
+        let new_end = self.new_end().ok_or_else(|| {
+            beyond_table(format!(
+                "the relocation target of partition #{} overflows the LBA range",
+                self.number
+            ))
+        })?;
+        let start_bytes = lba_bytes(self.new_start, sector).ok_or_else(|| {
+            beyond_table(format!(
+                "the relocation target of partition #{} overflows the byte range",
+                self.number
+            ))
+        })?;
+        let len_bytes = span_bytes(self.new_start, new_end, sector).ok_or_else(|| {
+            beyond_table(format!(
+                "the relocation length of partition #{} overflows the byte range",
+                self.number
+            ))
+        })?;
+        Ok(Step::new(
             StepKind::MovePartition {
                 partition: self.number,
                 source_lba: self.old_start,
-                offset_sectors: shift,
+                offset_sectors: displacement.sectors(),
                 chunk: DEFAULT_CHUNK,
-                ntfs_hidden: false,
+                ntfs_hidden: self.ntfs_hidden,
             },
-            vec![region(self.new_start * sector, self.sectors * sector)],
-        )
+            vec![region(start_bytes, len_bytes)],
+        ))
     }
 }
 
@@ -1683,7 +1808,12 @@ fn plan_relocations(
         if entry.partition_type_guid.is_zero() || entry.starting_lba <= old_end {
             continue;
         }
-        let sectors = entry.ending_lba - entry.starting_lba + 1;
+        let sectors = span_sectors(entry.starting_lba, entry.ending_lba).ok_or_else(|| {
+            beyond_table(format!(
+                "partition #{} has an inverted LBA range",
+                index + 1
+            ))
+        })?;
         let new_start = entry
             .starting_lba
             .checked_add(delta)
@@ -1697,12 +1827,15 @@ fn plan_relocations(
                 index + 1
             )));
         }
+        let number = u32::try_from(index + 1)
+            .map_err(|_| beyond_table("the partition number does not fit in 32 bits"))?;
         planned.push(Relocation {
             index,
-            number: u32::try_from(index + 1).unwrap_or(u32::MAX),
+            number,
             old_start: entry.starting_lba,
             new_start,
             sectors,
+            ntfs_hidden: false,
         });
     }
     // 右移先动最右侧的，落盘顺序与数据搬运的依赖一致。
@@ -1904,7 +2037,7 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
             filesystem,
             bytes: selected.bytes,
         },
-        Vec::new(),
+        vec![fsops::region(selected)],
     );
     fsops::finish(
         snapshot,
@@ -1916,8 +2049,9 @@ fn filesystem_online(snapshot: &FilesystemSnapshot, requested: Option<&SizeSpec>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::lvm::LvmError;
+    use crate::app::observe::resize::LvmFacts;
 
-    // covers: I5
     #[test]
     fn an_mbr_table_too_short_for_entries_is_not_an_empty_table() {
         // 短于一个扇区的 MBR 解析不出任何分区记录：占用区间是"不知道"，不是
@@ -1929,5 +2063,78 @@ mod tests {
             ),
             "解析不出分区记录的 MBR 必须拒绝，不能按无占用继续"
         );
+    }
+
+    fn lvm_facts(allocated_end: Result<u64, LvmError>) -> LvmFacts {
+        LvmFacts {
+            selection: None,
+            allocated_end,
+        }
+    }
+
+    #[test]
+    fn shrinking_a_pv_requires_a_proven_extent_end() {
+        use proven::ExtentEnd;
+        // 读不到已分配末端：没有见证可构造，缩 PV 的步骤也就造不出来。
+        let unreadable = lvm_facts(Err(LvmError::Failed("pvs did not report".to_owned())));
+        assert!(
+            ExtentEnd::prove(&unreadable).is_err(),
+            "没有末端证明时不得缩 PV"
+        );
+        // 读到了，但末端越过新长度：拒绝。
+        let proven = ExtentEnd::prove(&lvm_facts(Ok(4096))).expect("有证明");
+        assert!(proven.fits_within(2048).is_err(), "末端越过新长度必须拒绝");
+        // 末端正好落在新长度内：允许。
+        let proven = ExtentEnd::prove(&lvm_facts(Ok(4096))).expect("有证明");
+        assert!(proven.fits_within(8192).is_ok());
+    }
+
+    #[test]
+    fn an_alignment_unit_that_is_not_a_whole_sector_is_refused() {
+        assert!(align_down(1000, Some(MIB), 512).is_ok());
+        assert!(
+            align_down(1000, Some(1000), 512).is_err(),
+            "不整倍的对齐单位不能悄悄降级"
+        );
+        assert!(align_down(1000, Some(MIB), 0).is_err(), "零扇区必须拒绝");
+    }
+
+    #[test]
+    fn a_relocation_carries_its_signed_displacement() {
+        let right = Relocation {
+            index: 0,
+            number: 2,
+            old_start: 100,
+            new_start: 300,
+            sectors: 50,
+            ntfs_hidden: false,
+        };
+        let step = right.step(512).expect("可搬");
+        let StepKind::MovePartition {
+            offset_sectors,
+            source_lba,
+            ..
+        } = step.kind
+        else {
+            panic!("搬移步骤");
+        };
+        assert_eq!(offset_sectors, 200);
+        assert_eq!(source_lba, 100);
+
+        // 位移量小于长度：自重叠，方向仍由带符号位移给出。
+        let overlap = Relocation {
+            index: 0,
+            number: 2,
+            old_start: 100,
+            new_start: 120,
+            sectors: 50,
+            ntfs_hidden: false,
+        };
+        assert!(
+            Displacement::between(overlap.old_start, overlap.new_start)
+                .expect("可表示")
+                .overlaps(overlap.sectors)
+        );
+        assert!(overlap.step(512).is_ok());
     }
 }

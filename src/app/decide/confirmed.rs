@@ -5,6 +5,7 @@
 use diskedit_core::evidence::Observation;
 use diskedit_core::fingerprint::Fingerprint;
 
+use super::OccupancySnapshot;
 use super::plan::Plan;
 use super::refusal::Refusal;
 use super::step::Step;
@@ -18,6 +19,7 @@ pub struct ConfirmedPlan {
     digest: [u8; 32],
     request_digest: [u8; 32],
     identity: Fingerprint,
+    occupancy: Option<OccupancySnapshot>,
 }
 
 impl ConfirmedPlan {
@@ -36,6 +38,11 @@ impl ConfirmedPlan {
 
     pub fn identity(&self) -> Fingerprint {
         self.identity
+    }
+
+    /// 判定层留下的占用现场；`None` 表示这份计划不涉及占用比对。
+    pub fn occupancy(&self) -> Option<&OccupancySnapshot> {
+        self.occupancy.as_ref()
     }
 }
 
@@ -71,5 +78,6 @@ pub fn confirm(
         digest: plan.digest(),
         request_digest: plan.request_digest(),
         identity: planned,
+        occupancy: plan.occupancy().cloned(),
     })
 }

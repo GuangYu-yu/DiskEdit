@@ -769,7 +769,6 @@ mod tests {
         }
     }
 
-    // covers: I5
     #[test]
     fn an_image_without_a_kernel_sector_fact_uses_the_image_default() {
         let probe = Probe {
@@ -779,7 +778,6 @@ mod tests {
         assert_eq!(probe.resolved_sector_size(), Some(IMAGE_SECTOR_SIZE));
     }
 
-    // covers: I5
     #[test]
     fn a_block_device_without_a_reported_sector_has_no_trusted_value() {
         let probe = Probe {
@@ -789,7 +787,6 @@ mod tests {
         assert_eq!(probe.resolved_sector_size(), None);
     }
 
-    // covers: I5
     #[test]
     fn a_reported_sector_size_wins_over_the_image_default() {
         let probe = Probe {

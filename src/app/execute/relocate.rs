@@ -1,6 +1,6 @@
 //! 搬移与复制：先按块搬数据，再整表提交，全程用一条可续跑的记录。
 //!
-//! 数据步不登记原像（B6：搬移已写的数据不回滚），但要先落一条意图帧才能写；
+//! 数据步不登记原像（搬移已写的数据不回滚），但要先落一条意图帧才能写；
 //! 搬移每写完一块就追加一条进度帧（块游标与已写前缀摘要），续跑据此判断能否
 //! 接上。表步仍走"先登记整扇区原像、再经唯一写通道落盘"的同一套约束。
 
@@ -11,7 +11,7 @@ use diskedit_core::table::relocate::{self, ChunkSpan};
 use diskedit_core::table::stamp::{stamp_regions, table_stamp};
 
 use super::digest::{Hasher, read_region};
-use super::transaction::RelocateSession;
+use super::transaction::{Commit, RelocateSession};
 use super::{ExecError, FailureKind, Outcome, WriteChannel};
 use crate::app::decide::step::TableSegment;
 use crate::app::decide::{ConfirmedPlan, Step, StepKind};
@@ -21,6 +21,16 @@ use crate::platform::{Platform, TargetHandle};
 const CHUNK: usize = 1 << 20;
 /// 意图帧的格式标记。
 const SPEC_MAGIC: &[u8] = b"diskedit-relocate-v1";
+/// NTFS 引导扇区里 `HiddenSectors` 的偏移。
+const NTFS_HIDDEN_SECTORS_OFFSET: usize = 0x1c;
+/// NTFS 引导扇区里卷总扇区数的偏移（64 位）。
+const NTFS_TOTAL_SECTORS_OFFSET: usize = 0x28;
+/// NTFS 引导扇区在偏移 3 处的 OEM 标识。
+const NTFS_OEM_ID: &[u8; 8] = b"NTFS    ";
+/// 引导扇区结束标记的偏移。
+const BOOT_SIGNATURE_OFFSET: usize = 510;
+/// 能容纳 NTFS 引导扇区的最小扇区字节数。
+const BOOT_SECTOR_MIN: u64 = 512;
 
 /// 执行一份搬移/复制计划。
 pub fn run(platform: &dyn Platform, target: &Path, plan: &ConfirmedPlan) -> Outcome {
@@ -41,6 +51,8 @@ struct DataStep {
     shift: i64,
     /// 搬移（可续跑）还是复制（不续跑）。
     resumable: bool,
+    /// 目标内容是 NTFS：搬移后把主备引导扇区的 `HiddenSectors` 改成目标起点。
+    ntfs_hidden: bool,
     regions: Vec<Region>,
 }
 
@@ -61,6 +73,8 @@ fn execute(
             )
         })?;
     let (segment_size, stamp, segments) = table_parts(table)?;
+    // 搬移也要写表：在写任何目标字节（包括数据步）之前按计划口径重探占用。
+    super::table::occupancy_unchanged(platform, target, plan).map_err(|error| (error, false))?;
     let data = data_step(plan, segment_size)?;
     let data_index = plan
         .steps()
@@ -189,6 +203,20 @@ fn execute(
         ));
     }
 
+    // 两处引导扇区在任何目标写入之前核对：签名不符就按计划不自洽拒绝，
+    // 新起点也无法放进 `HiddenSectors` 字段时同样拒绝。
+    let hidden = if data.ntfs_hidden && cursor < total {
+        Some(hidden_sectors_plan(
+            &data,
+            sector_size,
+            cursor,
+            &spans,
+            handle.as_mut(),
+        )?)
+    } else {
+        None
+    };
+
     let mut wrote = false;
     if cursor < total {
         let data_number = u64::try_from(data_index).expect("步骤号可表示");
@@ -215,9 +243,12 @@ fn execute(
         for (index, span) in spans.iter().enumerate().skip(usize_from(cursor)) {
             let source = lba_region(span.first_lba, span.len_lba, sector_size)?;
             let destination = shifted(span, data.shift, sector_size)?;
-            let bytes = channel
+            let mut bytes = channel
                 .read_exact(source.start(), usize_from(source.len()))
                 .map_err(|error| (error, wrote))?;
+            if let Some(hidden) = &hidden {
+                patch_hidden_sectors(&mut bytes, span, sector_size, hidden);
+            }
             channel
                 .write(destination, &bytes)
                 .map_err(|error| (error, wrote))?;
@@ -266,7 +297,12 @@ fn execute(
     super::postcondition::verify(&channel).map_err(|error| (error, wrote))?;
     drop(channel);
 
-    session.commit().map_err(|(error, _)| (error, wrote))?;
+    match session.commit() {
+        Commit::Clean => {}
+        // 走到提交时目标字节必然已经写过；终态帧未落盘和记录未清理都只是
+        // "写完了但没收尾"，只能报已写待恢复，不能报未写。
+        Commit::RecordLeft(error) | Commit::Unfinished(error) => return Err((error, true)),
+    }
     match handle.refresh_partitions() {
         Ok(()) => Ok(None),
         Err(error) => Ok(Some(format!(
@@ -282,6 +318,7 @@ fn data_step(plan: &ConfirmedPlan, sector_size: u64) -> Result<DataStep, (ExecEr
                 source_lba,
                 offset_sectors,
                 chunk,
+                ntfs_hidden,
                 ..
             } => {
                 let dest = i128::from(*source_lba) + i128::from(*offset_sectors);
@@ -306,6 +343,7 @@ fn data_step(plan: &ConfirmedPlan, sector_size: u64) -> Result<DataStep, (ExecEr
                     chunk: *chunk,
                     shift: *offset_sectors,
                     resumable: true,
+                    ntfs_hidden: *ntfs_hidden,
                     regions,
                 });
             }
@@ -330,6 +368,7 @@ fn data_step(plan: &ConfirmedPlan, sector_size: u64) -> Result<DataStep, (ExecEr
                     chunk: *chunk,
                     shift,
                     resumable: false,
+                    ntfs_hidden: false,
                     regions: step.regions.clone(),
                 });
             }
@@ -429,6 +468,136 @@ fn shifted(span: &ChunkSpan, shift: i64, sector_size: u64) -> Result<Region, (Ex
         )
     })?;
     lba_region(lba, span.len_lba, sector_size)
+}
+
+/// 一次 NTFS 搬移要改写的两处引导扇区（源 LBA）与新起点值。
+struct HiddenSectors {
+    /// 写进 `HiddenSectors` 字段的新起点。
+    value: u32,
+    /// 主引导扇区的源 LBA。
+    primary: u64,
+    /// 卷尾备份引导扇区的源 LBA。
+    backup: u64,
+}
+
+/// 核对 NTFS 引导扇区并求出两处位置；调用发生在本次运行的任何目标写入之前。
+///
+/// 主扇区给出卷总扇区数，备份扇区落在卷尾；两处签名任一不符即拒绝。
+/// 备份块已写在记录里的前缀中时，签名在它被复制的那次核对过，这里不再重读。
+fn hidden_sectors_plan(
+    data: &DataStep,
+    sector_size: u64,
+    cursor: u64,
+    spans: &[ChunkSpan],
+    target: &mut dyn TargetHandle,
+) -> Result<HiddenSectors, (ExecError, bool)> {
+    if sector_size < BOOT_SECTOR_MIN {
+        return Err((
+            ExecError::InvalidPlan(format!(
+                "a {sector_size}-byte sector cannot hold an NTFS boot sector"
+            )),
+            false,
+        ));
+    }
+    let value = u32::try_from(data.dest_lba).map_err(|_| {
+        (
+            ExecError::InvalidPlan(
+                "the new partition start exceeds the NTFS HiddenSectors field".to_owned(),
+            ),
+            false,
+        )
+    })?;
+    let primary = read_boot_sector(target, data.source_lba, sector_size, "primary")?;
+    let total = u64::from_le_bytes(
+        primary[NTFS_TOTAL_SECTORS_OFFSET..NTFS_TOTAL_SECTORS_OFFSET + 8]
+            .try_into()
+            .expect("引导扇区至少 512 字节"),
+    );
+    if total == 0 || total > data.sectors {
+        return Err((
+            ExecError::InvalidPlan(format!(
+                "the NTFS volume declares {total} sectors but the step moves {}",
+                data.sectors
+            )),
+            false,
+        ));
+    }
+    let backup = data.source_lba.checked_add(total - 1).ok_or_else(|| {
+        (
+            ExecError::InvalidPlan("the NTFS volume end overflows the LBA range".to_owned()),
+            false,
+        )
+    })?;
+    let backup_span = spans
+        .iter()
+        .position(|span| {
+            span.first_lba <= backup && backup < span.first_lba.saturating_add(span.len_lba)
+        })
+        .ok_or_else(|| {
+            (
+                ExecError::InvalidPlan(
+                    "the NTFS volume end lies outside the moved range".to_owned(),
+                ),
+                false,
+            )
+        })?;
+    if u64::try_from(backup_span).expect("块下标可表示") >= cursor {
+        read_boot_sector(target, backup, sector_size, "backup")?;
+    }
+    Ok(HiddenSectors {
+        value,
+        primary: data.source_lba,
+        backup,
+    })
+}
+
+/// 读一个扇区并核对它是 NTFS 引导扇区。
+fn read_boot_sector(
+    target: &mut dyn TargetHandle,
+    lba: u64,
+    sector_size: u64,
+    what: &str,
+) -> Result<Vec<u8>, (ExecError, bool)> {
+    let region = lba_region(lba, 1, sector_size)?;
+    let bytes = read_region(target, region, CHUNK).map_err(|error| (error, false))?;
+    if !is_ntfs_boot_sector(&bytes) {
+        return Err((
+            ExecError::InvalidPlan(format!(
+                "the {what} boot sector at LBA {lba} is not an NTFS boot sector; \
+                 HiddenSectors is left unchanged"
+            )),
+            false,
+        ));
+    }
+    Ok(bytes)
+}
+
+/// 该扇区是否带 NTFS 引导扇区标识：偏移 3 的 OEM 标识与末尾的引导标记。
+fn is_ntfs_boot_sector(sector: &[u8]) -> bool {
+    if sector.len() < BOOT_SIGNATURE_OFFSET + 2 {
+        return false;
+    }
+    &sector[3..3 + NTFS_OEM_ID.len()] == NTFS_OEM_ID
+        && &sector[BOOT_SIGNATURE_OFFSET..BOOT_SIGNATURE_OFFSET + 2] == b"\x55\xaa"
+}
+
+/// 把本块里落在主或备份引导扇区的 `HiddenSectors` 写成新起点。
+///
+/// 块按源 LBA 划分，目标块由源块加位移得到，因此两处位置也按源 LBA 判断。
+fn patch_hidden_sectors(
+    bytes: &mut [u8],
+    span: &ChunkSpan,
+    sector_size: u64,
+    hidden: &HiddenSectors,
+) {
+    let sector = usize_from(sector_size);
+    for lba in [hidden.primary, hidden.backup] {
+        if lba < span.first_lba || lba >= span.first_lba.saturating_add(span.len_lba) {
+            continue;
+        }
+        let at = usize_from(lba - span.first_lba) * sector + NTFS_HIDDEN_SECTORS_OFFSET;
+        bytes[at..at + 4].copy_from_slice(&hidden.value.to_le_bytes());
+    }
 }
 
 /// 把目标里按拷贝顺序已写的 `upto` 个块重新摘要，用于续跑比对。

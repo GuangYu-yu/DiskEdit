@@ -1,7 +1,7 @@
 //! 等价对照：同一 argv、同一现场，两个二进制比对退出码。
 //!
 //! 基线二进制由 `DISKEDIT_BASELINE` 指定；未提供时回报 `NotApplicable`，不静默跳过。
-//! S0 只覆盖进程级出口（帮助、版本、用法）；命令行为按纵切加入对照。
+//! 对照覆盖进程级出口（帮助、版本、用法）与命令行为。
 
 use std::process::Command;
 
@@ -362,13 +362,13 @@ const SCENARIOS: &[Scenario] = &[
     },
 ];
 
-/// 把本实现的命令行翻译成旧基线的等价命令行。
+/// 把本实现的命令行翻译成基线二进制的等价命令行。
 ///
-/// 旧二进制只作行为 oracle：新命令面是刻意重造的（`divergences.md` D20–D26），
-/// 因此对照前必须经这一层适配，而不是把新 argv 原样喂给旧基线。翻译只覆盖
-/// 一一对应的改名与形态合并；`None` 表示新面没有旧等价物，该条不参与对照。
+/// 基线二进制只作行为 oracle：命令面与其存在改名与形态合并，因此对照前必须经
+/// 这一层适配，而不是把 argv 原样交给基线。翻译只覆盖一一对应的改名与形态合并；
+/// `None` 表示没有等价物，该条不参与对照。
 fn legacy(argv: &[String]) -> Option<Vec<String>> {
-    // 全局旗标改名：--alias → --identity（D25）。
+    // 全局旗标改名：--alias → --identity。
     let mut tokens: Vec<String> = argv
         .iter()
         .map(|token| {
@@ -388,13 +388,13 @@ fn legacy(argv: &[String]) -> Option<Vec<String>> {
             tokens.insert(0, "info".to_owned());
             Some(tokens)
         }
-        // records show ↔ inspect（D21）。
+        // records show ↔ inspect。
         "records" if tokens.get(1).map(String::as_str) == Some("show") => {
             tokens.remove(0);
             tokens[0] = "inspect".to_owned();
             Some(tokens)
         }
-        // records list --root ROOT ↔ records scan ROOT（D24）。
+        // records list --root ROOT ↔ records scan ROOT。
         "records"
             if tokens.get(1).map(String::as_str) == Some("list")
                 && tokens.iter().any(|t| t == "--root") =>
@@ -409,7 +409,7 @@ fn legacy(argv: &[String]) -> Option<Vec<String>> {
             }
             Some(reference)
         }
-        // undo 是旧 recover 的默认回放；replay 对应 --replay-table-only；release 对应 --release（D22）。
+        // undo 是旧 recover 的默认回放；replay 对应 --replay-table-only；release 对应 --release。
         "undo" => {
             tokens[0] = "recover".to_owned();
             Some(tokens)
@@ -422,7 +422,7 @@ fn legacy(argv: &[String]) -> Option<Vec<String>> {
             tokens[0] = "recover".to_owned();
             Some(reinsert_flag(tokens, "--release", 1))
         }
-        // resize --fs-only ↔ resizefs（D23）。
+        // resize --fs-only ↔ resizefs。
         "resize" if tokens.iter().any(|token| token == "--fs-only") => {
             tokens.remove(0);
             tokens.retain(|token| token != "--fs-only");
@@ -435,7 +435,7 @@ fn legacy(argv: &[String]) -> Option<Vec<String>> {
             tokens.insert(1, target);
             Some(tokens)
         }
-        // add --dry-run 是旧版没有的预览通道（D26），无旧等价物。
+        // add --dry-run 是仅本实现提供的预览通道，无等价物。
         "add" if tokens.iter().any(|token| token == "--dry-run") => None,
         // --help 后带命令：旧版 --help 不接主题，等价于顶层帮助。
         "--help" if tokens.len() > 1 => Some(vec!["--help".to_owned()]),
@@ -571,8 +571,7 @@ fn owned(argv: &[&str]) -> Vec<String> {
     argv.iter().map(|token| (*token).to_owned()).collect()
 }
 
-// covers: D9, D16, D18, D20
-// 旧基线仍是旧命令面：对照前先经 `legacy` 适配（改名/形态合并），无等价物的条目跳过。
+// 对照前先经 `legacy` 适配（改名/形态合并），无等价物的条目跳过。
 #[test]
 fn both_binaries_agree_on_layout_json_fields() {
     let Some(baseline) = std::env::var_os("DISKEDIT_BASELINE") else {
@@ -605,7 +604,7 @@ fn both_binaries_agree_on_layout_json_fields() {
         ],
     ];
     for argv in cases {
-        // add --dry-run 是旧版没有的预览通道（D26）；没有 oracle 就不假装对照。
+        // add --dry-run 是仅本实现提供的预览通道；没有 oracle 就不假装对照。
         let Some(reference) = legacy(&owned(argv)) else {
             continue;
         };

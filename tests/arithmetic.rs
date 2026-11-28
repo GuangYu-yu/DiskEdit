@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// 受守卫的判定层目录。
-const LAYERS: [&str; 1] = ["src/app/decide"];
+/// 受守卫的判定层：判定与它直接消费的 LVM 决策代码。
+const LAYERS: [&str; 2] = ["src/app/decide", "src/app/lvm.rs"];
 
 /// 判定层禁止的写法。
 const BANNED: [&str; 6] = [
@@ -25,6 +25,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn rust_files(directory: &Path, out: &mut Vec<PathBuf>) {
+    if directory.is_file() {
+        out.push(directory.to_path_buf());
+        return;
+    }
     if !directory.is_dir() {
         return;
     }
@@ -64,7 +68,6 @@ fn offences(root: &Path) -> Vec<String> {
     found
 }
 
-// covers: I2
 #[test]
 fn the_decision_layer_uses_explicit_checked_arithmetic() {
     let found = offences(&repo_root());
@@ -74,7 +77,6 @@ fn the_decision_layer_uses_explicit_checked_arithmetic() {
     );
 }
 
-// covers: I2
 #[test]
 fn the_guard_flags_a_synthetic_saturating_expression() {
     let root = PathBuf::from("target/fixtures/arithmetic-guard");

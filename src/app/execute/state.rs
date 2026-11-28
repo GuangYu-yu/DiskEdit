@@ -182,4 +182,56 @@ mod tests {
         assert!(machine.roll_back().is_err());
         assert_eq!(machine.state(), ExecutionState::Unwritten);
     }
+
+    #[test]
+    fn every_state_derives_its_recovery_answer_from_one_table() {
+        // 报告与恢复都只问状态：这两个结论对每个状态只有一个答案，不是各处自行判断。
+        for (state, recovery, touched) in [
+            (ExecutionState::Unwritten, false, false),
+            (ExecutionState::Armed, true, true),
+            (ExecutionState::Committed, false, false),
+            (ExecutionState::CommittedUnsynced, false, true),
+            (ExecutionState::RolledBack, false, false),
+            (ExecutionState::NeedsRecovery, true, true),
+        ] {
+            assert_eq!(state.needs_recovery(), recovery, "needs_recovery {state:?}");
+            assert_eq!(state.touched_target(), touched, "touched_target {state:?}");
+        }
+    }
+
+    #[test]
+    fn the_only_way_out_of_unwritten_is_arming() {
+        for attempt in 0..3 {
+            let mut machine = StateMachine::new();
+            let refused = match attempt {
+                0 => machine.commit().is_err(),
+                1 => machine.commit_unsynced().is_err(),
+                _ => machine.roll_back().is_err(),
+            };
+            assert!(refused, "未登记原像前不得离开未写态");
+            assert_eq!(machine.state(), ExecutionState::Unwritten);
+        }
+        // 已登记之后，四条推进各自成立，且都不回到未写态。
+        for (index, next) in [
+            ExecutionState::Committed,
+            ExecutionState::CommittedUnsynced,
+            ExecutionState::NeedsRecovery,
+            ExecutionState::RolledBack,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut machine = StateMachine::new();
+            machine.arm().expect("登记应成立");
+            match index {
+                0 => machine.commit(),
+                1 => machine.commit_unsynced(),
+                2 => machine.needs_recovery(),
+                _ => machine.roll_back(),
+            }
+            .expect("登记后的推进应成立");
+            assert_eq!(machine.state(), next);
+            assert_ne!(machine.state(), ExecutionState::Unwritten);
+        }
+    }
 }

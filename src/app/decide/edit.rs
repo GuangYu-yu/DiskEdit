@@ -6,7 +6,7 @@
 //! `set label` 与 `set uuid` 改的是分区内部的内容属性，判定层只做能力与参数校验，
 //! 落成一条内容属性步骤交给文件系统执行路径；任何越界或形态不符都在写盘之前拒绝。
 
-use diskedit_core::fs::{Support, catalog, label_problem, uuid_support};
+use diskedit_core::fs::{ContentKind, FsKind, Support, catalog, label_problem, uuid_support};
 use diskedit_core::table::Guid;
 use diskedit_core::table::create::Segment;
 use diskedit_core::table::edit::{
@@ -23,13 +23,13 @@ use crate::app::observe::{
 };
 
 use super::report::{AddPreview, Report};
-use super::step::{PropertyValue, Step, StepKind, TableSegment};
-use super::{Decision, Plan, Refusal, repair};
-
-/// 未给出 `--chunk` 时的默认块大小。
-const DEFAULT_CHUNK: u64 = 4 << 20;
-/// 1 MiB 的字节数。
-const MIB: u64 = 1 << 20;
+use super::step::{
+    Displacement, PropertyValue, Step, StepKind, TableSegment, lba_bytes, sectors_ceil,
+    sectors_floor, span_bytes, span_sectors,
+};
+use super::{
+    DEFAULT_CHUNK, Decision, MIB, OccupancyScope, OccupancySnapshot, Plan, Refusal, repair,
+};
 
 /// 判定 `move`：保持长度，把分区内容与条目平移到新起点。
 pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
@@ -77,7 +77,10 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
     };
     let entry = table.entries[index];
     let old_start = entry.starting_lba;
-    let len = entry.ending_lba - old_start + 1;
+    let len = match span_sectors(old_start, entry.ending_lba) {
+        Some(len) => len,
+        None => return refuse_edit("the partition's LBA range is inverted"),
+    };
     let new_start = match start_lba(&table, moved.start, moved.align, old_start, Some(len)) {
         Ok(start) => start,
         Err(refusal) => return Decision::Refuse(refusal),
@@ -95,7 +98,9 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
     if let Err(refusal) = place_range(&table, index, new_start, new_end, true) {
         return Decision::Refuse(refusal);
     }
-    let shift = i64::try_from(i128::from(new_start) - i128::from(old_start)).unwrap_or(i64::MAX);
+    let Some(displacement) = Displacement::between(old_start, new_start) else {
+        return refuse_edit("the move displacement exceeds the addressable range");
+    };
     let chunk = moved.chunk.unwrap_or(DEFAULT_CHUNK);
     let mut updated = table.entries.clone();
     updated[index].starting_lba = new_start;
@@ -109,15 +114,25 @@ pub fn move_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         }
     };
     repair::append_protective(&mut segments, repaired.protective_mbr);
+    // 平移后 NTFS 的 HiddenSectors 必须跟着改；内容类型取自本次观察，读不出
+    // 内容（未识别）时不改，保持与原分区一致的保守行为。
+    let ntfs = snapshot
+        .view
+        .find(number)
+        .is_some_and(|partition| partition.content == ContentKind::Filesystem(FsKind::Ntfs));
+    let data_region = match region_of(new_start, new_end, *sector_size) {
+        Ok(range) => range,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
     let data = Step::new(
         StepKind::MovePartition {
             partition: number,
             source_lba: old_start,
-            offset_sectors: shift,
+            offset_sectors: displacement.sectors(),
             chunk,
-            ntfs_hidden: false,
+            ntfs_hidden: ntfs,
         },
-        vec![region(new_start * sector_size, len * sector_size)],
+        vec![data_region],
     );
     let table_step = table_step(TableFormat::Gpt, *sector_size, segments, snapshot.stamp);
     let plan = Plan::write(vec![data, table_step], identity);
@@ -182,7 +197,10 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         });
     }
     let entry = table.entries[index];
-    let len = entry.ending_lba - entry.starting_lba + 1;
+    let len = match span_sectors(entry.starting_lba, entry.ending_lba) {
+        Some(len) => len,
+        None => return refuse_edit("the partition's LBA range is inverted"),
+    };
     let new_start = match start_lba(
         &table,
         copied.start,
@@ -227,6 +245,10 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
         }
     };
     repair::append_protective(&mut segments, repaired.protective_mbr);
+    let data_region = match region_of(new_start, new_end, *sector_size) {
+        Ok(range) => range,
+        Err(refusal) => return Decision::Refuse(refusal),
+    };
     let data = Step::new(
         StepKind::CopyPartition {
             source: number,
@@ -235,7 +257,7 @@ pub fn copy_partition(snapshot: &EditSnapshot, request: &Request) -> Decision {
             sectors: len,
             chunk: copied.chunk.unwrap_or(DEFAULT_CHUNK),
         },
-        vec![region(new_start * sector_size, len * sector_size)],
+        vec![data_region],
     );
     let table_step = table_step(TableFormat::Gpt, *sector_size, segments, snapshot.stamp);
     let plan = Plan::write(vec![data, table_step], identity);
@@ -264,10 +286,10 @@ fn start_lba(
         });
     }
     let first = table.header.first_usable_lba;
-    let last = table.header.last_usable_lba;
-    let unit = MIB / table.sector_size.max(1);
+    let last = usable_last(table)?;
     let aligned = |lba: u64| -> Result<u64, Refusal> {
-        if align == Alignment::Mib && unit > 0 {
+        if align == Alignment::Mib {
+            let unit = align_unit(table.sector_size)?;
             lba.div_ceil(unit)
                 .checked_mul(unit)
                 .ok_or_else(|| Refusal::TableEdit {
@@ -283,23 +305,21 @@ fn start_lba(
             let len = length.ok_or_else(|| Refusal::TableEdit {
                 why: "`--start end` needs a known length".to_owned(),
             })?;
-            last.checked_sub(len - 1)
-                .ok_or_else(|| Refusal::TableEdit {
-                    why: "the partition is longer than the usable range".to_owned(),
-                })?
+            let span = len.checked_sub(1).ok_or_else(|| Refusal::TableEdit {
+                why: "`--start end` needs a length above zero".to_owned(),
+            })?;
+            last.checked_sub(span).ok_or_else(|| Refusal::TableEdit {
+                why: "the partition is longer than the usable range".to_owned(),
+            })?
         }
         StartSpec::Align => {
-            let unit = MIB / table.sector_size.max(1);
-            if unit == 0 {
-                old_start
-            } else {
-                old_start
-                    .div_ceil(unit)
-                    .checked_mul(unit)
-                    .ok_or_else(|| Refusal::TableEdit {
-                        why: "the aligned start overflows the LBA range".to_owned(),
-                    })?
-            }
+            let unit = align_unit(table.sector_size)?;
+            old_start
+                .div_ceil(unit)
+                .checked_mul(unit)
+                .ok_or_else(|| Refusal::TableEdit {
+                    why: "the aligned start overflows the LBA range".to_owned(),
+                })?
         }
     };
     if new_start < first {
@@ -321,7 +341,7 @@ fn place_range(
     allow_self: bool,
 ) -> Result<(), Refusal> {
     let first = table.header.first_usable_lba;
-    let last = table.header.last_usable_lba;
+    let last = usable_last(table)?;
     if start > end || start < first || end > last {
         return Err(Refusal::TableEdit {
             why: format!("the target range {start}..{end} is outside the usable {first}..{last}"),
@@ -341,6 +361,65 @@ fn place_range(
         }
     }
     Ok(())
+}
+
+/// 落位可用的末端：表头声明的末端与容器容量取更小者。
+///
+/// 表头可以把可用区写得比磁盘还大（损坏或来自更大的盘）；新增落位必须同时受
+/// 容器容量约束，超容量的位置在这里被拒绝，而不是只比表头字段。
+fn placement_last(header_last: u64, total_bytes: u64, sector_size: u64) -> Result<u64, Refusal> {
+    let sectors =
+        sectors_floor(total_bytes, sector_size).ok_or_else(|| Refusal::GeometryUnknown {
+            why: "the logical sector size is zero".to_owned(),
+        })?;
+    let capacity_last = sectors
+        .checked_sub(1)
+        .ok_or_else(|| Refusal::GeometryUnknown {
+            why: "the target is smaller than one sector".to_owned(),
+        })?;
+    Ok(header_last.min(capacity_last))
+}
+
+/// 一张 GPT 的可落位末端。
+fn usable_last(table: &GptTable) -> Result<u64, Refusal> {
+    placement_last(
+        table.header.last_usable_lba,
+        table.total_bytes,
+        table.sector_size,
+    )
+}
+
+/// 1 MiB 对齐单位换算成扇区；不整倍即拒绝，不把单位悄悄降级。
+fn align_unit(sector_size: u64) -> Result<u64, Refusal> {
+    let unit = sectors_floor(MIB, sector_size).ok_or_else(|| Refusal::GeometryUnknown {
+        why: "the logical sector size is zero".to_owned(),
+    })?;
+    if unit == 0 || !MIB.is_multiple_of(sector_size) {
+        return Err(Refusal::TableEdit {
+            why: format!("1 MiB is not a whole number of {sector_size}-byte sectors"),
+        });
+    }
+    Ok(unit)
+}
+
+/// 一段 LBA 区间的字节区间；换算溢出即拒绝。
+fn region_of(
+    start_lba: u64,
+    end_lba: u64,
+    sector_size: u64,
+) -> Result<diskedit_core::region::Region, Refusal> {
+    let start = lba_bytes(start_lba, sector_size)
+        .ok_or_else(|| geometry_refusal("the range start overflows the byte offset"))?;
+    let len = span_bytes(start_lba, end_lba, sector_size)
+        .ok_or_else(|| geometry_refusal("the range length overflows the byte offset"))?;
+    diskedit_core::region::Region::sized(start, len)
+        .map_err(|_| geometry_refusal("the range is not addressable"))
+}
+
+fn geometry_refusal(why: &str) -> Refusal {
+    Refusal::GeometryUnknown {
+        why: why.to_owned(),
+    }
 }
 
 /// 组装数据步之后的整表写入步。
@@ -372,7 +451,7 @@ fn table_step(
 /// `copy` 不接受续跑：目标上已有未收尾记录一律拒绝。
 fn finish_copy(snapshot: &EditSnapshot, plan: Result<Plan, Refusal>, note: String) -> Decision {
     let plan = match plan {
-        Ok(plan) => plan,
+        Ok(plan) => plan.with_occupancy(occupancy_snapshot(snapshot)),
         Err(refusal) => return Decision::Refuse(refusal),
     };
     let path = record_path(snapshot);
@@ -442,7 +521,14 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
             pmbr,
             lba0,
         } => {
-            let sectors = add.size.div_ceil(*sector_size);
+            let sectors = match sectors_ceil(add.size, *sector_size) {
+                Some(sectors) => sectors,
+                None => {
+                    return Decision::Refuse(geometry_refusal(
+                        "the logical sector size is zero, so the size cannot be placed",
+                    ));
+                }
+            };
             if sectors == 0 {
                 return Decision::Refuse(Refusal::ArgumentOutOfRange {
                     what: "the requested size rounds down to zero sectors".to_owned(),
@@ -458,10 +544,15 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 Ok(repaired) => repaired,
                 Err(refusal) => return Decision::Refuse(refusal),
             };
+            // 落位同时受表头可用末端与容器容量约束：超容量的位置拒绝。
+            let last = match usable_last(&table) {
+                Ok(last) => last,
+                Err(refusal) => return Decision::Refuse(refusal),
+            };
             let placed = match place(
                 &table.used_ranges(),
                 table.header.first_usable_lba,
-                table.header.last_usable_lba,
+                last,
                 add.align,
                 *sector_size,
                 sectors,
@@ -546,7 +637,14 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                     );
                 }
             };
-            let sectors = add.size.div_ceil(snapshot.target.sector_size);
+            let sectors = match sectors_ceil(add.size, snapshot.target.sector_size) {
+                Some(sectors) => sectors,
+                None => {
+                    return Decision::Refuse(geometry_refusal(
+                        "the logical sector size is zero, so the size cannot be placed",
+                    ));
+                }
+            };
             if sectors == 0 {
                 return Decision::Refuse(Refusal::ArgumentOutOfRange {
                     what: "the requested size rounds down to zero sectors".to_owned(),
@@ -556,10 +654,18 @@ pub fn add(snapshot: &EditSnapshot, request: &Request) -> Decision {
                 Ok(used) => used,
                 Err(error) => return refuse_edit(&error.to_string()),
             };
+            let last = match total_lba.checked_sub(1) {
+                Some(last) => last,
+                None => {
+                    return Decision::Refuse(geometry_refusal(
+                        "the target has no sector to place a partition in",
+                    ));
+                }
+            };
             let placed = match place(
                 &used,
                 1,
-                total_lba.checked_sub(1).unwrap_or(0),
+                last,
                 add.align,
                 snapshot.target.sector_size,
                 sectors,
@@ -959,19 +1065,22 @@ fn place(
     sectors: u64,
     start: Option<StartSpec>,
 ) -> Result<(u64, u64), EditError> {
+    if sector_size == 0 {
+        return Err(EditError::UnusableTable("the logical sector size is zero"));
+    }
     match start {
         None => edit::first_fit(
             used,
             first,
             last,
-            auto_unit(alignment, sector_size),
+            auto_unit(alignment, sector_size)?,
             sectors,
         ),
         Some(StartSpec::Lba(lba)) => edit::fixed_start(
             used,
             first,
             last,
-            start_unit(alignment, sector_size),
+            start_unit(alignment, sector_size)?,
             sectors,
             lba,
         ),
@@ -985,18 +1094,20 @@ fn place(
 }
 
 /// 自动放置的对齐单位：未给出 `--align` 时按 1 MiB。
-fn auto_unit(alignment: Alignment, sector_size: u64) -> u64 {
+fn auto_unit(alignment: Alignment, sector_size: u64) -> Result<u64, EditError> {
     match alignment {
-        Alignment::Default | Alignment::Mib => (1 << 20) / sector_size.max(1),
-        Alignment::None => 1,
+        Alignment::Default | Alignment::Mib => sectors_floor(MIB, sector_size)
+            .ok_or(EditError::UnusableTable("the logical sector size is zero")),
+        Alignment::None => Ok(1),
     }
 }
 
 /// 显式起点的对齐单位：未给出 `--align` 时按给定 LBA 原样落位。
-fn start_unit(alignment: Alignment, sector_size: u64) -> u64 {
+fn start_unit(alignment: Alignment, sector_size: u64) -> Result<u64, EditError> {
     match alignment {
-        Alignment::Default | Alignment::None => 1,
-        Alignment::Mib => (1 << 20) / sector_size.max(1),
+        Alignment::Default | Alignment::None => Ok(1),
+        Alignment::Mib => sectors_floor(MIB, sector_size)
+            .ok_or(EditError::UnusableTable("the logical sector size is zero")),
     }
 }
 
@@ -1051,9 +1162,9 @@ fn parse_mbr_type(value: &str) -> Option<u8> {
 
 /// `set label` / `set uuid`：校验内容能力与参数，落成一条内容属性步骤。
 ///
-/// 判定顺序与基线一致：先按内容类型判能力（uuid 的不支持一律是"拒绝"，label 的
-/// 不支持是"不支持该内容"），LVM2 PV 单独按拒绝处理，然后确认工具可用，最后才判
-/// 参数容量（卷标字段、UUID 形状）。这样两条命令的退出码与基线一一对应。
+/// 判定顺序：先按内容类型判能力（uuid 的不支持一律是"拒绝"，label 的不支持是
+/// "不支持该内容"），LVM2 PV 单独按拒绝处理，然后确认工具可用，最后才判参数容量
+/// （卷标字段、UUID 形状）。两条命令的退出码由这一顺序决定。
 fn content_property(snapshot: &EditSnapshot, number: u32, set: &SetRequest) -> Decision {
     let Some(partition) = snapshot.view.find(number) else {
         return Decision::Refuse(Refusal::FilesystemUnknown { number });
@@ -1134,7 +1245,7 @@ fn content_property(snapshot: &EditSnapshot, number: u32, set: &SetRequest) -> D
         }
     }
 
-    // 与基线同序：能力与工具存在性先判，参数容量（卷标字段、UUID 形状）后判。
+    // 顺序：能力与工具存在性先判，参数容量（卷标字段、UUID 形状）后判。
     if let Some((program, false)) = snapshot.tools.first() {
         return Decision::Refuse(Refusal::ToolMissing { program: *program });
     }
@@ -1217,8 +1328,8 @@ fn unusable(view: &TableView) -> Refusal {
 
 /// 值是否为 UUID 文本：36 字符的连字符分组形式，或 32 字符的裸十六进制。
 ///
-/// 两种写法在基线的 GUID 解析里等价（前三个字段小端、第四段原样），因此这里也同收，
-/// 不把裸形式判成"不是 UUID"。
+/// 两种写法都表示同一个 GUID：连字符只影响文本分组，因此这里都接受，不把裸形式
+/// 判成"不是 UUID"。
 fn is_uuid(value: &str) -> bool {
     let bytes = value.as_bytes();
     let hyphened = bytes.len() == 36
@@ -1263,7 +1374,7 @@ fn conclude_add(
 /// 组装执行计划，并处理未收尾记录的同计划续跑/异计划冲突。
 fn finish(snapshot: &EditSnapshot, plan: Result<Plan, Refusal>, note: String) -> Decision {
     let plan = match plan {
-        Ok(plan) => plan,
+        Ok(plan) => plan.with_occupancy(occupancy_snapshot(snapshot)),
         Err(refusal) => return Decision::Refuse(refusal),
     };
     let path = record_path(snapshot);
@@ -1289,6 +1400,15 @@ fn record_path(snapshot: &EditSnapshot) -> String {
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(record path unresolved)".to_owned())
+}
+
+/// 本次观察得到的整目标占用现场；`edit` 不单独探测某个分区。
+fn occupancy_snapshot(snapshot: &EditSnapshot) -> OccupancySnapshot {
+    OccupancySnapshot {
+        scope: OccupancyScope::Target,
+        occupancy: snapshot.occupancy.clone(),
+        partition: None,
+    }
 }
 
 fn table_plan(
@@ -1325,6 +1445,7 @@ fn region(start: u64, len: u64) -> diskedit_core::region::Region {
 #[cfg(test)]
 mod tests {
     use super::is_uuid;
+    use super::{Alignment, Refusal, StartSpec, place, placement_last, sectors_ceil, span_sectors};
 
     #[test]
     fn uuid_text_accepts_both_canonical_forms() {
@@ -1334,5 +1455,57 @@ mod tests {
         assert!(!is_uuid("4d4f4e4b-0000-4000-8000-00000000000"));
         assert!(!is_uuid("4d4f4e4b00004000800000000000000"));
         assert!(!is_uuid("not-a-uuid"));
+    }
+
+    #[test]
+    fn a_placement_is_capped_by_the_target_capacity() {
+        // 表头声称可用到 LBA 1000，但盘只有 100 个扇区：末端收缩到 99。
+        let capacity = placement_last(1000, 100 * 512, 512).expect("容量可算");
+        assert_eq!(capacity, 99);
+        // 表头比容量小：仍以表头为准。
+        assert_eq!(placement_last(50, 100 * 512, 512).expect("容量可算"), 50);
+        // 零扇区与不足一个扇区的容量都拒绝。
+        assert!(matches!(
+            placement_last(10, 100 * 512, 0),
+            Err(Refusal::GeometryUnknown { .. })
+        ));
+        assert!(matches!(
+            placement_last(10, 100, 512),
+            Err(Refusal::GeometryUnknown { .. })
+        ));
+        // 超过容量的显式落位必须被拒绝（不是只比表头字段）。
+        assert!(
+            place(
+                &[],
+                34,
+                capacity,
+                Alignment::None,
+                512,
+                10,
+                Some(StartSpec::Lba(95))
+            )
+            .is_err()
+        );
+        assert!(
+            place(
+                &[],
+                34,
+                capacity,
+                Alignment::None,
+                512,
+                10,
+                Some(StartSpec::Lba(80))
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn non_multiple_sizes_round_up_to_whole_sectors() {
+        assert_eq!(sectors_ceil(1000, 512), Some(2));
+        assert_eq!(sectors_ceil(1024, 512), Some(2));
+        assert_eq!(sectors_ceil(1, 512), Some(1));
+        assert_eq!(sectors_ceil(10, 0), None);
+        assert_eq!(span_sectors(10, 9), None);
     }
 }

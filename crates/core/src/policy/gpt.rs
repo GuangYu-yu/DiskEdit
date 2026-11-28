@@ -421,7 +421,7 @@ mod tests {
         }
     }
 
-    /// 判定矩阵：两条轴四组合 + Inconsistent 一票否决，与旧版语义逐格对应。
+    /// 判定矩阵：两条轴四组合 + Inconsistent 一票否决。
     #[test]
     fn repair_action_decision_matrix() {
         let normal = PmbrSize::Normal;

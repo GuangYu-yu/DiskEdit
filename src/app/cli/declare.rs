@@ -99,6 +99,55 @@ const fn variant(
     }
 }
 
+/// 选项是否需要跟一个值。
+///
+/// 解析器据此把声明过的选项分成"带值"与"开关"两组；文档的数量列也读这一处，
+/// 因此新增选项时不会出现"解析收下、帮助却写成另一个形状"的分叉。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arity {
+    /// 选项后面必须跟一个值。
+    Value,
+    /// 选项不带值。
+    Switch,
+}
+
+/// 全部选项及其取值形状。名字必须与 [`COMMANDS`] 里出现的选项一一对应。
+pub const OPTIONS: &[(&str, Arity)] = &[
+    ("--alias", Arity::Value),
+    ("--align", Arity::Value),
+    ("--allow-move", Arity::Switch),
+    ("--chunk", Arity::Value),
+    ("--discard-replay", Arity::Switch),
+    ("--dry-run", Arity::Switch),
+    ("--end", Arity::Value),
+    ("--fs-only", Arity::Switch),
+    ("--grow-lv", Arity::Switch),
+    ("--grow-to-end", Arity::Switch),
+    ("--json", Arity::Switch),
+    ("--keep-partuuid", Arity::Switch),
+    ("--label", Arity::Value),
+    ("--lv", Arity::Value),
+    ("--name", Arity::Value),
+    ("--no-fs", Arity::Switch),
+    ("--overwrite-data", Arity::Switch),
+    ("--part-number", Arity::Value),
+    ("--root", Arity::Value),
+    ("--random", Arity::Switch),
+    ("--sector-size", Arity::Value),
+    ("--start", Arity::Value),
+    ("--table", Arity::Value),
+    ("--type-guid", Arity::Value),
+    ("--yes", Arity::Switch),
+];
+
+/// 一个选项的取值形状；未声明时返回 `None`。
+pub fn arity(option: &str) -> Option<Arity> {
+    OPTIONS
+        .iter()
+        .find(|(name, _)| *name == option)
+        .map(|(_, arity)| *arity)
+}
+
 /// 一条命令的全部声明。
 #[derive(Clone, Copy, Debug)]
 pub struct CommandDef {
@@ -111,6 +160,22 @@ pub struct CommandDef {
 }
 
 impl CommandDef {
+    /// 该命令声明的全部选项：形态选项与公共选项的并集，按名字排序。
+    ///
+    /// 解析的白名单、帮助的选项列表与生成的参考文档都读这一个并集。
+    pub fn options(&self) -> Vec<&'static str> {
+        let mut options: Vec<&'static str> = self.common_options.to_vec();
+        for variant in self.variants {
+            for option in variant.options {
+                if !options.contains(option) {
+                    options.push(option);
+                }
+            }
+        }
+        options.sort_unstable();
+        options
+    }
+
     /// 该命令是否声明了这个选项（任一形态或公共选项）。
     pub fn accepts(&self, flag: &str) -> bool {
         self.common_options.contains(&flag)
@@ -456,7 +521,7 @@ pub fn declared_entries() -> impl Iterator<Item = &'static str> {
     COMMANDS.iter().map(|command| command.name)
 }
 
-/// 命令面 JSON：供门禁与旧版逐项对照。
+/// 命令面 JSON：供门禁逐项核对命令声明。
 ///
 /// 结构固定为 `{"commands":[{"name","effect","common_options","variants":[...]}]}`；
 /// 每个形态带 `syntax`、`options`、`selectors`、`target`、`default` 与
@@ -589,5 +654,33 @@ mod tests {
             ["--grow", "--sector-size"]
         );
         assert_eq!(options_in_syntax("<TARGET> --yes"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn every_declared_option_has_a_shape_and_is_used() {
+        for command in COMMANDS {
+            for option in command.options() {
+                assert!(
+                    arity(option).is_some(),
+                    "{} 的选项 {option} 没有声明取值形状",
+                    command.name
+                );
+            }
+        }
+        for (option, _) in OPTIONS {
+            assert!(
+                COMMANDS.iter().any(|command| command.accepts(option)),
+                "选项 {option} 声明了形状，却没有任何命令使用"
+            );
+        }
+    }
+
+    #[test]
+    fn the_option_shapes_are_unique() {
+        let mut seen = Vec::new();
+        for (option, _) in OPTIONS {
+            assert!(!seen.contains(option), "选项 {option} 重复声明");
+            seen.push(*option);
+        }
     }
 }

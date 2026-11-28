@@ -11,7 +11,7 @@ pub mod recover;
 pub use codec::{DecodedRecord, RecordError, decode, encode};
 pub use frame::{Frame, FrameKind, Preimage};
 pub use header::{HEADER_LEN, MAGIC, RecordHeader};
-pub use recover::{RecoveryPlan, recover};
+pub use recover::{ManualReason, RecoveryExpectation, RecoveryPlan, recover};
 
 /// 记录标识的字符数。
 pub const ID_HEX_LEN: usize = 32;
@@ -39,12 +39,30 @@ pub const BODY_LEN: usize = 32 + 8 + 32 + 4;
 /// 载荷声明长度上限，字节。
 pub const MAX_PAYLOAD_BYTES: u32 = 16 * 1024 * 1024;
 
-/// 载荷固定前缀：这份记录属于谁、对应哪一版几何与哪一份计划。
+/// 载荷固定前缀：这份记录属于哪个目标、对应哪一份计划。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordBody {
     pub target: Fingerprint,
-    pub geometry_generation: u64,
+    /// 几何代次：目标总字节数经 [`geometry_generation`] 展开的值。零表示记录不带
+    /// 几何证据，读到即按需要人工处理。
+    pub legacy_generation: u64,
     pub plan_digest: [u8; 32],
+}
+
+/// 目标总字节数的几何代次。
+///
+/// 固定的 FNV-1a 把总字节数展开成 `u64` 后置最低位：结果恒为奇数，零保留给不
+/// 携带几何证据的记录。写入端存这个值，恢复端按当前目标长度重算并要求相等；
+/// 长度变了代次就变。
+pub fn geometry_generation(total_bytes: u64) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET;
+    for byte in total_bytes.to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash | 1
 }
 
 #[cfg(test)]
@@ -55,7 +73,7 @@ mod tests {
         DecodedRecord {
             body: RecordBody {
                 target: Fingerprint::strong([0x11; 32]),
-                geometry_generation: 1,
+                legacy_generation: 0,
                 plan_digest,
             },
             frames: Vec::new(),

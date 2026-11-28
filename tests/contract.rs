@@ -92,7 +92,6 @@ fn help_and_usage_choose_the_documented_process_codes() {
     assert_eq!(run(&["help", "records"]), exit::USAGE);
 }
 
-// covers: R0782, R0783, R0784, R0785
 #[test]
 fn outcomes_and_refusals_map_to_the_seven_codes() {
     let codes = [

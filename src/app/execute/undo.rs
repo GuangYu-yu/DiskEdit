@@ -1,16 +1,15 @@
 //! `undo` 的唯一执行器：持锁、锁内重探身份、按记录回写原像。
 //!
-//! B9 的准入顺序在这里落地：取记录目录锁 → 锁内重探身份 → 锁内重读记录 →
-//! 再按纯恢复器的结论动作。回滚先做只读判定（B7 第五条 / B24）：当前字节必须
-//! 是本工具写后的样子、停在写前/写后之间的唯一断点，或已经是原像；三者之外一律
-//! 拒绝并保留记录，绝不覆盖外部改动。判定通过后逆序写回原像并读回核对（B6）。
-//! 清理先回读再删除、删除后对目录 `fsync`（B23）。`replay` 复用这里的回放通路，
-//! `release` 复用这里的锁内现场准备与错误归档。
+//! 准入顺序：取记录目录锁 → 锁内重探身份 → 锁内重读记录 → 再按纯恢复器的结论
+//! 动作。回滚先做只读判定：当前字节必须是本工具写后的样子、停在写前/写后之间的
+//! 唯一断点，或已经是原像；三者之外一律拒绝并保留记录，绝不覆盖外部改动。判定
+//! 通过后逆序写回原像并读回核对。清理先回读再删除、删除后对目录 `fsync`。
+//! `replay` 复用这里的回放通路，`release` 复用这里的锁内现场准备与错误归档。
 
 use std::path::{Path, PathBuf};
 
 use diskedit_core::fingerprint::Fingerprint;
-use diskedit_core::record::{Frame, RecoveryPlan, recover};
+use diskedit_core::record::{Frame, RecoveryExpectation, RecoveryPlan, recover};
 use diskedit_core::region::Region;
 
 use super::digest::Hasher;
@@ -45,8 +44,24 @@ fn execute(
         }
     }
     let site = prepare(platform, target, plan)?;
+    let Some(bytes) = site.bytes else {
+        // 记录在执行层取锁前被清理：已无事可做。
+        return Ok(Outcome::completed());
+    };
     let identity = plan.identity();
-    rollback(platform, target, &site.file, site.bytes, identity, mode)
+    let total_bytes = platform
+        .open_target_read_only(target)
+        .map_err(|error| (ExecError::from(error), false))?
+        .len();
+    rollback(
+        platform,
+        target,
+        &site.file,
+        bytes,
+        identity,
+        mode,
+        total_bytes,
+    )
 }
 
 /// 锁内现场：记录目录、记录文件与记录字节。回放与放弃共用这一段准入。
@@ -72,7 +87,7 @@ pub(super) fn prepare(
             false,
         )
     })?;
-    // B3：记录目录按目标身份派生；锁与记录同目录。
+    // 记录目录按目标身份派生；锁与记录同目录。
     let directory: PathBuf = root.join("images").join(hex16(identity));
     platform
         .create_directory_all(&directory)
@@ -80,7 +95,7 @@ pub(super) fn prepare(
     let _lock = platform
         .lock_state(&directory.join(LOCK_FILE))
         .map_err(|error| (ExecError::from(error), false))?;
-    // B7 / B9：持锁后重探身份，计划指向的对象必须仍是当前对象。
+    // 持锁后重探身份，计划指向的对象必须仍是当前对象。
     if !super::identity_still_matches(platform, target, identity) {
         return Err((
             ExecError::IdentityChanged("target identity changed after planning".to_owned()),
@@ -136,16 +151,20 @@ fn rollback(
     platform: &dyn Platform,
     target: &Path,
     file: &Path,
-    bytes: Option<Vec<u8>>,
+    bytes: Vec<u8>,
     identity: Fingerprint,
     mode: RecoverMode,
+    total_bytes: u64,
 ) -> Result<Outcome, (ExecError, bool)> {
-    let Some(bytes) = bytes else {
-        // 记录在执行层取锁前被清理：已无事可做。
-        return Ok(Outcome::completed());
-    };
-    match recover(&bytes, identity) {
-        RecoveryPlan::Absent => Ok(Outcome::completed()),
+    match recover(&bytes, RecoveryExpectation::new(identity, total_bytes)) {
+        // 文件存在而字节为空：不是"没有记录"，其布局与目标身份都读不出来。
+        RecoveryPlan::Absent => Err((
+            ExecError::Record(format!(
+                "the record at {} is empty — its layout and target cannot be read",
+                file.display()
+            )),
+            false,
+        )),
         RecoveryPlan::Committed => {
             clear(platform, file, &bytes).map_err(|error| (error, false))?;
             Ok(Outcome::completed())
@@ -157,7 +176,7 @@ fn rollback(
             )),
             false,
         )),
-        RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why), false)),
+        RecoveryPlan::NeedsManual { why } => Err((ExecError::Record(why.to_string()), false)),
         RecoveryPlan::RollBack { frames } | RecoveryPlan::Replay { frames } => {
             // 已执行过不可逆步骤（外部建卷/改数据区）的记录没有完整原像，`undo`
             // 不能把它当成可回滚：那会把"外部动作已发生"悄悄清掉。`replay` 只回放
@@ -362,7 +381,7 @@ fn target_matches_image(
     Ok(true)
 }
 
-/// B7 / B24：只读判定"盘面是否还需要回写"。返回 `true` 表示至少一条要写。
+/// 只读判定"盘面是否还需要回写"。返回 `true` 表示至少一条要写。
 ///
 /// 每条的当前字节必须是原像、写后字节，或停在两者之间唯一断点的撕裂值；
 /// 其余情况说明盘面被外部改过，拒绝并保留记录。
@@ -496,7 +515,7 @@ fn read_exact(handle: &dyn TargetHandle, offset: u64, len: usize) -> Result<Vec<
     Ok(buffer)
 }
 
-/// B23 清理：回读必须仍是同一份记录，才删除并对目录 `fsync`。
+/// 清理：回读必须仍是同一份记录，才删除并对目录 `fsync`。
 fn clear(platform: &dyn Platform, file: &Path, expected: &[u8]) -> Result<(), ExecError> {
     let current = crate::app::observe::records::read_bytes(platform, file)?;
     if current.as_deref() != Some(expected) {

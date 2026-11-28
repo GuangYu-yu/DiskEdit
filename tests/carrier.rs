@@ -13,7 +13,6 @@ const SECTOR: u64 = 512;
 const PARTITION_START: u64 = 2048;
 const PARTITION_SECTORS: u64 = 65536;
 
-// covers: B28, D7
 #[test]
 fn the_carrier_grows_a_mounted_filesystem_without_the_host_capability() {
     let Some(bundle) = std::env::var_os("DISKEDIT_VM_BUNDLE") else {
@@ -78,7 +77,6 @@ fn the_carrier_grows_a_mounted_filesystem_without_the_host_capability() {
     std::fs::remove_file(&image).ok();
 }
 
-// covers: D11
 #[test]
 fn the_carrier_writes_whole_disk_segments_without_the_host_capability() {
     let Some(bundle) = std::env::var_os("DISKEDIT_VM_BUNDLE") else {

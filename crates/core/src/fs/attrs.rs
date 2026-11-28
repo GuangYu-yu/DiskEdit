@@ -164,7 +164,6 @@ pub fn label_problem(kind: ContentKind, label: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    // covers: I6
     #[test]
     fn uuid_forms_follow_the_family_matrix() {
         for kind in [
@@ -215,7 +214,6 @@ mod tests {
         ));
     }
 
-    // covers: I6
     #[test]
     fn label_capacities_match_the_on_disk_fields() {
         assert!(label_problem(ContentKind::Filesystem(FsKind::Ext), &"x".repeat(16)).is_none());
@@ -247,7 +245,6 @@ mod tests {
         assert!(label_problem(ContentKind::Lvm2Pv, "anything").is_none());
     }
 
-    // covers: I6
     #[test]
     fn label_programs_come_from_the_attrs_column() {
         assert_eq!(

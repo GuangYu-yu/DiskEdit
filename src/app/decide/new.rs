@@ -11,8 +11,8 @@ use crate::app::observe::{Command, Request, TableFormat};
 use crate::platform::Occupancy;
 
 use super::digest::request_digest;
-use super::step::{Step, StepKind, TableSegment};
-use super::{Decision, Plan, Refusal};
+use super::step::{Step, StepKind, TableSegment, sectors_floor};
+use super::{Decision, OccupancyScope, OccupancySnapshot, Plan, Refusal};
 
 /// 判定 `new`。
 pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
@@ -107,7 +107,14 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
         }
     }
 
-    let total_lba = snapshot.target.bytes / snapshot.target.sector_size;
+    let total_lba = match sectors_floor(snapshot.target.bytes, snapshot.target.sector_size) {
+        Some(total_lba) => total_lba,
+        None => {
+            return Decision::Refuse(Refusal::GeometryUnknown {
+                why: "the logical sector size is zero".to_owned(),
+            });
+        }
+    };
     let segments = match build_segments(snapshot, format, total_lba) {
         Ok(segments) => segments,
         Err(refusal) => return Decision::Refuse(refusal),
@@ -124,7 +131,13 @@ pub fn decide(snapshot: &NewSnapshot, request: &Request) -> Decision {
     );
     match Plan::write(vec![step], identity) {
         Ok(plan) => Decision::Execute {
-            plan: plan.with_request_digest(request_digest),
+            plan: plan
+                .with_request_digest(request_digest)
+                .with_occupancy(OccupancySnapshot {
+                    scope: OccupancyScope::Target,
+                    occupancy: snapshot.occupancy.clone(),
+                    partition: None,
+                }),
             note: format!(
                 "created {} table (verify with: diskedit layout {})",
                 match format {

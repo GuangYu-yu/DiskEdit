@@ -73,7 +73,6 @@ fn scan(root: &Path) -> Scan {
     scan
 }
 
-// covers: I17
 #[test]
 fn only_the_write_channel_calls_the_raw_write() {
     let scan = scan(&repo_root());
@@ -84,7 +83,6 @@ fn only_the_write_channel_calls_the_raw_write() {
     );
 }
 
-// covers: I17
 #[test]
 fn the_guard_covers_every_source_tree_not_just_the_executor() {
     let scan = scan(&repo_root());
@@ -103,7 +101,6 @@ fn the_guard_covers_every_source_tree_not_just_the_executor() {
     }
 }
 
-// covers: I17
 #[test]
 fn the_guard_flags_a_synthetic_bypass_outside_the_platform() {
     let root = PathBuf::from("target/fixtures/write-path-guard");
@@ -122,7 +119,6 @@ fn the_guard_flags_a_synthetic_bypass_outside_the_platform() {
     );
 }
 
-// covers: I11
 #[cfg(target_os = "linux")]
 #[test]
 fn the_platform_refuses_a_write_past_the_target_length() {
@@ -146,7 +142,6 @@ fn the_platform_refuses_a_write_past_the_target_length() {
     );
 }
 
-// covers: I11
 #[cfg(target_os = "linux")]
 #[test]
 fn the_platform_reads_the_current_length_before_writing() {

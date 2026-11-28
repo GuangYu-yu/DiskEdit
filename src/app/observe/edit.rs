@@ -6,7 +6,7 @@
 
 use diskedit_core::fs::{Program, label_program, uuid_program};
 use diskedit_core::region::Region;
-use diskedit_core::table::create::{PmbrSize, pmbr_size_state};
+use diskedit_core::table::create::{MBR_SECTOR_BYTES, PmbrSize, pmbr_size_state};
 use diskedit_core::table::gpt::entries::PartitionEntry;
 use diskedit_core::table::gpt::header::GptHeader;
 use diskedit_core::table::gpt::parse::entry_array_span;
@@ -199,8 +199,10 @@ pub(super) fn capture_gpt(
     )?;
     let lba0 = read_region(
         handle,
-        Region::sized(0, sector_size.max(512)).map_err(|_| CaptureError::Unreadable {
-            why: "the protective MBR sector does not fit the target".to_owned(),
+        Region::sized(0, sector_size.max(MBR_SECTOR_BYTES as u64)).map_err(|_| {
+            CaptureError::Unreadable {
+                why: "the protective MBR sector does not fit the target".to_owned(),
+            }
         })?,
     )?;
     match parse::classify(
@@ -234,7 +236,7 @@ pub(super) fn capture_mbr(
     total_bytes: u64,
     sector_size: u64,
 ) -> Result<TableFacts, CaptureError> {
-    let len = sector_size.max(512);
+    let len = sector_size.max(MBR_SECTOR_BYTES as u64);
     let bytes = read_region(
         handle,
         Region::sized(0, len).map_err(|_| CaptureError::Unreadable {
